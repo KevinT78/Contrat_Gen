@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block titre %}Suivi des demandes{% endblock %}
+{% block corps %}
+<h1>Demandes d'embauche</h1>
+<p class="sous">{{ a_traiter }} en attente d'action · triées par date de début
+  · <a href="{{ url_for('suivi', inactifs='0' if voir_inactifs else '1') }}">
+    {{ 'masquer' if voir_inactifs else 'afficher' }} les demandes closes</a></p>
+
+<table>
+  <tr><th>Salarié</th><th>Établissement</th><th>Poste</th><th>Début</th>
+      <th>État</th><th>Pièces</th></tr>
+  {% for i in items %}
+    {% set e = etat(i) %}
+    <tr class="{{ 'inactif' if e in inactifs }}">
+      <td><a href="{{ url_for('detail', uid=i.id) }}">
+        {{ i.champs.prenom }} {{ (i.champs.nom_usage or i.champs.nom_naissance)|upper }}</a></td>
+      <td>{{ i.champs.etablissement }}</td>
+      <td>{{ i.champs.poste }}</td>
+      <td {% if i.champs.date_debut and i.champs.date_debut < aujourdhui
+              and e not in inactifs %}class="manque"{% endif %}>
+        {{ i.champs.date_debut or '—' }}</td>
+      <td><span class="badge {{ 'ko' if e == 'Rejetee' else 'actif' if e not in inactifs }}">
+        {{ e }}</span></td>
+      <td>{{ '—' if not manquantes(i) else manquantes(i)|length ~ ' manquante(s)' }}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="6" style="color:var(--gris)">Aucune demande.</td></tr>
+  {% endfor %}
+</table>
+{% endblock %}

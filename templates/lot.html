@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block titre %}Lot comptable{% endblock %}
+{% block corps %}
+<h1>Dossier {{ item.champs.prenom }} {{ (item.champs.nom_usage or item.champs.nom_naissance)|upper }}</h1>
+<p class="sous">{{ item.champs.etablissement }} · {{ item.champs.poste }}
+  · début {{ item.champs.date_debut }} · référence <code>{{ item.id }}</code></p>
+
+<div class="carte">
+  <p><a class="bouton" href="{{ url_for('lot_zip', jeton=jeton) }}">Tout télécharger (.zip)</a></p>
+  <ul class="docs">
+    {% for f in produits %}
+      <li><a href="{{ url_for('lot_fichier', jeton=jeton, bucket='contrat', nom=f) }}">{{ f }}</a></li>
+    {% endfor %}
+    {% for f in pieces %}
+      <li><a href="{{ url_for('lot_fichier', jeton=jeton, bucket='pieces', nom=f) }}">{{ f }}</a></li>
+    {% else %}
+      <li style="color:var(--gris)">Les pièces d'identité de ce dossier ont été supprimées
+        (purge RGPD du client).</li>
+    {% endfor %}
+  </ul>
+</div>
+<p class="journal">Ce lien est personnel, expire au bout de 30 jours et peut être
+  révoqué par le service RH.</p>
+{% endblock %}

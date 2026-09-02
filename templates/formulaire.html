@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block titre %}{{ schema.titre }}{% endblock %}
+{% block corps %}
+<h1>{{ schema.titre }}</h1>
+<p class="sous">{{ schema.intro }}</p>
+
+{% if ko %}
+<p class="msg erreur"><b>Demande à corriger — {{ ko.motif }}.</b><br>{{ ko.commentaire }}</p>
+{% endif %}
+
+{% for e in erreurs %}<p class="msg erreur">{{ e }}</p>{% endfor %}
+
+<form method="post" enctype="multipart/form-data" action="{{ action }}" class="carte">
+  {% for c in schema.champs %}
+    {% set v = champs.get(c.id) or c.defaut or '' %}
+    <label for="{{ c.id }}">{{ c.libelle }}{% if c.requis %} *{% endif %}
+      {% if c.aide %}<span style="font-weight:400"> — {{ c.aide }}</span>{% endif %}</label>
+    {% if c.type == 'choix' %}
+      <select name="{{ c.id }}" id="{{ c.id }}">
+        <option value="">—</option>
+        {% for o in c.options %}
+          <option value="{{ o }}" {{ 'selected' if o == v }}>{{ o }}</option>
+        {% endfor %}
+      </select>
+    {% elif c.type == 'etablissement' %}
+      <select name="{{ c.id }}" id="{{ c.id }}">
+        <option value="">—</option>
+        {% for cle, libelle in etablissements %}
+          <option value="{{ cle }}" {{ 'selected' if cle == v }}>{{ libelle }}</option>
+        {% endfor %}
+      </select>
+    {% elif c.type == 'texte_long' %}
+      <textarea name="{{ c.id }}" id="{{ c.id }}" rows="3">{{ v }}</textarea>
+    {% elif c.type == 'piece_jointe' %}
+      <input type="file" name="{{ c.id }}" id="{{ c.id }}"
+             accept=".pdf,.jpg,.jpeg,.png">
+    {% else %}
+      {% set html = {'date':'date','nombre':'number','montant':'number',
+                     'email':'email','tel':'tel'}.get(c.type, 'text') %}
+      <input type="{{ html }}" name="{{ c.id }}" id="{{ c.id }}" value="{{ v }}"
+             {% if c.type == 'montant' %}step="0.01"{% endif %}>
+    {% endif %}
+  {% endfor %}
+  <p style="margin-top:24px"><button type="submit">Envoyer la demande</button></p>
+</form>
+{% endblock %}

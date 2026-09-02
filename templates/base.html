@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block titre %}{{ client }}{% endblock %}</title>
+<style>
+  :root { --bord:#dcdcd8; --texte:#1c1c1a; --gris:#6b6b66; --fond:#faf9f7;
+          --accent:#1f4d3f; --alerte:#8a2e21; }
+  * { box-sizing:border-box }
+  body { margin:0; background:var(--fond); color:var(--texte); font:15px/1.5
+         system-ui,-apple-system,"Segoe UI",sans-serif }
+  header { background:#fff; border-bottom:1px solid var(--bord); padding:14px 24px;
+           display:flex; align-items:baseline; gap:16px }
+  header b { font-size:16px } header a { color:var(--gris); text-decoration:none }
+  main { max-width:960px; margin:0 auto; padding:28px 24px 80px }
+  h1 { font-size:22px; margin:0 0 4px } h2 { font-size:15px; margin:28px 0 10px }
+  .sous { color:var(--gris); margin:0 0 24px }
+  table { width:100%; border-collapse:collapse; background:#fff; border:1px solid var(--bord) }
+  th,td { text-align:left; padding:9px 12px; border-bottom:1px solid var(--bord) }
+  th { font-size:12px; text-transform:uppercase; letter-spacing:.04em; color:var(--gris) }
+  tr:last-child td { border-bottom:0 } tr.inactif td { color:var(--gris) }
+  .badge { display:inline-block; padding:2px 8px; border-radius:10px; font-size:12px;
+           background:#eceae5; color:var(--gris) }
+  .badge.actif { background:#e3ede8; color:var(--accent) }
+  .badge.ko { background:#f5e4e1; color:var(--alerte) }
+  .carte { background:#fff; border:1px solid var(--bord); padding:18px 20px; margin-bottom:16px }
+  label { display:block; margin:14px 0 4px; font-size:13px; color:var(--gris) }
+  input,select,textarea { width:100%; padding:8px 10px; border:1px solid var(--bord);
+           background:#fff; font:inherit; border-radius:2px }
+  input[type=file] { padding:6px; background:var(--fond) }
+  button, .bouton { display:inline-block; padding:8px 16px; border:1px solid var(--accent);
+           background:var(--accent); color:#fff; font:inherit; border-radius:2px;
+           cursor:pointer; text-decoration:none }
+  button.discret, .bouton.discret { background:#fff; color:var(--texte); border-color:var(--bord) }
+  button.danger { background:#fff; color:var(--alerte); border-color:var(--alerte) }
+  .msg { padding:10px 14px; margin-bottom:16px; border-left:3px solid var(--accent);
+         background:#fff }
+  .msg.erreur { border-color:var(--alerte); color:var(--alerte) }
+  .duo { display:grid; grid-template-columns:1fr 1fr; gap:0 20px }
+  ul.docs { list-style:none; padding:0; margin:0 }
+  ul.docs li { padding:6px 0; border-bottom:1px solid var(--bord) }
+  ul.docs li:last-child { border-bottom:0 }
+  .manque { color:var(--alerte) }
+  .journal { font-size:13px; color:var(--gris) }
+  .actions { display:flex; flex-wrap:wrap; gap:10px; align-items:flex-end }
+  @media (max-width:640px){ .duo{grid-template-columns:1fr} }
+</style>
+</head>
+<body>
+<header>
+  <b>{{ client }}</b>
+  {% if session.utilisateur %}
+    <a href="{{ url_for('suivi') }}">Suivi</a>
+    <span style="margin-left:auto;color:var(--gris)">{{ session.utilisateur }} ·
+      <a href="{{ url_for('logout') }}">quitter</a></span>
+  {% endif %}
+</header>
+<main>
+  {% for cat, m in get_flashed_messages(with_categories=true) %}
+    <p class="msg {{ 'erreur' if cat == 'erreur' }}">{{ m }}</p>
+  {% endfor %}
+  {% block corps %}{% endblock %}
+</main>
+</body>
+</html>

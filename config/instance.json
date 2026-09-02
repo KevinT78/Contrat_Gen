@@ -1,0 +1,43 @@
+{
+  "client": "Wingstop France — RH",
+  "secret": "5df5ae87e2d92366a677b934e7ddf0e0d79ba0183b92cc238dd97fcfd680c3c4",
+
+  "signature": {"mode": "manuel"},
+
+  "fiche_salarie": "fiche_salarie.docx",
+
+  "mails": {
+    "mode": "console",
+    "hote": "smtp.example.com",
+    "port": 587,
+    "utilisateur": "rh@example.com",
+    "mot_de_passe": "",
+    "expediteur": "rh@example.com",
+    "rh": ["rh@example.com"],
+    "superviseur": "superviseur@example.com",
+    "dpae": null,
+    "recap": null,
+    "comptable_defaut": "cabinet@example.com"
+  },
+
+  "utilisateurs": {
+    "rh": {
+      "mdp_hash": "scrypt:32768:8:1$VfvbfNr4E4mcl7su$9b9f9ea1141c86e7d184b6e9de6d5c68438d6f9e01ff351a05fd04a801b0df6ce31e6126c58273497334a7489966c7b1632f6eaaf6fc56bb107b91b584332f40",
+      "admin": true
+    }
+  },
+
+  "motifs_ko": [
+    "Pièce illisible ou manquante",
+    "Informations incohérentes",
+    "Établissement ou poste erroné",
+    "Rémunération à revoir",
+    "Autre"
+  ],
+
+  "templates": {
+    "Équipier polyvalent": "CDI_Equipier.docx",
+    "Assistant manager": "CDI_Equipier.docx",
+    "Manager": "CDI_Manager.docx"
+  }
+}

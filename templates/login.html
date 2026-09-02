@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block titre %}Connexion{% endblock %}
+{% block corps %}
+<h1>Espace RH</h1>
+<p class="sous">Connexion requise pour piloter les demandes d'embauche.</p>
+<form method="post" class="carte" style="max-width:360px">
+  <label for="identifiant">Identifiant</label>
+  <input name="identifiant" id="identifiant" autofocus>
+  <label for="mot_de_passe">Mot de passe</label>
+  <input type="password" name="mot_de_passe" id="mot_de_passe">
+  <p style="margin-top:20px"><button type="submit">Se connecter</button></p>
+</form>
+{% endblock %}

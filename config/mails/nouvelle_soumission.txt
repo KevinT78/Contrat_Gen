@@ -1,0 +1,9 @@
+Objet: Nouvelle demande d'embauche — {nom}
+Bonjour,
+
+Une demande d'embauche vient d'être déposée pour {nom} (référence {id}).
+
+Elle attend votre validation : {lien}
+
+-- 
+Envoi automatique, ne pas répondre.

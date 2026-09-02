@@ -1,0 +1,36 @@
+[
+  {
+    "nom": "Wingstop France",
+    "siren": "884 512 336",
+    "comptable_email": "cabinet-nord@example.com",
+    "mentions": {
+      "RaisonSociale": "WINGSTOP FRANCE SAS",
+      "FormeCapital": "Société par actions simplifiée au capital de 100 000 €",
+      "RCS": "RCS Paris 884 512 336",
+      "SiegeSocial": "12 rue de la Paix, 75002 Paris",
+      "ConventionCollective": "Convention collective nationale de la restauration rapide"
+    },
+    "etablissements": [
+      {"nom": "Paris Opéra", "siret": "884 512 336 00019",
+       "mentions": {"AdresseEtablissement": "8 boulevard des Capucines, 75009 Paris"}},
+      {"nom": "Lille Grand Place", "siret": "884 512 336 00027",
+       "mentions": {"AdresseEtablissement": "3 place du Général de Gaulle, 59000 Lille"}}
+    ]
+  },
+  {
+    "nom": "Wingstop Sud",
+    "siren": "907 331 204",
+    "comptable_email": "cabinet-sud@example.com",
+    "mentions": {
+      "RaisonSociale": "WINGSTOP SUD SARL",
+      "FormeCapital": "Société à responsabilité limitée au capital de 40 000 €",
+      "RCS": "RCS Marseille 907 331 204",
+      "SiegeSocial": "45 La Canebière, 13001 Marseille",
+      "ConventionCollective": "Convention collective nationale de la restauration rapide"
+    },
+    "etablissements": [
+      {"nom": "Marseille Prado", "siret": "907 331 204 00013", "contrat": "depose",
+       "mentions": {"AdresseEtablissement": "120 avenue du Prado, 13008 Marseille"}}
+    ]
+  }
+]

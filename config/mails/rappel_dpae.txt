@@ -1,0 +1,9 @@
+Objet: DPAE à déclarer — {nom}
+Bonjour,
+
+La DPAE de {nom} (début le {debut}) n'est pas encore déclarée.
+
+Une fois faite, déposez l'accusé ici : {lien}
+
+-- 
+Envoi automatique, ne pas répondre.
