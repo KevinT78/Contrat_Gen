@@ -39,7 +39,7 @@ INSTANCE = {
     "secret": "a" * 64,
     "signature": {"mode": "manuel"},
     "mails": {"mode": "console", "hote": "", "port": 587, "utilisateur": "",
-              "mot_de_passe": "", "expediteur": "", "rh": [], "superviseur": "",
+              "mot_de_passe": "", "expediteur": "", "rh": [],
               "dpae": None, "recap": None, "comptable_defaut": "c@acme.example"},
     "utilisateurs": {"rh": {"mdp_hash": generate_password_hash("pas-demo"),
                             "admin": True}},

@@ -367,8 +367,7 @@ def rejeter(uid):
     item = store.lire(uid)
     lien = url_for("corriger", jeton=store.signer("correction", uid, item["link_epoch"]),
                    _external=True)
-    mails.envoyer("rejet", [config.instance()["mails"]["superviseur"],
-                            _email_demandeur(item["champs"])],
+    mails.envoyer("rejet", _email_demandeur(item["champs"]),
                   motif=motif, commentaire=commentaire, lien=lien,
                   nom=_nom(item["champs"]))
     flash("Demande rejetée, lien de correction envoyé.", "ok")
