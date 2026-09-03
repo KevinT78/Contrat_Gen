@@ -11,10 +11,12 @@
 {% for e in erreurs %}<p class="msg erreur">{{ e }}</p>{% endfor %}
 
 <form method="post" enctype="multipart/form-data" action="{{ action }}" class="carte">
+  <div class="grille-champs">
   {% for c in schema.champs %}
     {% set v = champs.get(c.id) or c.defaut or '' %}
+    <div class="champ {{ 'pleine' if c.type in ('texte_long', 'piece_jointe') }}">
     <label for="{{ c.id }}">{{ c.libelle }}{% if c.requis %} *{% endif %}
-      {% if c.aide %}<span style="font-weight:400"> — {{ c.aide }}</span>{% endif %}</label>
+      {% if c.aide %}<span class="aide">— {{ c.aide }}</span>{% endif %}</label>
     {% if c.type == 'choix' %}
       <select name="{{ c.id }}" id="{{ c.id }}">
         <option value="">—</option>
@@ -40,7 +42,13 @@
       <input type="{{ html }}" name="{{ c.id }}" id="{{ c.id }}" value="{{ v }}"
              {% if c.type == 'montant' %}step="0.01"{% endif %}>
     {% endif %}
+    </div>
   {% endfor %}
-  <p style="margin-top:24px"><button type="submit">Envoyer la demande</button></p>
+  </div>
+  <hr class="sep">
+  <div class="actions">
+    <button type="submit">Envoyer la demande</button>
+    <span class="indice" style="margin:0">Les champs marqués * sont obligatoires.</span>
+  </div>
 </form>
 {% endblock %}

@@ -3,3 +3,5 @@ __pycache__/
 *.pyc
 data/
 .scratch/
+_wingstop_reel/
+config_wingstop/

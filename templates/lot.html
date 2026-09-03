@@ -1,12 +1,19 @@
 {% extends "base.html" %}
 {% block titre %}Lot comptable{% endblock %}
 {% block corps %}
-<h1>Dossier {{ item.champs.prenom }} {{ (item.champs.nom_usage or item.champs.nom_naissance)|upper }}</h1>
-<p class="sous">{{ item.champs.etablissement }} · {{ item.champs.poste }}
-  · début {{ item.champs.date_debut }} · référence <code>{{ item.id }}</code></p>
+<h1>Dossier {{ nom_de(item.champs) or item.id }}</h1>
+<p class="sous">{{ item.champs.etablissement }}
+  <span class="filet"></span>{{ item.champs.poste }}
+  <span class="filet"></span>début {{ item.champs.date_debut }}
+  <span class="filet"></span><code>{{ item.id }}</code></p>
 
 <div class="carte">
-  <p><a class="bouton" href="{{ url_for('lot_zip', jeton=jeton) }}">Tout télécharger (.zip)</a></p>
+  <div class="actions">
+    <a class="bouton" href="{{ url_for('lot_zip', jeton=jeton) }}">Tout télécharger (.zip)</a>
+    <span class="indice" style="margin:0">{{ (produits|length) + (pieces|length) }} fichier(s)</span>
+  </div>
+  <hr class="sep">
+  <p class="titre-carte">Fichiers du dossier</p>
   <ul class="docs">
     {% for f in produits %}
       <li><a href="{{ url_for('lot_fichier', jeton=jeton, bucket='contrat', nom=f) }}">{{ f }}</a></li>
@@ -14,11 +21,11 @@
     {% for f in pieces %}
       <li><a href="{{ url_for('lot_fichier', jeton=jeton, bucket='pieces', nom=f) }}">{{ f }}</a></li>
     {% else %}
-      <li style="color:var(--gris)">Les pièces d'identité de ce dossier ont été supprimées
+      <li class="vide">Les pièces d'identité de ce dossier ont été supprimées
         (purge RGPD du client).</li>
     {% endfor %}
   </ul>
 </div>
-<p class="journal">Ce lien est personnel, expire au bout de 30 jours et peut être
+<p class="indice">Ce lien est personnel, expire au bout de 30 jours et peut être
   révoqué par le service RH.</p>
 {% endblock %}

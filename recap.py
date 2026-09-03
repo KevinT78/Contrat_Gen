@@ -31,9 +31,10 @@ def entres_depuis(seuil):
 
 def ligne(item):
     c = item["champs"]
-    nom = (c.get("nom_usage") or c.get("nom_naissance") or "").upper()
+    nom = (c.get("nom_usage") or c.get(config.role("nom", "nom_naissance")) or "").upper()
     return (f"- {c.get('prenom', '')} {nom} — {c.get('poste', '')} — "
-            f"{c.get('etablissement', '')} — début {c.get('date_debut', '?')}")
+            f"{c.get('etablissement', '')} — "
+            f"début {c.get(config.role('date_debut', 'date_debut'), '?')}")
 
 
 def main(jours):

@@ -1,30 +1,45 @@
 {% extends "base.html" %}
 {% block titre %}Suivi des demandes{% endblock %}
 {% block corps %}
-<h1>Demandes d'embauche</h1>
-<p class="sous">{{ a_traiter }} en attente d'action · triées par date de début
-  · <a href="{{ url_for('suivi', inactifs='0' if voir_inactifs else '1') }}">
-    {{ 'masquer' if voir_inactifs else 'afficher' }} les demandes closes</a></p>
+<div class="entete">
+  <div>
+    <h1>Demandes d'embauche</h1>
+    <p class="sous">
+      {% if a_traiter %}<span class="badge attente">{{ a_traiter }} en attente d'action</span>
+      {% else %}<span class="badge">Rien en attente</span>{% endif %}
+      <span class="filet"></span>{{ items|length }} affichée{{ 's' if items|length > 1 }}
+      <span class="filet"></span>triées par date de début</p>
+  </div>
+  <a class="bouton discret" href="{{ url_for('suivi', inactifs='0' if voir_inactifs else '1') }}">
+    {{ 'Masquer' if voir_inactifs else 'Afficher' }} les closes</a>
+</div>
 
+<div class="tableau">
 <table>
-  <tr><th>Salarié</th><th>Établissement</th><th>Poste</th><th>Début</th>
-      <th>État</th><th>Pièces</th></tr>
+  <thead>
+    <tr><th>Salarié</th><th>Établissement</th><th>Poste</th><th>Début</th>
+        <th>État</th><th>Pièces</th></tr>
+  </thead>
+  <tbody>
   {% for i in items %}
     {% set e = etat(i) %}
+    {% set retard = i.champs.date_debut and i.champs.date_debut < aujourdhui
+                    and e not in inactifs %}
     <tr class="{{ 'inactif' if e in inactifs }}">
-      <td><a href="{{ url_for('detail', uid=i.id) }}">
-        {{ i.champs.prenom }} {{ (i.champs.nom_usage or i.champs.nom_naissance)|upper }}</a></td>
-      <td>{{ i.champs.etablissement }}</td>
-      <td>{{ i.champs.poste }}</td>
-      <td {% if i.champs.date_debut and i.champs.date_debut < aujourdhui
-              and e not in inactifs %}class="manque"{% endif %}>
-        {{ i.champs.date_debut or '—' }}</td>
-      <td><span class="badge {{ 'ko' if e == 'Rejetee' else 'actif' if e not in inactifs }}">
-        {{ e }}</span></td>
-      <td>{{ '—' if not manquantes(i) else manquantes(i)|length ~ ' manquante(s)' }}</td>
+      <td><a class="nom" href="{{ url_for('detail', uid=i.id) }}">
+        {{ nom_de(i.champs) or i.id }}</a></td>
+      <td class="secondaire">{{ i.champs.etablissement }}</td>
+      <td class="secondaire">{{ i.champs.poste }}</td>
+      <td {{ 'class=manque'|safe if retard }}>{{ i.champs.date_debut or '—' }}
+        {{ '· en retard' if retard }}</td>
+      <td><span class="badge {{ ton_etat(e) }}">{{ libelle_etat(e) }}</span></td>
+      <td class="{{ 'manque' if manquantes(i) }}">
+        {{ manquantes(i)|length ~ ' manquante(s)' if manquantes(i) else '—' }}</td>
     </tr>
   {% else %}
-    <tr><td colspan="6" style="color:var(--gris)">Aucune demande.</td></tr>
+    <tr><td colspan="6" class="vide">Aucune demande pour l'instant.</td></tr>
   {% endfor %}
+  </tbody>
 </table>
+</div>
 {% endblock %}

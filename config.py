@@ -11,7 +11,7 @@ from functools import lru_cache
 from pathlib import Path
 
 RACINE = Path(__file__).parent
-CLIENT = RACINE / "config"
+CLIENT = Path(os.environ.get("CONFIG_DIR", RACINE / "config"))
 DONNEES = Path(os.environ.get("DONNEES", RACINE / "data"))
 
 SECRET_A_INSTALLER = "REMPLACER-A-L-INSTALLATION"
@@ -75,15 +75,80 @@ def mode_contrat(cle):
     return e.get("contrat", "genere")
 
 
+def modele_pour(champs):
+    """Poste (+ conditions eventuelles) -> nom du modele de contrat, ou None.
+
+    Deux formes acceptees pour instance()['templates'] :
+      - dict {poste: fichier}                              (client simple)
+      - liste [{"quand": {champ: valeur, ...}, "modele": fichier}, ...]
+        premiere regle dont TOUS les champs 'quand' collent ; une regle sans
+        'quand' est un fourre-tout. Sert au branchement temps partiel, ou a un
+        modele par etablissement quand les mentions sont figees dans la prose.
+
+    Comparaison insensible a la casse et aux accents : « Equipier polyvalent »
+    exporte par MS Forms matche « Equipier Polyvalent », « Oui » matche « OUI ».
+    """
+    from contrat import sans_accent
+    def n(x):
+        return sans_accent(x).casefold().strip()
+
+    t = instance()["templates"]
+    if isinstance(t, dict):
+        return t.get(champs.get("poste"))
+    for regle in t:
+        if all(n(champs.get(k, "")) == n(v)
+               for k, v in regle.get("quand", {}).items()):
+            return regle.get("modele")
+    return None
+
+
+def derives():
+    """Placeholders calcules par regle en config (formateurs, blocs conditionnels)."""
+    return instance().get("derives", [])
+
+
+def saisie_rh():
+    """Placeholders qu'aucune question du formulaire ne fournit : la RH les
+    saisit a la generation du contrat."""
+    return instance().get("saisie_rh", [])
+
+
+def critiques():
+    """Placeholders qui, vides, produisent un contrat sans objet (ligne de paie
+    blanche, « demeurant au . »). Derives des champs requis + liste explicite
+    instance()['critiques'] (pour ce qui ne vient pas d'un champ, ex. le salaire
+    tire de la grille)."""
+    ph = {c["placeholder"] for c in champs()
+          if c.get("requis") and c.get("placeholder")}
+    return ph | set(instance().get("critiques", []))
+
+
+@lru_cache(maxsize=None)
+def grille():
+    """Grille de remuneration du client (salaire par poste). {} si absente : un
+    client peut faire saisir le salaire a la RH plutot que le tirer d'une grille."""
+    f = CLIENT / "grille.json"
+    return json.loads(f.read_text(encoding="utf-8")) if f.exists() else {}
+
+
 def champs():
     return formulaire()["champs"]
+
+
+def role(nom, defaut=None):
+    """id du champ qui joue un role attendu par le code (nom affiche, email de
+    reponse...). Declare dans formulaire()['roles'] ; a defaut, l'id historique
+    passe en `defaut` -- une config sans 'roles' garde le comportement d'avant."""
+    return formulaire().get("roles", {}).get(nom) or defaut or nom
 
 
 def champ(cid):
     for c in champs():
         if c["id"] == cid:
             return c
-    raise KeyError(cid)
+    # cle hors schema (ex. une saisie RH fusionnee dans champs) : libelle = la
+    # cle elle-meme, plutot qu'un KeyError qui casse l'ecran dossier.
+    return {"id": cid, "libelle": cid, "type": "texte"}
 
 
 def pieces():
@@ -95,9 +160,11 @@ def secret():
 
 
 def _templates_actifs():
-    """Les .docx dont un placeholder manquant doit bloquer le demarrage :
-    les contrats par poste, plus la fiche salarie si elle est declaree."""
-    noms = set(instance()["templates"].values())
+    """Les modeles dont un placeholder manquant doit bloquer le demarrage :
+    les contrats (par poste ou par regle), plus la fiche salarie si declaree."""
+    t = instance()["templates"]
+    noms = set(t.values()) if isinstance(t, dict) \
+        else {r["modele"] for r in t if r.get("modele")}
     if fiche := instance().get("fiche_salarie"):
         noms.add(fiche)
     return noms
@@ -135,6 +202,10 @@ def verifier():
     sources = {c["placeholder"] for c in champs() if c.get("placeholder")}
     sources |= set(contrat.CALCULES)
     sources |= {"PiecesFournies", "PiecesManquantes"}
+    sources |= {d["placeholder"] for d in derives()}
+    sources |= set(saisie_rh())
+    if grille():
+        sources |= {"SalaireChiffres", "SalaireLettres"}
     for s in societes():
         sources |= set(s.get("mentions", {}))
         for e in s["etablissements"]:
@@ -142,12 +213,32 @@ def verifier():
     sources |= {"Siret", "Siren", "Etablissement", "Societe"}
 
     for nom in _templates_actifs():
-        if not (CLIENT / "contrats" / nom).exists():
+        chemin = CLIENT / "contrats" / nom
+        if not chemin.exists():
             manques[nom] = ["fichier absent de config/contrats/"]
             continue
-        doc = Document(CLIENT / "contrats" / nom)
-        vus = {m for p in contrat.paragraphes(doc)
-               for m in re.findall(r"\{\{(\w+)\}\}", p.text)}
+        if chemin.suffix.lower() == ".docx":
+            doc = Document(chemin)
+            vus = {m for p in contrat.paragraphes(doc)
+                   for m in re.findall(r"\{\{(\w+)\}\}", p.text)}
+        else:
+            vus = set(re.findall(r"\{\{(\w+)\}\}",
+                                 chemin.read_text(encoding="utf-8")))
         if vus - sources:
             manques[nom] = sorted(vus - sources)
+
+    # Chaque poste du formulaire doit atteindre un modele : « Leavers » sans
+    # regle bloque le demarrage, jamais la generation d'un vrai contrat.
+    t = instance()["templates"]
+    if isinstance(t, list):
+        vises = set()
+        fourre_tout = any(not r.get("quand") for r in t)
+        for r in t:
+            vises |= {str(v) for v in r.get("quand", {}).values()}
+        for c in champs():
+            if c["id"] != "poste":
+                continue
+            for opt in c.get("options", []):
+                if not fourre_tout and opt not in vises:
+                    manques[f"poste « {opt} »"] = ["aucune règle de template ne le vise"]
     return manques

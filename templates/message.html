@@ -1,6 +1,9 @@
 {% extends "base.html" %}
 {% block titre %}{{ titre }}{% endblock %}
+{% block classe_main %}etroit{% endblock %}
 {% block corps %}
-<h1>{{ titre }}</h1>
-<p class="sous">{{ texte }}</p>
+<div class="carte" style="padding:32px 24px">
+  <h1>{{ titre }}</h1>
+  <p class="sous" style="margin:0">{{ texte }}</p>
+</div>
 {% endblock %}

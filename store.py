@@ -232,6 +232,17 @@ def transition(uid, vers, par, **extra):
         return item
 
 
+def completer_champs(uid, nouveaux):
+    """Fusionne des valeurs saisies apres la soumission (saisie RH a la
+    generation du contrat) dans item['champs']. Idempotent, ne journalise pas."""
+    with _verrou(uid):
+        item = lire(uid)
+        d = config.DONNEES / item["_zone"] / uid
+        item["champs"] = {**item["champs"], **{k: v for k, v in nouveaux.items() if v != ""}}
+        _ecrire(d, item)
+        return item
+
+
 def noter(uid, **entree):
     """Entree de journal sans changement d'etat (acces au lot, mail parti...)."""
     with _verrou(uid):

@@ -30,6 +30,40 @@ app.config["MAX_CONTENT_LENGTH"] = 40 * 1024 * 1024
 MOTIFS_KO = config.instance()["motifs_ko"]
 
 
+def _nom(champs):
+    """Nom affiche du salarie (suivi, mails, journal). Formulaire a champs
+    separes -> « Prenom NOM » ; formulaire a champ unique -> le champ designe
+    par le role 'nom'."""
+    prenom = champs.get("prenom", "")
+    if prenom:
+        return f"{prenom} {(champs.get('nom_usage') or champs.get('nom_naissance') or '')}".strip()
+    return champs.get(config.role("nom", "nom_naissance"), "")
+
+
+def _email_demandeur(champs):
+    return champs.get(config.role("email", "email_demandeur"), "")
+
+
+# Libelles et tons d'affichage des etats -- presentation seule, l'etat
+# machine reste celui de store.ETATS.
+LIBELLES_ETAT = {"Soumise": "Soumise", "Rejetee": "Rejetée",
+                 "ATraiter": "À traiter", "ContratPret": "Contrat prêt",
+                 "ContratSigne": "Contrat signé", "RappelDpae": "Rappel DPAE",
+                 "DpaeFaite": "DPAE faite", "RemisComptable": "Remis au comptable",
+                 "Abandonnee": "Abandonnée"}
+TONS_ETAT = {"Soumise": "attente", "ATraiter": "attente", "Rejetee": "ko",
+             "ContratPret": "actif", "ContratSigne": "actif",
+             "RappelDpae": "actif", "DpaeFaite": "actif",
+             "RemisComptable": "", "Abandonnee": ""}
+
+
+@app.context_processor
+def _aides():
+    return {"nom_de": _nom,
+            "libelle_etat": lambda e: LIBELLES_ETAT.get(e, e),
+            "ton_etat": lambda e: TONS_ETAT.get(e, "")}
+
+
 @app.context_processor
 def globaux():
     return {"client": config.instance()["client"],
@@ -105,7 +139,7 @@ def formulaire():
                                    erreurs=erreurs, action=url_for("formulaire"))
         uid = store.creer_soumission(champs, request.files)
         mails.envoyer("nouvelle_soumission", config.instance()["mails"]["rh"],
-                      nom=champs.get("nom_naissance", ""), id=uid,
+                      nom=_nom(champs), id=uid,
                       lien=url_for("detail", uid=uid, _external=True))
         return render_template("message.html", titre="Demande envoyée",
                                texte="Le service RH a été prévenu. Vous serez "
@@ -130,7 +164,7 @@ def corriger(jeton):
                                    ko=ko, action=request.path)
         store.resoumettre(item["id"], champs, request.files)
         mails.envoyer("nouvelle_soumission", config.instance()["mails"]["rh"],
-                      nom=champs.get("nom_naissance", ""), id=item["id"],
+                      nom=_nom(champs), id=item["id"],
                       lien=url_for("detail", uid=item["id"], _external=True))
         return render_template("message.html", titre="Correction envoyée",
                                texte="Le service RH va réexaminer la demande.")
@@ -163,7 +197,8 @@ def detail(uid):
                            pieces=store.fichiers(item, "pieces"),
                            produits=store.fichiers(item, "contrat"),
                            manquantes=store.manquantes(item), motifs=MOTIFS_KO,
-                           champ=config.champ,
+                           champ=config.champ, saisie_rh=config.saisie_rh(),
+                           nom_affiche=_nom(item["champs"]),
                            mode_contrat=config.mode_contrat(item["champs"]["etablissement"]),
                            signature_esign=config.instance().get("signature", {})
                            .get("mode") == "yousign")
@@ -240,9 +275,9 @@ def rejeter(uid):
     lien = url_for("corriger", jeton=store.signer("correction", uid, item["link_epoch"]),
                    _external=True)
     mails.envoyer("rejet", [config.instance()["mails"]["superviseur"],
-                            item["champs"].get("email_demandeur")],
+                            _email_demandeur(item["champs"])],
                   motif=motif, commentaire=commentaire, lien=lien,
-                  nom=item["champs"].get("nom_naissance", ""))
+                  nom=_nom(item["champs"]))
     flash("Demande rejetée, lien de correction envoyé.", "ok")
     return redirect(url_for("detail", uid=uid))
 
@@ -255,16 +290,21 @@ def generer_contrat(uid):
         flash("Cet établissement est en contrat déposé (myrhis) : "
               "utilisez « Déposer le contrat ».", "erreur")
         return redirect(url_for("detail", uid=uid))
-    poste = item["champs"].get("poste")
-    modele = config.instance()["templates"].get(poste)
+    modele = config.modele_pour(item["champs"])
     if not modele:
-        flash(f"Aucun modèle de contrat configuré pour le poste « {poste} ».", "erreur")
+        flash(f"Aucun modèle de contrat configuré pour le poste "
+              f"« {item['champs'].get('poste')} ».", "erreur")
         return redirect(url_for("detail", uid=uid))
+    # Placeholders qu'aucune question du formulaire ne fournit : saisis ici par
+    # la RH, fusionnes dans champs pour que la regeneration et le lot les voient.
+    extra = {k: (request.form.get(k) or "").strip() for k in config.saisie_rh()}
+    if extra:
+        item = store.completer_champs(uid, extra)
     vals = contrat.valeurs(item["champs"],
-                           config.mentions(item["champs"]["etablissement"]))
+                           config.mentions(item["champs"]["etablissement"]), extra=extra)
+    dest = Path(item["_dir"]) / "contrat" / ("contrat" + Path(modele).suffix.lower())
     try:
-        contrat.generer(config.CLIENT / "contrats" / modele, vals,
-                        Path(item["_dir"]) / "contrat" / "contrat.docx")
+        contrat.generer(config.CLIENT / "contrats" / modele, vals, dest)
     except ValueError as e:
         flash(str(e), "erreur")
         return redirect(url_for("detail", uid=uid))
@@ -330,8 +370,8 @@ def signature_envoyer(uid):
         pid = signature.envoyer(
             Path(item["_dir"]) / "contrat" / src,
             {"prenom": c.get("prenom", ""),
-             "nom": (c.get("nom_usage") or c.get("nom_naissance") or ""),
-             "email": c.get("email_demandeur", "")})
+             "nom": _nom(c) or "",
+             "email": _email_demandeur(c)})
     except (RuntimeError, KeyError, OSError) as e:
         flash(f"Envoi à la signature échoué : {e}", "erreur")
         return redirect(url_for("detail", uid=uid))
@@ -371,8 +411,8 @@ def rappel_dpae(uid):
         return redirect(url_for("detail", uid=uid))
     conf = config.instance()["mails"]
     mails.envoyer("rappel_dpae", conf.get("dpae") or conf["rh"],
-                  nom=item["champs"].get("nom_naissance", ""),
-                  debut=item["champs"].get("date_debut", ""),
+                  nom=_nom(item["champs"]),
+                  debut=item["champs"].get(config.role("date_debut", "date_debut"), ""),
                   lien=url_for("detail", uid=uid, _external=True))
     flash("Rappel DPAE envoyé.", "ok")
     return redirect(url_for("detail", uid=uid))
@@ -405,7 +445,7 @@ def _avis_comptable(item, epoch):
                    _external=True)
     ok, raison = mails.envoyer(
         "avis_comptable", config.comptable(item["champs"]["etablissement"]),
-        nom=item["champs"].get("nom_naissance", ""), id=item["id"], lien=lien)
+        nom=_nom(item["champs"]), id=item["id"], lien=lien)
     if not ok:
         store.noter(item["id"], type="mail_echoue", par="systeme", motif=raison)
     return ok, lien

@@ -1,78 +1,168 @@
 {% extends "base.html" %}
-{% block titre %}{{ item.champs.prenom }} {{ item.champs.nom_naissance }}{% endblock %}
+{% block titre %}{{ nom_affiche or item.id }}{% endblock %}
 {% block corps %}
-<h1>{{ item.champs.prenom }} {{ (item.champs.nom_usage or item.champs.nom_naissance)|upper }}</h1>
-<p class="sous">
-  <span class="badge {{ 'ko' if etat == 'Rejetee' else 'actif' }}">{{ etat }}</span>
-  · {{ item.champs.poste }} · {{ item.champs.etablissement }}
-  · début {{ item.champs.date_debut or '—' }} · <code>{{ item.id }}</code></p>
+{% set flux = ['Soumise', 'ATraiter', 'ContratPret', 'ContratSigne', 'DpaeFaite',
+               'RemisComptable'] %}
+{% set etapes = {'Soumise': 'Demande reçue', 'ATraiter': 'À traiter',
+                 'ContratPret': 'Contrat prêt', 'ContratSigne': 'Contrat signé',
+                 'DpaeFaite': 'DPAE faite', 'RemisComptable': 'Remis au comptable'} %}
 
-<div class="carte actions">
+<h1>{{ nom_affiche or item.id }}</h1>
+<p class="sous">
+  <span class="badge {{ ton_etat(etat) }}">{{ libelle_etat(etat) }}</span>
+  <span class="filet"></span>{{ item.champs.poste }}
+  <span class="filet"></span>{{ item.champs.etablissement }}
+  <span class="filet"></span>début {{ item.champs.date_debut or '—' }}
+  <span class="filet"></span><code>{{ item.id }}</code></p>
+
+{% if etat not in ('Rejetee', 'Abandonnee') %}
+  {% set ici = flux.index('ContratSigne' if etat == 'RappelDpae' else etat) %}
+  <ul class="etapes">
+    {% for e in flux %}
+      <li class="{{ 'ici' if loop.index0 == ici else 'faite' if loop.index0 < ici }}">
+        {{ etapes[e] }}</li>
+    {% endfor %}
+  </ul>
+{% endif %}
+
+<div class="carte">
   {% if etat == 'Soumise' %}
-    <form method="post" action="{{ url_for('valider', uid=item.id) }}">
-      <button {{ 'disabled' if manquantes }}>Accepter — ouvrir le dossier</button></form>
-    <form method="post" action="{{ url_for('rejeter', uid=item.id) }}" class="actions">
-      <div><label for="motif">Motif du rejet</label>
-        <select name="motif" id="motif">
-          {% for m in motifs %}<option>{{ m }}</option>{% endfor %}</select></div>
-      <div style="flex:1"><label for="commentaire">Commentaire (obligatoire)</label>
-        <input name="commentaire" id="commentaire"></div>
+    <p class="titre-carte">Décision</p>
+    <div class="actions">
+      <form method="post" action="{{ url_for('valider', uid=item.id) }}">
+        <button {{ 'disabled' if manquantes }}>Accepter — ouvrir le dossier</button></form>
+    </div>
+    {% if not manquantes %}
+      <p class="indice">L'acceptation ouvre le dossier du salarié et déclenche
+        la fiche salarié.</p>
+    {% endif %}
+    {% if manquantes %}
+      <p class="indice manque">{{ manquantes|length }} pièce(s) manquante(s) :
+        la demande ne peut pas être acceptée en l'état.</p>
+    {% endif %}
+    <hr class="sep">
+    <p class="titre-carte">Rejeter et demander une correction</p>
+    <form method="post" action="{{ url_for('rejeter', uid=item.id) }}">
+      <div class="grille-champs">
+        <div class="champ"><label for="motif">Motif du rejet</label>
+          <select name="motif" id="motif">
+            {% for m in motifs %}<option>{{ m }}</option>{% endfor %}</select></div>
+        <div class="champ"><label for="commentaire">Commentaire (obligatoire)</label>
+          <input name="commentaire" id="commentaire"
+                 placeholder="Ce que le candidat doit corriger"></div>
+      </div>
       <button class="danger">Rejeter</button>
     </form>
+
   {% elif etat == 'Rejetee' %}
-    <p style="margin:0;color:var(--gris)">Rejetée le
-      {{ item.journal[-1].le[:10] }} — {{ item.journal[-1].motif }}.
-      Un lien de correction a été envoyé ; la demande reviendra ici corrigée.</p>
+    <p class="titre-carte">Rejetée</p>
+    <p style="margin:0">Rejetée le {{ item.journal[-1].le[:10] }} —
+      {{ item.journal[-1].motif }}.</p>
+    <p class="indice">Un lien de correction a été envoyé ; la demande reviendra ici corrigée.</p>
+
   {% elif etat == 'ATraiter' %}
+    <p class="titre-carte">Contrat</p>
     {% if mode_contrat == 'depose' %}
     <form method="post" action="{{ url_for('contrat_depose', uid=item.id) }}"
           enctype="multipart/form-data" class="actions">
-      <div><label for="contrat">Contrat fait sur myrhis (PDF ou .docx)</label>
+      <div class="champ" style="flex:1 1 320px">
+        <label for="contrat">Contrat fait sur myrhis (PDF ou .docx)</label>
         <input type="file" name="contrat" id="contrat" accept=".pdf,.docx"></div>
       <button>Déposer le contrat</button>
     </form>
+    <p class="indice">Cet établissement rédige ses contrats sur myrhis ; déposez
+      le fichier ici pour poursuivre le parcours.</p>
     {% else %}
     <form method="post" action="{{ url_for('generer_contrat', uid=item.id) }}">
-      <button>Générer le contrat</button></form>
+      <div class="grille-champs">
+        {% for ph in saisie_rh %}
+          <div class="champ"><label for="rh-{{ ph }}">{{ ph }}</label>
+            <input name="{{ ph }}" id="rh-{{ ph }}" value="{{ item.champs.get(ph, '') }}"></div>
+        {% endfor %}
+      </div>
+      <button>Générer le contrat</button>
+    </form>
+    <p class="indice">Le contrat est produit depuis le modèle de l'établissement,
+      avec les informations saisies ci-dessous.</p>
     {% endif %}
+
   {% elif etat == 'ContratPret' %}
+    <p class="titre-carte">Signature</p>
     {% if signature_esign %}
-    <form method="post" action="{{ url_for('signature_envoyer', uid=item.id) }}">
-      <button class="discret">Envoyer à la signature</button></form>
-    <form method="post" action="{{ url_for('signature_verifier', uid=item.id) }}">
-      <button class="discret">Vérifier la signature</button></form>
+    <div class="actions">
+      <form method="post" action="{{ url_for('signature_envoyer', uid=item.id) }}">
+        <button>Envoyer à la signature</button></form>
+      <form method="post" action="{{ url_for('signature_verifier', uid=item.id) }}">
+        <button class="discret">Vérifier la signature</button></form>
+    </div>
+    <hr class="sep">
     {% endif %}
     <form method="post" action="{{ url_for('contrat_signe', uid=item.id) }}"
           enctype="multipart/form-data" class="actions">
-      <div><label for="signe">Contrat signé (PDF ou .docx)</label>
+      <div class="champ" style="flex:1 1 320px">
+        <label for="signe">Contrat signé (PDF ou .docx)</label>
         <input type="file" name="signe" id="signe" accept=".pdf,.docx"></div>
-      <button>Déposer le contrat signé</button>
+      <button {{ 'class=discret'|safe if signature_esign }}>Déposer le contrat signé</button>
     </form>
+    <p class="indice">Le dossier passe à l'étape DPAE une fois le contrat signé déposé.</p>
+
   {% elif etat in ('ContratSigne', 'RappelDpae') %}
+    <p class="titre-carte">Déclaration préalable à l'embauche</p>
     {% if etat == 'ContratSigne' %}
-    <form method="post" action="{{ url_for('rappel_dpae', uid=item.id) }}">
-      <button class="discret">Envoyer le rappel DPAE</button></form>
+    <div class="actions">
+      <form method="post" action="{{ url_for('rappel_dpae', uid=item.id) }}">
+        <button class="discret">Envoyer le rappel DPAE</button></form>
+    </div>
+    <hr class="sep">
     {% endif %}
     <form method="post" action="{{ url_for('dpae_faite', uid=item.id) }}"
           enctype="multipart/form-data" class="actions">
-      <div><label for="accuse">Accusé DPAE (PDF)</label>
+      <div class="champ" style="flex:1 1 320px">
+        <label for="accuse">Accusé DPAE (PDF)</label>
         <input type="file" name="accuse" id="accuse" accept=".pdf,.jpg,.jpeg,.png"></div>
       <button>DPAE créée et stockée</button>
     </form>
+
   {% elif etat == 'DpaeFaite' %}
-    <form method="post" action="{{ url_for('remettre', uid=item.id) }}">
-      <button>Remettre au cabinet comptable</button></form>
+    <p class="titre-carte">Transmission</p>
+    <div class="actions">
+      <form method="post" action="{{ url_for('remettre', uid=item.id) }}">
+        <button>Remettre au cabinet comptable</button></form>
+    </div>
+    <p class="indice">Un lien de téléchargement personnel, valable 30 jours,
+      sera envoyé au cabinet.</p>
+
   {% elif etat == 'RemisComptable' %}
-    <form method="post" action="{{ url_for('renvoyer', uid=item.id) }}">
-      <button class="discret">Renvoyer au comptable (révoque le lien précédent)</button></form>
-  {% endif %}
-  {% if etat not in ('Soumise', 'Rejetee', 'Abandonnee') %}
-    <form method="post" action="{{ url_for('abandonner', uid=item.id) }}">
-      <button class="danger">Abandonner</button></form>
+    <p class="titre-carte">Lien comptable</p>
+    <div class="actions">
+      <form method="post" action="{{ url_for('renvoyer', uid=item.id) }}">
+        <button class="discret">Renvoyer au comptable</button></form>
+    </div>
+    <p class="indice">Le renvoi révoque le lien précédent.</p>
+
+  {% else %}
+    <p class="titre-carte">Dossier clos</p>
+    <p style="margin:0" class="vide">Aucune action possible sur ce dossier.</p>
   {% endif %}
 </div>
 
+{% if etat not in ('Soumise', 'Rejetee', 'Abandonnee') %}
+<div class="pied-actions">
+  <form method="post" action="{{ url_for('abandonner', uid=item.id) }}">
+    <button class="danger">Abandonner le dossier</button></form>
+</div>
+{% endif %}
+
 <div class="duo">
+  <div>
+    <h2>Informations saisies</h2>
+    <div class="carte"><dl class="infos">
+      {% for cle, val in item.champs.items() if val %}
+        <div><dt>{{ champ(cle).libelle }}</dt><dd>{{ val }}</dd></div>
+      {% endfor %}
+    </dl></div>
+  </div>
+
   <div>
     <h2>Pièces du candidat</h2>
     <div class="carte"><ul class="docs">
@@ -80,32 +170,24 @@
         <li><a href="{{ url_for('fichier', uid=item.id, bucket='pieces', nom=f) }}">{{ f }}</a></li>
       {% endfor %}
       {% for c in manquantes %}<li class="manque">{{ c.libelle }} — manquante</li>{% endfor %}
-      {% if not pieces and not manquantes %}<li style="color:var(--gris)">Aucune.</li>{% endif %}
+      {% if not pieces and not manquantes %}<li class="vide">Aucune.</li>{% endif %}
     </ul></div>
 
     <h2>Documents produits</h2>
     <div class="carte"><ul class="docs">
       {% for f in produits %}
         <li><a href="{{ url_for('fichier', uid=item.id, bucket='contrat', nom=f) }}">{{ f }}</a></li>
-      {% else %}<li style="color:var(--gris)">Aucun pour l'instant.</li>{% endfor %}
-    </ul></div>
-  </div>
-
-  <div>
-    <h2>Informations saisies</h2>
-    <div class="carte"><ul class="docs">
-      {% for cle, val in item.champs.items() if val %}
-        <li><span style="color:var(--gris)">{{ champ(cle).libelle }}</span><br>{{ val }}</li>
-      {% endfor %}
+      {% else %}<li class="vide">Aucun pour l'instant.</li>{% endfor %}
     </ul></div>
   </div>
 </div>
 
 <h2>Journal</h2>
-<div class="carte journal"><ul class="docs">
+<div class="carte"><ul class="journal">
   {% for e in item.journal|reverse %}
-    <li>{{ e.le[:16]|replace('T', ' ') }} —
-      {% if e.type %}<b>{{ e.type }}</b>{% else %}{{ e.de or 'création' }} → <b>{{ e.vers }}</b>{% endif %}
+    <li><time>{{ e.le[:16]|replace('T', ' ') }}</time>
+      {% if e.type %}<b>{{ e.type }}</b>{% else %}{{ libelle_etat(e.de) if e.de else 'création' }}
+        → <b>{{ libelle_etat(e.vers) }}</b>{% endif %}
       {% if e.par %} par {{ e.par }}{% endif %}
       {% if e.motif %} · {{ e.motif }}{% endif %}
       {% if e.commentaire %} · « {{ e.commentaire }} »{% endif %}
