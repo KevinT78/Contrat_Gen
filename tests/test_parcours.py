@@ -126,6 +126,8 @@ def couloir_dark_kitchen(c):
     # rappel DPAE puis DPAE faite
     c.post(f"/dossier/{uid}/rappel-dpae")
     assert store.etat(store.lire(uid)) == "RappelDpae"
+    rappel = dernier_mail("rappel_dpae")
+    assert "Martin" in rappel and "http://localhost/dossier/" in rappel
     c.post(f"/dossier/{uid}/dpae-faite", data={}, content_type="multipart/form-data")
     assert store.etat(store.lire(uid)) == "RappelDpae", "DPAE validée sans accusé"
     c.post(f"/dossier/{uid}/dpae-faite", data={"accuse": piece()},

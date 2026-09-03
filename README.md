@@ -157,7 +157,14 @@ Les deux voies mènent à `ContratPret`, puis à `ContratSigne`.
    l'ancien lien renvoie 410.
 
 Les mails ne partent pas : `"mode": "console"` les écrit dans `data/mails/*.eml`.
-Passer à `"smtp"` pour de vrais envois (TLS vérifié imposé).
+Passer à `"smtp"` pour de vrais envois ; la variable d'env `MAILS_MODE` surclasse
+le fichier. Dès qu'un `mails.utilisateur` est renseigné, STARTTLS vérifié + login
+sont imposés ; sans identifiant, l'envoi part en clair (catcher local type MailHog).
+
+**Tester les mails localement** : `lancer_test_emails.bat` lance MailHog (SMTP
+`localhost:1025`, UI `http://localhost:8025`) et l'app avec `MAILS_MODE=smtp` —
+`config/instance.json` n'est pas modifié. MailHog s'installe via
+`scoop install mailhog` ou depuis les *releases* GitHub `mailhog/MailHog`.
 
 ## Récap hebdomadaire des nouveaux salariés
 
@@ -256,6 +263,7 @@ seulement caché dans le template.
 | `tests/test_signature.py` | `signature.py` contre un transport factice |
 | `tests/test_clients.py` | plusieurs clients factices, une instance chacun, étanches |
 | `tests/test_produit.py` | balisage client refusé si mal écrit, fiche dérivée, config versionnée, rechargement à chaud |
+| `tests/test_mails.py` | mode console, override `MAILS_MODE`, STARTTLS+login imposés dès qu'un identifiant SMTP est présent |
 
 ## Ce que le squelette ne fait pas encore
 
