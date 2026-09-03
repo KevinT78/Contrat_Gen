@@ -8,8 +8,8 @@ parcours reste en signature manuelle (la RH dépose le PDF signé elle-même).
       "url": "https://api.yousign.com/v3"      # optionnel, défaut ci-dessous
     }
 
-ponytail: polling par bouton (recuperer), pas de webhook — pas d'endpoint
-public à exposer ni de secret de callback ; passer au webhook si l'attente
+Simplification volontaire : polling par bouton (recuperer), pas de webhook —
+pas d'endpoint public à exposer ni de secret de callback. À revoir si l'attente
 devient un irritant.
 
 Un seul prestataire, pas d'abstraction à une implémentation. `_TRANSPORT` est

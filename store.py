@@ -105,7 +105,7 @@ def tout():
         for d in sorted((config.DONNEES / zone).glob("*/")):
             if _fichier_json(d).exists():
                 items.append(lire(d.name))
-    return sorted(items, key=lambda i: i["champs"].get("date_debut") or "9999",
+    return sorted(items, key=lambda i: config.valeur(i["champs"], "date_debut") or "9999",
                   reverse=False)
 
 

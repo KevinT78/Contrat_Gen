@@ -5,6 +5,7 @@
 Lancé en sous-processus par tests/test_clients.py, une fois par client factice.
 Sort 0 si le parcours passe, imprime « PARCOURS OK <client> <secret8> <donnees> ».
 """
+import html
 import io
 import json
 import sys
@@ -17,6 +18,7 @@ sys.path.insert(0, RACINE)
 sys.stdout.reconfigure(encoding="utf-8")
 
 import config          # noqa: E402
+import doctor          # noqa: E402
 import store           # noqa: E402
 from app import app    # noqa: E402
 
@@ -29,20 +31,20 @@ def f():
 
 
 def saisie(etab, poste):
-    return {
-        "etablissement": etab, "email_demandeur": "manager@example.com",
-        "nom_naissance": "Nkemba", "nom_usage": "", "prenom": "Awa",
-        "date_naissance": "1996-03-07", "lieu_naissance": "Roubaix",
-        "nationalite": "Française", "num_secu": "2 96 03 59 512 088 39",
-        "adresse": "9 rue des Lilas", "poste": poste, "type_contrat": "CDI",
-        "date_debut": "2026-12-01", "temps_partiel": "Non",
-        "heures_hebdo": "35", "salaire": "2100",
-    }
+    """Le formulaire du CLIENT, pas une saisie codee en dur : les ids de champs
+    varient d'une instance a l'autre, seuls les roles sont surs. C'est ce que ce
+    driver doit prouver -- une saisie ecrite en dur testerait un seul nommage."""
+    vals = doctor.salarie_fictif()
+    vals[config.role("etablissement")] = etab
+    vals[config.role("poste")] = poste
+    vals[config.role("email")] = "manager@example.com"
+    vals[config.role("nom")] = "Nkemba"
+    return vals
 
 
 def couloir(c, etab, mode, poste, attendus):
-    r = c.post("/", data={**saisie(etab, poste), "identite": f(),
-                          "carte_vitale": f(), "rib": f()},
+    r = c.post("/", data={**saisie(etab, poste),
+                          **{p["id"]: f() for p in config.pieces()}},
                content_type="multipart/form-data")
     assert "Demande envoyée" in r.text, r.text[:300]
     uid = max(i["id"] for i in store.tout())
@@ -50,6 +52,16 @@ def couloir(c, etab, mode, poste, attendus):
     c.post(f"/dossier/{uid}/valider")
     item = store.lire(uid)
     assert store.etat(item) == "ATraiter", store.etat(item)
+
+    # Les ECRANS aussi doivent lire par role : chez un client qui renomme ses
+    # champs, « item.champs.poste » en dur sortait une colonne VIDE, en silence.
+    for page in (f"/dossier/{uid}", "/suivi"):
+        # unescape : « Chef d'atelier » sort en « Chef d&#39;atelier » dans le
+        # HTML. On asserte sur le texte tel qu'un humain le lit, pas sur
+        # l'echappement -- sinon tout intitule a apostrophe fait un faux rouge.
+        txt = html.unescape(c.get(page).text)
+        assert poste in txt, f"« {poste} » absent de {page} — id lu en dur ?"
+        assert etab in txt, f"« {etab} » absent de {page} — id lu en dur ?"
     if config.instance().get("fiche_salarie"):
         assert "fiche-salarie.docx" in store.fichiers(item, "contrat"), "fiche absente"
 
@@ -84,6 +96,8 @@ def couloir(c, etab, mode, poste, attendus):
     jeton = store.signer("lot_comptable", uid, item.get("lien_comptable_epoch", 0))
     z = zipfile.ZipFile(io.BytesIO(app.test_client().get(f"/lot/{jeton}/zip").data))
     assert "contrat/contrat-signe.pdf" in z.namelist(), z.namelist()
+    lot = html.unescape(app.test_client().get(f"/lot/{jeton}").text)
+    assert poste in lot and etab in lot, "page du lot comptable : champ lu en dur"
     return uid
 
 

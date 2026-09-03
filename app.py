@@ -32,14 +32,11 @@ def _nom(champs):
     """Nom affiche du salarie (suivi, mails, journal). Formulaire a champs
     separes -> « Prenom NOM » ; formulaire a champ unique -> le champ designe
     par le role 'nom'."""
-    prenom = champs.get("prenom", "")
-    if prenom:
-        return f"{prenom} {(champs.get('nom_usage') or champs.get('nom_naissance') or '')}".strip()
-    return champs.get(config.role("nom", "nom_naissance"), "")
+    return " ".join(p for p in config.identite(champs) if p)
 
 
 def _email_demandeur(champs):
-    return champs.get(config.role("email", "email_demandeur"), "")
+    return config.valeur(champs, "email")
 
 
 # Libelles et tons d'affichage des etats -- presentation seule, l'etat
@@ -58,6 +55,9 @@ TONS_ETAT = {"Soumise": "attente", "ATraiter": "attente", "Rejetee": "ko",
 @app.context_processor
 def _aides():
     return {"nom_de": _nom,
+            # Les ecrans lisaient « item.champs.poste » en dur : chez un client
+            # qui renomme ses champs, la colonne sortait VIDE au lieu de crier.
+            "valeur": config.valeur,
             "libelle_etat": lambda e: LIBELLES_ETAT.get(e, e),
             "ton_etat": lambda e: TONS_ETAT.get(e, "")}
 
@@ -221,7 +221,7 @@ def detail(uid):
                            motifs=config.instance()["motifs_ko"],
                            champ=config.champ, saisie_rh=config.saisie_rh(),
                            nom_affiche=_nom(item["champs"]),
-                           mode_contrat=config.mode_contrat(item["champs"]["etablissement"]),
+                           mode_contrat=config.mode_contrat(config.valeur(item["champs"], "etablissement")),
                            signature_esign=config.instance().get("signature", {})
                            .get("mode") == "yousign")
 
@@ -277,7 +277,8 @@ def _fiche_salarie(item):
                 if store.SAIN.sub("-", c["role"]) in present]
     manquantes = [c["libelle"] for c in store.manquantes(item)]
     vals = contrat.valeurs(
-        item["champs"], config.mentions(item["champs"]["etablissement"]),
+        item["champs"],
+        config.mentions(config.valeur(item["champs"], "etablissement")),
         extra={"PiecesFournies": ", ".join(fournies) or "—",
                "PiecesManquantes": ", ".join(manquantes) or "aucune"})
     try:
@@ -326,14 +327,14 @@ def rejeter(uid):
 @rh
 def generer_contrat(uid):
     item = store.lire(uid) or abort(404)
-    if config.mode_contrat(item["champs"]["etablissement"]) != "genere":
+    if config.mode_contrat(config.valeur(item["champs"], "etablissement")) != "genere":
         flash("Cet établissement est en contrat déposé (myrhis) : "
               "utilisez « Déposer le contrat ».", "erreur")
         return redirect(url_for("detail", uid=uid))
     modele = config.modele_pour(item["champs"])
     if not modele:
         flash(f"Aucun modèle de contrat configuré pour le poste "
-              f"« {item['champs'].get('poste')} ».", "erreur")
+              f"« {config.valeur(item['champs'], 'poste')} ».", "erreur")
         return redirect(url_for("detail", uid=uid))
     # Placeholders qu'aucune question du formulaire ne fournit : saisis ici par
     # la RH, fusionnes dans champs pour que la regeneration et le lot les voient.
@@ -341,7 +342,8 @@ def generer_contrat(uid):
     if extra:
         item = store.completer_champs(uid, extra)
     vals = contrat.valeurs(item["champs"],
-                           config.mentions(item["champs"]["etablissement"]), extra=extra)
+                           config.mentions(config.valeur(item["champs"], "etablissement")),
+                           extra=extra)
     dest = Path(item["_dir"]) / "contrat" / ("contrat" + Path(modele).suffix.lower())
     try:
         contrat.generer(config.CLIENT / "contrats" / modele, vals, dest)
@@ -360,7 +362,7 @@ def contrat_depose(uid):
     dépose le PDF/.docx ici."""
     item = store.lire(uid) or abort(404)
     d = store.dossier_de(uid) or abort(404)
-    if config.mode_contrat(item["champs"]["etablissement"]) != "depose":
+    if config.mode_contrat(config.valeur(item["champs"], "etablissement")) != "depose":
         flash("Cet établissement génère son contrat : utilisez « Générer ».", "erreur")
         return redirect(url_for("detail", uid=uid))
     f = request.files.get("contrat")
@@ -409,7 +411,7 @@ def signature_envoyer(uid):
     try:
         pid = signature.envoyer(
             Path(item["_dir"]) / "contrat" / src,
-            {"prenom": c.get("prenom", ""),
+            {"prenom": config.valeur(c, "prenom"),
              "nom": _nom(c) or "",
              "email": _email_demandeur(c)})
     except (RuntimeError, KeyError, OSError) as e:
@@ -452,7 +454,7 @@ def rappel_dpae(uid):
     conf = config.instance()["mails"]
     mails.envoyer("rappel_dpae", conf.get("dpae") or conf["rh"],
                   nom=_nom(item["champs"]),
-                  debut=item["champs"].get(config.role("date_debut", "date_debut"), ""),
+                  debut=config.valeur(item["champs"], "date_debut"),
                   lien=url_for("detail", uid=uid, _external=True))
     flash("Rappel DPAE envoyé.", "ok")
     return redirect(url_for("detail", uid=uid))
@@ -484,7 +486,8 @@ def _avis_comptable(item, epoch):
     lien = url_for("lot", jeton=store.signer("lot_comptable", item["id"], epoch),
                    _external=True)
     ok, raison = mails.envoyer(
-        "avis_comptable", config.comptable(item["champs"]["etablissement"]),
+        "avis_comptable",
+        config.comptable(config.valeur(item["champs"], "etablissement")),
         nom=_nom(item["champs"]), id=item["id"], lien=lien)
     if not ok:
         store.noter(item["id"], type="mail_echoue", par="systeme", motif=raison)

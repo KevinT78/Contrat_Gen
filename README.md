@@ -61,6 +61,37 @@ paie à la mise en service, jamais à la génération du contrat d'un vrai salar
 La **relecture juridique** du modèle balisé reste au client : le garde-fou
 vérifie qu'un placeholder est alimenté, pas qu'il est au bon endroit.
 
+### `doctor` — relire les contrats que la config produit vraiment
+
+```bash
+CONFIG_DIR=/srv/acme/config python doctor.py
+```
+
+Un salarié fictif est promené sur chaque croisement que la config sait
+distinguer — poste × temps partiel × … × établissement — et le contrat est
+**réellement généré** dans un dossier temporaire :
+
+```
+Couverture de « ACME » — 8 cas, contrats dans …/contrat-gen-doctor
+Salarié fictif : Temps de travail = 10H, autres champs « Exemple ».
+
+  Couvreur      / CDI / Chantier Nord   ✓ 01-Couvreur-CDI-Chantier-Nord.docx
+  Chef d'équipe / CDI / Chantier Nord   ✗ aucun modèle ne vise ce cas
+  Apprenti      / CDI / Chantier Sud    ⚠ valeurs vides dans CDI.docx : SalaireChiffres
+  Couvreur      / CDI / Entrepôt        – contrat déposé (fait hors de l'app)
+```
+
+C'est le livrable de la relecture juridique : le client relit **ses** contrats,
+pas un modèle abstrait. Les colonnes sortent de ses propres règles `templates`
+(les clés de `quand`), donc un client qui branche sur le temps partiel voit ses
+deux cas. Sortie non nulle dès qu'un cas ne produit pas son contrat — à rejouer
+après chaque modification de `config/`.
+
+Rien n'est écrit hors du dossier temporaire : la commande est sûre sur une
+instance en production. Elle attrape ce que `config.verifier()` ne peut pas
+voir — un poste correctement routé vers un modèle mais absent de la grille de
+salaires sort ici en `⚠`, au lieu d'exploser devant la RH le jour de l'embauche.
+
 ### Un changement plus tard
 
 Nouvel établissement, salaire revalorisé, clause modifiée : éditer les `.json`,
@@ -150,7 +181,7 @@ Tout vit dans `config/` — aucun `.py` n'y entre jamais :
 | Fichier | Ce qu'il porte |
 |---|---|
 | `instance.json` | `config_version`, nom, secret HMAC, signature, fiche salarié, SMTP, destinataires, motifs de KO, comptes, poste → template |
-| `formulaire.json` | les champs du formulaire, leur type, le placeholder `.docx` de chacun |
+| `formulaire.json` | les champs du formulaire, leur type, le placeholder `.docx` de chacun, et la table `roles` |
 | `societes.json` | sociétés (SIREN, mentions, cabinet) et établissements (SIRET, couloir `contrat`) |
 | `contrats/*.docx` | modèles de contrat + `fiche_salarie.docx`, à placeholders `{{Nom}}` |
 | `mails/*.txt` | objet + corps de chaque mail |
@@ -158,6 +189,36 @@ Tout vit dans `config/` — aucun `.py` n'y entre jamais :
 Au démarrage, `config.verifier()` extrait les `{{placeholders}}` des `.docx`
 actifs et refuse ceux qu'aucune source n'alimente — le garde-fou qui rend
 l'adaptation à un nouveau client vérifiable.
+
+### Les rôles : comment le moteur lit un formulaire qu'il ne connaît pas
+
+Le moteur ne lit **aucun id de champ**. Il ne connaît qu'un vocabulaire fermé de
+huit rôles (`config.ROLES`) et la table `roles` de `formulaire.json` fait le
+pont. Le client nomme ses champs comme il veut :
+
+```json
+"roles": {"etablissement": "chantier", "poste": "fonction",
+          "nom": "identite_nom", "email": "courriel"},
+"champs": [
+  {"id": "chantier",         "libelle": "Sur quel chantier ?", "type": "etablissement"},
+  {"id": "numero_carte_btp", "libelle": "N° carte BTP", "type": "texte",
+                             "placeholder": "CarteBTP"}
+]
+```
+
+`chantier` joue le rôle `etablissement` : le moteur route les mentions légales,
+le cabinet comptable et le couloir de contrat dessus. `numero_carte_btp` n'a
+aucun rôle : le moteur l'ignore, il ne va qu'au template. C'est la moitié
+« champ libre » du formulaire, et elle n'a pas de limite.
+
+Quatre rôles sont **requis** (`etablissement`, `poste`, `nom`, `email`) — sans
+eux le parcours ne peut pas tourner. Les autres sont facultatifs : un formulaire
+à champ unique « NOM Prénom » n'a ni prénom ni nom d'usage, et `config.identite()`
+s'en accommode. Une table `roles` mal écrite — rôle inconnu, champ inexistant,
+rôle requis absent — refuse le **démarrage** en disant lequel.
+
+Sans déclaration, chaque rôle retombe sur son id historique (`etablissement`,
+`poste`, `nom_naissance`…) : une instance existante n'a rien à changer.
 
 ## Le disque est la base
 
@@ -190,6 +251,7 @@ seulement caché dans le template.
 | `installer.py` | crée l'instance d'un nouveau client depuis `config.exemple/` |
 | `placeholders.py` | fiche des `{{Jetons}}` à remettre au client, dérivée de sa config |
 | `recap.py` | récap hebdomadaire des nouveaux salariés (CLI, à mettre en cron) |
+| `doctor.py` | couverture de la config, vérifiée en produisant les contrats |
 | `tests/test_parcours.py` | les deux couloirs, signature, fiche, récap, refus attendus |
 | `tests/test_signature.py` | `signature.py` contre un transport factice |
 | `tests/test_clients.py` | plusieurs clients factices, une instance chacun, étanches |

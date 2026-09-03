@@ -114,7 +114,7 @@ def modele_pour(champs):
 
     t = instance()["templates"]
     if isinstance(t, dict):
-        return t.get(champs.get("poste"))
+        return t.get(valeur(champs, "poste"))
     for regle in t:
         if all(n(champs.get(k, "")) == n(v)
                for k, v in regle.get("quand", {}).items()):
@@ -156,11 +156,53 @@ def champs():
     return formulaire()["champs"]
 
 
-def role(nom, defaut=None):
-    """id du champ qui joue un role attendu par le code (nom affiche, email de
-    reponse...). Declare dans formulaire()['roles'] ; a defaut, l'id historique
-    passe en `defaut` -- une config sans 'roles' garde le comportement d'avant."""
-    return formulaire().get("roles", {}).get(nom) or defaut or nom
+# Le vocabulaire ferme des roles que le MOTEUR sait lire, et l'id historique de
+# chacun. Tout le reste du formulaire est du champ libre : le moteur l'ignore et
+# il ne va qu'aux templates. C'est ce qui rend le produit installable chez une
+# PME dont les champs s'appellent autrement -- avant, « etablissement » et
+# « poste » etaient lus en dur a 13 endroits et un renommage levait un KeyError
+# en pleine action RH.
+ROLES = {"etablissement": "etablissement", "poste": "poste",
+         "nom": "nom_naissance", "prenom": "prenom", "nom_usage": "nom_usage",
+         "nom_naissance": "nom_naissance", "email": "email_demandeur",
+         "date_debut": "date_debut"}
+
+# Sans eux le parcours ne peut pas tourner : l'etablissement route les mentions
+# et le comptable, le poste route le modele et la grille, le nom et l'email
+# adressent les mails. Les autres sont facultatifs (un formulaire a champ unique
+# « NOM Prenom » n'a ni prenom ni nom d'usage).
+ROLES_REQUIS = ("etablissement", "poste", "nom", "email")
+
+
+def role(nom):
+    """id du champ qui joue un role attendu par le code. Declare dans
+    formulaire()['roles'] ; a defaut l'id historique de ROLES -- une config sans
+    'roles' garde le comportement d'avant.
+
+    Rend TOUJOURS une chaine, meme sur une config malformee : `roles` qui n'est
+    pas un objet, ou un id qui est une liste. Sinon chaque appelant explose a sa
+    facon (`x not in ids` -> TypeError) -- y compris verifier(), dont c'est le
+    travail de refuser cette config proprement."""
+    declares = formulaire().get("roles") or {}
+    declare = declares.get(nom) if isinstance(declares, dict) else None
+    return declare if isinstance(declare, str) and declare else ROLES.get(nom) or nom
+
+
+def valeur(champs, nom, defaut=""):
+    """La valeur qu'un dossier porte pour un role. LE seul acces du moteur aux
+    champs d'un salarie : aucun id de champ n'est ecrit en dur ailleurs."""
+    return champs.get(role(nom), defaut)
+
+
+def identite(champs):
+    """(prenom, nom) d'un dossier, quel que soit le decoupage du formulaire du
+    client : champs separes, ou champ unique « NOM Prenom » (-> ("", "NOM
+    Prenom")). Les trois modules qui affichaient un nom le construisaient chacun
+    de leur cote, et aucun ne retombait sur le role « nom » : un client sans
+    champ « nom de naissance » sortait des contrats au prenom seul."""
+    nom = (valeur(champs, "nom_usage") or valeur(champs, "nom_naissance")
+           or valeur(champs, "nom"))
+    return valeur(champs, "prenom"), nom
 
 
 def champ(cid):
@@ -308,6 +350,38 @@ def verifier():
         if raisons:
             manques[f"derives → {ph or '?'}"] = raisons
 
+    # Les roles sont la promesse « n'importe quelle PME » : le moteur ne lit que
+    # des roles, jamais un id de champ. Un role mal declare doit se payer au
+    # demarrage, pas par un dossier vide ou un mail sans destinataire six mois
+    # plus tard. Meme discipline que `derives` : la FORME avant les valeurs --
+    # un `roles` qui n'est pas un dict ferait exploser la boucle qui le lit.
+    declares = formulaire().get("roles", {})
+    if not isinstance(declares, dict):
+        manques["roles"] = ["formulaire.json → « roles » attend un objet "
+                            "{rôle: id de champ}"]
+    else:
+        ids = {c["id"] for c in champs()}
+        raisons = []
+        for nom, cid in declares.items():
+            if nom not in ROLES:
+                raisons.append(f"rôle « {nom} » inconnu — au choix : "
+                               + ", ".join(sorted(ROLES)))
+            elif not isinstance(cid, str) or not cid:
+                # La FORME avant la valeur : « cid not in ids » leve un
+                # TypeError sur une liste ou un dict, donc le garde-fou tombait
+                # au lieu de refuser la config -- exactement le mode d'echec
+                # qu'il existe pour supprimer.
+                raisons.append(f"rôle « {nom} » : « {cid} » n'est pas un id de champ")
+            elif cid not in ids:
+                raisons.append(f"rôle « {nom} » → « {cid} », qui n'est pas un "
+                               "champ du formulaire")
+        for nom in ROLES_REQUIS:
+            if role(nom) not in ids:
+                raisons.append(f"rôle « {nom} » : aucun champ « {role(nom)} » — "
+                               f"déclarez-le dans formulaire.json → roles")
+        if raisons:
+            manques["roles"] = raisons
+
     sources = placeholders_connus()
 
     for nom in _templates_actifs():
@@ -338,7 +412,7 @@ def verifier():
         for r in t:
             vises |= {str(v) for v in r.get("quand", {}).values()}
         for c in champs():
-            if c["id"] != "poste":
+            if c["id"] != role("poste"):
                 continue
             for opt in c.get("options", []):
                 if not fourre_tout and opt not in vises:

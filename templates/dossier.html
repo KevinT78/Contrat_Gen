@@ -10,9 +10,9 @@
 <h1>{{ nom_affiche or item.id }}</h1>
 <p class="sous">
   <span class="badge {{ ton_etat(etat) }}">{{ libelle_etat(etat) }}</span>
-  <span class="filet"></span>{{ item.champs.poste }}
-  <span class="filet"></span>{{ item.champs.etablissement }}
-  <span class="filet"></span>début {{ item.champs.date_debut or '—' }}
+  <span class="filet"></span>{{ valeur(item.champs, 'poste') }}
+  <span class="filet"></span>{{ valeur(item.champs, 'etablissement') }}
+  <span class="filet"></span>début {{ valeur(item.champs, 'date_debut') or '—' }}
   <span class="filet"></span><code>{{ item.id }}</code></p>
 
 {% if etat not in ('Rejetee', 'Abandonnee') %}

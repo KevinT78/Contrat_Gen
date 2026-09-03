@@ -5,8 +5,9 @@ côté client (aucun scheduler dans l'app).
     python recap.py --jours 14
 
 La fenêtre est dérivée du journal (entrée « vers == ATraiter » = le salarié est
-entré). ponytail: pas d'état « déjà envoyé » — deux exécutions le même jour
-donnent le même mail, pas un doublon de contenu.
+entré). Simplification volontaire : pas d'état « déjà envoyé » — deux
+exécutions le même jour donnent le même mail, pas un doublon de contenu. À
+revoir si le récap devient déclenchable à la main depuis l'app.
 """
 import sys
 from datetime import datetime, timedelta, timezone
@@ -31,10 +32,10 @@ def entres_depuis(seuil):
 
 def ligne(item):
     c = item["champs"]
-    nom = (c.get("nom_usage") or c.get(config.role("nom", "nom_naissance")) or "").upper()
-    return (f"- {c.get('prenom', '')} {nom} — {c.get('poste', '')} — "
-            f"{c.get('etablissement', '')} — "
-            f"début {c.get(config.role('date_debut', 'date_debut'), '?')}")
+    prenom, nom = config.identite(c)
+    return (f"- {prenom} {nom.upper()} — {config.valeur(c, 'poste')} — "
+            f"{config.valeur(c, 'etablissement')} — "
+            f"début {config.valeur(c, 'date_debut', '?')}")
 
 
 def main(jours):

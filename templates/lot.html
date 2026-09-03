@@ -2,9 +2,9 @@
 {% block titre %}Lot comptable{% endblock %}
 {% block corps %}
 <h1>Dossier {{ nom_de(item.champs) or item.id }}</h1>
-<p class="sous">{{ item.champs.etablissement }}
-  <span class="filet"></span>{{ item.champs.poste }}
-  <span class="filet"></span>début {{ item.champs.date_debut }}
+<p class="sous">{{ valeur(item.champs, 'etablissement') }}
+  <span class="filet"></span>{{ valeur(item.champs, 'poste') }}
+  <span class="filet"></span>début {{ valeur(item.champs, 'date_debut') }}
   <span class="filet"></span><code>{{ item.id }}</code></p>
 
 <div class="carte">

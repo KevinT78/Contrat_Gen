@@ -3,6 +3,11 @@
   "titre": "Demande d'embauche",
   "intro": "À remplir par le manager du restaurant. Les pièces du candidat sont jointes ici ; le service RH prend la suite.",
 
+  "roles": {"etablissement": "etablissement", "poste": "poste",
+            "nom": "nom_naissance", "prenom": "prenom", "nom_usage": "nom_usage",
+            "nom_naissance": "nom_naissance", "email": "email_demandeur",
+            "date_debut": "date_debut"},
+
   "champs": [
     {"id": "etablissement", "libelle": "Établissement", "type": "etablissement", "requis": true},
     {"id": "email_demandeur", "libelle": "Votre email", "type": "email", "requis": true,

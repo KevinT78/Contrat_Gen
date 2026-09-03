@@ -101,15 +101,22 @@ def prenom_nom(chaine):
 
 def calculees(champs):
     """Le jeu fixe de valeurs derivees, en code produit (per ticket 05)."""
-    nom = (champs.get("nom_usage") or champs.get("nom_naissance") or "").upper()
-    prenom = champs.get("prenom", "")
+    import config
+    prenom, nom = config.identite(champs)
     aujourdhui = date_fr(date.today().isoformat())
     return {
         "Aujourdhui": aujourdhui,
         "FaitLe": aujourdhui,
         "DateSignature": aujourdhui,
-        "NomPrenom": f"{prenom} {nom}".strip() or prenom_nom(champs.get("nom_prenom", "")),
-        "NomNaissanceUsage": (champs.get("nom_naissance") or "").upper(),
+        # Champs separes -> « Prenom NOM ». Champ unique « NOM Prenom » (aucun
+        # champ prenom dans le formulaire du client) -> reordonne pour la prose.
+        # Le discriminant est l'absence de PRENOM, pas celle du nom : un client
+        # sans champ « nom de naissance » a quand meme un nom, via le role nom.
+        "NomPrenom": (f"{prenom} {nom.upper()}".strip() if prenom
+                      else prenom_nom(nom)),
+        # Meme cascade que identite() : un client sans champ « nom de
+        # naissance » a quand meme un nom, via le role nom.
+        "NomNaissanceUsage": (config.valeur(champs, "nom_naissance") or nom).upper(),
     }
 
 
@@ -176,7 +183,8 @@ def salaire(champs, grille):
     sortir plutot que de porter un mauvais salaire. Match du poste par mots
     normalises, le plus specifique gagne (« Assistant Manager » ne prend pas le
     tarif « Manager »)."""
-    demande = _mots(champs.get("poste", ""))
+    import config
+    demande = _mots(config.valeur(champs, "poste"))
     if not demande or not grille:
         return "", ""
     compat = [e for e in grille.get("postes", []) if _mots(e["poste"]) <= demande]

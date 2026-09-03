@@ -1,0 +1,226 @@
+"""`doctor` : vérifier la couverture d'une config en PRODUISANT les contrats.
+
+    python tests/test_doctor.py
+
+Le livrable de la relecture juridique : le client relit les contrats que sa
+config produit vraiment, pas un modèle abstrait. Ce que le test prouve :
+
+  - chaque croisement poste × établissement produit un fichier, ou dit pourquoi
+    il n'en produit pas (aucun modèle visé, valeur critique vide) ;
+  - les axes du tableau sont DÉRIVÉS des règles de template du client, jamais
+    codés en dur — un client qui branche sur le temps partiel voit ses deux cas,
+    un client qui branche sur l'établissement voit les siens, et un poste en
+    texte libre reste couvert par les postes que ses règles nomment ;
+  - un établissement en contrat déposé est ignoré, pas compté en échec ;
+  - doctor ne touche pas à data/ : il tourne chez un client en production.
+"""
+import json
+import os
+import sys
+import tempfile
+from pathlib import Path
+
+sys.stdout.reconfigure(encoding="utf-8")
+BASE = Path(tempfile.mkdtemp(prefix="contratgen-doctor-"))
+os.environ["CONFIG_DIR"] = str(BASE / "config")
+os.environ["DONNEES"] = str(BASE / "data")
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from werkzeug.security import generate_password_hash          # noqa: E402
+import config                                                 # noqa: E402
+import doctor                                                 # noqa: E402
+
+CONF = BASE / "config"
+(CONF / "contrats").mkdir(parents=True)
+
+INSTANCE = {
+    "config_version": 1,
+    "client": "ACME",
+    "secret": "a" * 64,
+    "signature": {"mode": "manuel"},
+    "mails": {"mode": "console", "hote": "", "port": 587, "utilisateur": "",
+              "mot_de_passe": "", "expediteur": "", "rh": [], "superviseur": "",
+              "dpae": None, "recap": None, "comptable_defaut": "c@acme.example"},
+    "utilisateurs": {"rh": {"mdp_hash": generate_password_hash("pas-demo"),
+                            "admin": True}},
+    "motifs_ko": ["Autre"],
+    "templates": {"Manager": "contrat.txt"},
+}
+FORMULAIRE = {"champs": [
+    {"id": "etablissement", "libelle": "Établissement", "type": "etablissement",
+     "requis": True},
+    {"id": "nom", "libelle": "Nom", "type": "texte", "requis": True,
+     "placeholder": "Nom"},
+    {"id": "poste", "libelle": "Poste", "type": "choix", "requis": True,
+     "options": ["Manager", "Leavers"], "placeholder": "Poste"},
+    {"id": "temps_partiel", "libelle": "Temps partiel", "type": "choix",
+     "options": ["OUI", "NON"]},
+]}
+SOCIETES = [{"nom": "ACME", "siren": "111 111 111",
+             "comptable_email": "c@acme.example",
+             "mentions": {"RaisonSociale": "ACME SAS"},
+             "etablissements": [
+                 {"nom": "Siège", "siret": "111 111 111 00011",
+                  "mentions": {"AdresseEtablissement": "1 rue X"}},
+                 {"nom": "Entrepôt", "siret": "111 111 111 00029", "contrat": "depose",
+                  "mentions": {"AdresseEtablissement": "2 rue Y"}}]}]
+
+MODELE = "Bonjour {{Nom}}, poste {{Poste}} chez {{RaisonSociale}}."
+
+
+def ecrire(instance=None, modele=MODELE, grille=None, formulaire=None, societes=None):
+    (CONF / "instance.json").write_text(
+        json.dumps({**INSTANCE, **(instance or {})}, ensure_ascii=False),
+        encoding="utf-8")
+    (CONF / "formulaire.json").write_text(
+        json.dumps(formulaire or FORMULAIRE), encoding="utf-8")
+    (CONF / "societes.json").write_text(
+        json.dumps(societes or SOCIETES), encoding="utf-8")
+    (CONF / "contrats" / "contrat.txt").write_text(modele, encoding="utf-8")
+    f = CONF / "grille.json"
+    if grille is None:
+        f.unlink(missing_ok=True)
+    else:
+        f.write_text(json.dumps(grille), encoding="utf-8")
+    config._CACHE.clear()
+
+
+def test_chaque_cas_produit_un_contrat_relisible():
+    ecrire({"templates": {"Manager": "contrat.txt", "Leavers": "contrat.txt"}})
+    lignes = doctor.examiner()
+
+    ok = [l for l in lignes if l["statut"] == "ok"]
+    assert len(ok) == 2, [l["libelle"] for l in lignes]      # 2 postes × 1 étab généré
+    for l in ok:
+        assert Path(l["fichier"]).exists(), l
+        assert "ACME SAS" in Path(l["fichier"]).read_text(encoding="utf-8")
+
+
+def test_etablissement_en_contrat_depose_ignore_pas_en_echec():
+    ecrire({"templates": {"Manager": "contrat.txt", "Leavers": "contrat.txt"}})
+    lignes = doctor.examiner()
+    ignores = [l for l in lignes if l["statut"] == "ignore"]
+    assert ignores and all("Entrepôt" in l["libelle"] for l in ignores), lignes
+    assert doctor.verdict(lignes) == 0, "un couloir « contrat déposé » compte en échec"
+
+
+def test_poste_sans_modele_signale_avant_la_mise_en_service():
+    ecrire()                                     # « Leavers » absent des templates
+    lignes = doctor.examiner()
+    l = next(l for l in lignes if l["champs"]["poste"] == "Leavers")
+    assert l["statut"] == "sans_modele", l
+    assert doctor.verdict(lignes) != 0, "un poste sans modèle passe en vert"
+
+
+def test_valeur_critique_vide_refuse_le_contrat():
+    """Le mode d'échec de wingstop_ : un contrat qui sort avec une ligne de paie
+    blanche. Poste absent de la grille -> pas de salaire -> refus, pas un .docx
+    silencieusement troué."""
+    ecrire({"templates": {"Manager": "contrat.txt", "Leavers": "contrat.txt"},
+            "critiques": ["SalaireChiffres"]},
+           modele=MODELE + " Rémunération {{SalaireChiffres}} €.",
+           grille={"postes": [{"poste": "Directeur", "mensuel": 3000}]})
+    l = next(l for l in doctor.examiner() if l["champs"]["poste"] == "Manager")
+    assert l["statut"] == "refuse", l
+    assert "SalaireChiffres" in l["detail"], l
+
+
+def test_axes_derives_des_regles_du_client():
+    """Un client qui branche sur le temps partiel doit voir SES deux cas : les
+    axes du tableau sortent de `quand`, ils ne sont pas codés dans le produit."""
+    ecrire({"templates": [
+        {"quand": {"poste": "Manager", "temps_partiel": "OUI"}, "modele": "contrat.txt"},
+        {"quand": {"poste": "Manager"}, "modele": "contrat.txt"},
+        {"quand": {"poste": "Leavers"}, "modele": "contrat.txt"}]})
+    lignes = [l for l in doctor.examiner() if l["statut"] != "ignore"]
+    managers = [l for l in lignes if l["champs"]["poste"] == "Manager"]
+    assert {l["champs"]["temps_partiel"] for l in managers} == {"OUI", "NON"}, managers
+    assert len(lignes) == 4, [l["libelle"] for l in lignes]   # 2 postes × 2 temps
+
+
+def test_regle_visant_un_etablissement_est_couverte():
+    """`modele_pour` accepte une règle qui vise l'établissement (« un modèle par
+    établissement quand les mentions sont figées dans la prose », config.py).
+    L'établissement est déjà l'axe extérieur : le remettre en colonne écrasait
+    la vraie clé par une valeur d'exemple vide, et AUCUNE règle ne matchait —
+    trou réel maquillé en ✗, ou masqué par un fourre-tout."""
+    trois = [{**SOCIETES[0], "etablissements": SOCIETES[0]["etablissements"] + [
+        {"nom": "Atelier", "siret": "111 111 111 00037",
+         "mentions": {"AdresseEtablissement": "3 rue Z"}}]}]
+    ecrire({"templates": [{"quand": {"etablissement": "ACME / Siège"},
+                           "modele": "contrat.txt"}]}, societes=trois)
+    par_etab = {l["libelle"].split(" / ", 1)[-1]: l["statut"]
+                for l in doctor.examiner()}
+    assert par_etab["ACME / Siège"] == "ok", par_etab
+    assert par_etab["ACME / Atelier"] == "sans_modele", par_etab
+    assert par_etab["ACME / Entrepôt"] == "ignore", par_etab
+
+
+def test_poste_hors_options_reste_couvert():
+    """Un client dont le poste est du texte libre (pas un `choix` à options) :
+    les postes à couvrir sont ceux que ses règles nomment, sinon doctor teste un
+    seul poste inventé et annonce « tout est couvert » sur un cas fictif."""
+    libre = {"champs": [c if c["id"] != "poste" else
+                        {"id": "poste", "libelle": "Poste", "type": "texte",
+                         "requis": True, "placeholder": "Poste"}
+                        for c in FORMULAIRE["champs"]]}
+    ecrire({"templates": {"Manager": "contrat.txt", "Leavers": "contrat.txt"}},
+           formulaire=libre)
+    postes = {l["champs"]["poste"] for l in doctor.examiner()}
+    assert postes == {"Manager", "Leavers"}, postes
+
+
+def test_rapport_ne_compte_pas_les_hors_perimetre():
+    """`rapport()` n'etait appele par aucun test — seuls les statuts d'examiner()
+    l'etaient. Resultat : le resume annoncait « 3 cas sur 9 produisent un
+    contrat » alors que ces 3 etaient justement les etablissements en contrat
+    depose, qui n'en produisent aucun et n'ont pas a en produire."""
+    ecrire()                                     # Manager ✓, Leavers ✗, 2 déposés
+    texte = doctor.rapport(doctor.examiner())
+    assert "1 cas sur 2 produisent un contrat (2 en contrat déposé, hors compte)."         in texte, texte
+
+    ecrire({"templates": {"Manager": "contrat.txt", "Leavers": "contrat.txt"}})
+    texte = doctor.rapport(doctor.examiner())
+    assert "Les 2 cas produisent un contrat (2 en contrat déposé, hors compte)."         in texte, texte
+
+
+def test_rapport_quand_aucun_contrat_n_est_a_produire():
+    """Une PME qui utilise l'app pour collecter et suivre, mais fait TOUS ses
+    contrats à la main : `attendus` vaut 0 et le résumé annonçait « Les 0 cas
+    produisent un contrat », une affirmation sur un ensemble vide."""
+    tout_depose = [{**SOCIETES[0], "etablissements": [
+        {**e, "contrat": "depose"} for e in SOCIETES[0]["etablissements"]]}]
+    ecrire(societes=tout_depose)
+    lignes = doctor.examiner()
+    assert {l["statut"] for l in lignes} == {"ignore"}, lignes
+    assert doctor.verdict(lignes) == 0, "aucun contrat attendu ne peut pas être un échec"
+    assert "Aucun contrat à produire (4 en contrat déposé, hors compte)." \
+        in doctor.rapport(lignes), doctor.rapport(lignes)
+
+
+def test_ne_touche_pas_aux_donnees():
+    """doctor tourne chez un client en production, sur des dossiers réels."""
+    donnees = BASE / "data"
+    (donnees / "soumissions").mkdir(parents=True, exist_ok=True)
+    (donnees / "soumissions" / "temoin.json").write_text("{}", encoding="utf-8")
+    avant = {p: p.stat().st_mtime_ns for p in donnees.rglob("*")}
+
+    ecrire({"templates": {"Manager": "contrat.txt", "Leavers": "contrat.txt"}})
+    doctor.examiner()
+
+    assert {p: p.stat().st_mtime_ns for p in donnees.rglob("*")} == avant, \
+        "doctor a écrit dans data/"
+
+
+if __name__ == "__main__":
+    import shutil
+    try:
+        for nom, fn in sorted(globals().items()):
+            if nom.startswith("test_"):
+                fn()
+                print(f"  ✓ {nom}")
+        print("\ndoctor : couverture vérifiée en produisant les contrats, axes "
+              "dérivés de la config, data/ intact.")
+    finally:
+        shutil.rmtree(BASE, ignore_errors=True)
+        shutil.rmtree(doctor.DOSSIER, ignore_errors=True)

@@ -24,7 +24,7 @@ from docx import Document
 sys.stdout.reconfigure(encoding="utf-8")
 RACINE = Path(__file__).resolve().parent.parent
 CODE = ["app.py", "config.py", "contrat.py", "mails.py", "signature.py",
-        "store.py", "installer.py", "recap.py", "placeholders.py"]
+        "store.py", "installer.py", "recap.py", "placeholders.py", "doctor.py"]
 
 MENTIONS = ["RaisonSociale", "FormeCapital", "RCS", "SiegeSocial", "ConventionCollective"]
 
@@ -44,6 +44,36 @@ def etab(nom, siret, adresse, mode):
         e["contrat"] = mode
     return e
 
+
+# Aucun id ci-dessous n'existe dans config.exemple/ : c'est le seul lien du
+# moteur avec ce formulaire, la table `roles`.
+FORMULAIRE_RENOMME = {
+    "version": 1, "titre": "Embauche chantier",
+    "intro": "À remplir par le conducteur de travaux.",
+    "roles": {"etablissement": "chantier", "poste": "fonction",
+              "nom": "identite_nom", "prenom": "identite_prenom",
+              "email": "courriel", "date_debut": "demarrage"},
+    "champs": [
+        {"id": "chantier", "libelle": "Chantier", "type": "etablissement", "requis": True},
+        {"id": "courriel", "libelle": "Votre email", "type": "email", "requis": True},
+        {"id": "identite_nom", "libelle": "Nom", "type": "texte", "requis": True,
+         "placeholder": "NomNaissance"},
+        {"id": "identite_prenom", "libelle": "Prénom", "type": "texte", "requis": True,
+         "placeholder": "Prenom"},
+        {"id": "fonction", "libelle": "Poste occupé", "type": "choix", "requis": True,
+         "options": ["Couvreur", "Chef d'équipe"], "placeholder": "Poste"},
+        {"id": "demarrage", "libelle": "Date de début", "type": "date", "requis": True,
+         "placeholder": "DateDebut"},
+        # Champ propre au client : le moteur ne le connait pas, il ne va qu'au
+        # template. C'est la moitie « champ libre » du contrat.
+        {"id": "numero_carte_btp", "libelle": "N° carte BTP", "type": "texte",
+         "placeholder": "CarteBTP"},
+        {"id": "piece_identite", "libelle": "Pièce d'identité", "type": "piece_jointe",
+         "role": "identite", "requis": True},
+        {"id": "releve_bancaire", "libelle": "RIB", "type": "piece_jointe",
+         "role": "rib", "requis": True},
+    ],
+}
 
 CLIENTS = [
     {
@@ -73,6 +103,30 @@ CLIENTS = [
         "attendus": ["SUSHI EXPRESS PARIS SARL", "222 222 222 00013", "Opéra"],
         "etab_genere": "Sushi Express Paris / Opéra",
         "etab_depose": "Sushi Express Lyon / Bellecour",
+    },
+    {
+        # Le client qui prouve la promesse « n'importe quelle PME » : pas un
+        # seul id de champ en commun avec config.exemple/. Seuls les roles
+        # relient son formulaire au moteur. Avant, « etablissement » et
+        # « poste » etaient lus en dur -> KeyError en pleine action RH.
+        "slug": "btp",
+        "nom": "Toitures du Nord",
+        "formulaire": FORMULAIRE_RENOMME,
+        "postes": ["Couvreur", "Chef d'équipe"],
+        # Poste a APOSTROPHE, joue expres : Jinja l'echappe en « d&#39; », et
+        # les assertions d'ecran comparaient au texte brut -> faux rouge. Les
+        # intitules francais courants en sont pleins (chef d'equipe, agent
+        # d'entretien), aucun client factice n'en jouait un.
+        "poste": "Chef d'équipe",
+        "societes": [societe(
+            "Toitures du Nord", "444 444 444", "compta@toitures.example",
+            "TOITURES DU NORD SAS", "7 rue des Ardoises, 59000 Lille", [
+                etab("Chantier Nord", "444 444 444 00015", "7 rue des Ardoises, 59000 Lille", "genere"),
+                etab("Chantier Sud", "444 444 444 00023", "3 quai de la Deûle, 59000 Lille", "depose"),
+            ])],
+        "attendus": ["TOITURES DU NORD SAS", "444 444 444 00015", "Chef d'équipe"],
+        "etab_genere": "Toitures du Nord / Chantier Nord",
+        "etab_depose": "Toitures du Nord / Chantier Sud",
     },
 ]
 
@@ -113,9 +167,12 @@ def installer_copie(base, client):
     # config propre au client
     (copie / "config" / "societes.json").write_text(
         json.dumps(client["societes"], ensure_ascii=False, indent=2), encoding="utf-8")
+    if formulaire := client.get("formulaire"):
+        (copie / "config" / "formulaire.json").write_text(
+            json.dumps(formulaire, ensure_ascii=False, indent=2), encoding="utf-8")
     inst = json.loads((copie / "config" / "instance.json").read_text(encoding="utf-8"))
-    inst["templates"] = {p: "contrat.docx" for p in
-                         ("Équipier polyvalent", "Assistant manager", "Manager")}
+    inst["templates"] = {p: "contrat.docx" for p in client.get(
+        "postes", ("Équipier polyvalent", "Assistant manager", "Manager"))}
     inst["fiche_salarie"] = "fiche_salarie.docx"
     (copie / "config" / "instance.json").write_text(
         json.dumps(inst, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -165,7 +222,8 @@ def main():
 
             spec = base / f"{client['slug']}-spec.json"
             spec.write_text(json.dumps({
-                "password": client["password"], "poste": "Manager",
+                "password": client["password"],
+                "poste": client.get("poste", "Manager"),
                 "attendus": client["attendus"],
                 "etab_genere": client["etab_genere"],
                 "etab_depose": client["etab_depose"],

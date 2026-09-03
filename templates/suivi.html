@@ -28,14 +28,14 @@
   <tbody>
   {% for i in items %}
     {% set e = etat(i) %}
-    {% set retard = i.champs.date_debut and i.champs.date_debut < aujourdhui
-                    and e not in inactifs %}
+    {% set debut = valeur(i.champs, 'date_debut') %}
+    {% set retard = debut and debut < aujourdhui and e not in inactifs %}
     <tr class="{{ 'inactif' if e in inactifs }}">
       <td><a class="nom" href="{{ url_for('detail', uid=i.id) }}">
         {{ nom_de(i.champs) or i.id }}</a></td>
-      <td class="secondaire">{{ i.champs.etablissement }}</td>
-      <td class="secondaire">{{ i.champs.poste }}</td>
-      <td {{ 'class=manque'|safe if retard }}>{{ i.champs.date_debut or '—' }}
+      <td class="secondaire">{{ valeur(i.champs, 'etablissement') }}</td>
+      <td class="secondaire">{{ valeur(i.champs, 'poste') }}</td>
+      <td {{ 'class=manque'|safe if retard }}>{{ debut or '—' }}
         {{ '· en retard' if retard }}</td>
       <td><span class="badge {{ ton_etat(e) }}">{{ libelle_etat(e) }}</span></td>
       <td class="{{ 'manque' if manquantes(i) }}">
