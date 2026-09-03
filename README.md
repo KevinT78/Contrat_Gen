@@ -6,7 +6,12 @@ Office365. Implémente les décisions de `.scratch/produit-rh/` et le schéma
 Excalidraw (deux couloirs : Dark Kitchen / Restaurant).
 
 **Un client = une copie de ce dépôt**, avec sa config dans `config/`. Rien n'est
-mutualisé entre clients ; cette copie-ci porte les valeurs Wingstop.
+mutualisé entre clients.
+
+Le `config/` versionné ici est une **fixture de démonstration**, pas un
+déploiement : son secret et son mot de passe sont publics et le sont
+volontairement. Un déploiement réel se pose hors du dépôt avec `installer.py`
+(voir plus bas), qui génère son propre secret et son propre mot de passe RH.
 
 ```bash
 pip install -r requirements.txt
@@ -14,7 +19,7 @@ python tests/test_parcours.py     # les deux couloirs, de bout en bout
 python tests/test_signature.py    # e-sign Yousign contre un transport factice
 python tests/test_clients.py      # 2 clients factices, chacun dans son instance
 python tests/test_produit.py      # garde-fou de balisage, fiche, config versionnée
-python app.py                # http://localhost:5000  (rh / wingstop-rh)
+DEBUG=1 python app.py        # http://localhost:5000  (rh / fixture)
 ```
 
 ## Installer chez un nouveau client
@@ -43,6 +48,87 @@ par défaut ouvre des pièces d'identité — c'est une frontière de confiance.
 avançant séparément des instances déjà installées, une config d'une autre
 version majeure refuse de démarrer en disant quoi faire — l'app ne réécrit
 **jamais** la config du client dans son dos.
+
+### Derrière un reverse proxy — `PROXIES`
+
+Les deux rate-limits (formulaire public et `/login`) comptent par IP. Derrière un
+proxy, `request.remote_addr` vaut l'IP du proxy pour tout le monde : il faut lire
+`X-Forwarded-For`. Mais cet en-tête n'est digne de confiance **que** s'il est posé
+par un proxy à nous — exposé en direct, c'est le client qui l'écrit, et le faire
+tourner contourne entièrement les deux plafonds.
+
+`PROXIES` déclare donc le nombre **réel** de proxies devant l'app :
+
+| Valeur | Quand |
+|---|---|
+| `0` (défaut) | `python app.py` exposé en direct — `X-Forwarded-For` est ignoré |
+| `1` | derrière Caddy / nginx |
+| `2` | un CDN ajouté devant Caddy |
+
+```bash
+PROXIES=1 CONFIG_DIR=/srv/acme/config DONNEES=/srv/acme/data python app.py
+```
+
+Trop haut : `remote_addr` redevient forgeable par en-tête client. Trop bas : tous
+les visiteurs partagent un compteur unique et la Nᵉ requête légitime est jetée en
+silence. `tests/test_login.py` couvre les deux réglages.
+
+**Le cookie de session est `Secure` dès que `DEBUG` n'est pas posé** : un navigateur
+refusera de le renvoyer en clair. Servir la prod en `http://` sans terminaison TLS
+donne donc un login qui « ne fait rien » — sans message d'erreur, la page revient
+simplement déconnectée. C'est voulu (l'app sert des pièces d'identité), et c'est
+Caddy qui fournit le TLS. En local, `DEBUG=1` lève la contrainte.
+
+### Faire tourner, mettre à jour, sauvegarder
+
+Un client = un serveur. Trois choses à savoir, et elles découlent toutes de la
+même règle : **le code est le produit, l'instance est ailleurs.**
+
+**Lancer.** `python app.py` démarre *waitress*, un serveur WSGI de production —
+pas le serveur de développement. Waitress est mono-process multi-thread par
+construction, et c'est voulu : `store._verrou` n'exclut qu'à l'intérieur d'un
+process, donc deux process écriraient le même `dossier.json` en concurrence et
+perdraient des entrées de journal. Ne pas servir cette app depuis un serveur
+multi-process sans avoir d'abord posé un verrou fichier (voir `store._verrou`).
+
+`DEBUG=1 python app.py` bascule sur le serveur Werkzeug + son debugger : local
+uniquement, l'app sert des pièces d'identité.
+
+L'écoute est sur `127.0.0.1` par défaut : l'app se sert **derrière** un reverse
+proxy qui porte le TLS, elle ne s'expose pas elle-même. `HOST=0.0.0.0` seulement
+quand le proxy est ailleurs (autre conteneur, autre machine) — jamais pour ouvrir
+sur l'extérieur en clair.
+
+**Mettre à jour.** Rien à migrer, parce que rien de ce qui appartient au client
+ne vit dans le dépôt :
+
+| Dossier | Qui le possède | À la mise à jour |
+|---|---|---|
+| le code (`*.py`, `templates/`) | le produit | **remplacé** |
+| `$CONFIG_DIR` (défaut `config/`) | le client | **jamais touché** — l'app n'écrit jamais sa config |
+| `$DONNEES` (défaut `data/`) | le client | **jamais touché** |
+
+Donc : remplacer le code, relancer. Au démarrage, `config.verifier()` refuse de
+servir si la nouvelle version réclame quelque chose que la config n'a pas — un
+placeholder sans source, un rôle manquant, un établissement absent — et dit quoi
+corriger, plutôt que de démarrer à moitié. Si le **format** de config a changé de
+version majeure, `config_version` fait refuser le démarrage avec la marche à
+suivre : l'app ne réécrit jamais la config du client dans son dos.
+
+Une config peut aussi être rechargée sans redémarrer, depuis l'écran de suivi
+(bouton *Recharger la configuration*) : une config invalide ne prend pas et
+l'ancienne reste active.
+
+**Sauvegarder.** `$DONNEES` **est** la base : soumissions, dossiers, pièces
+d'identité, RIB, contrats générés et signés. `$CONFIG_DIR` contient le secret et
+le compte RH. Les deux, rien d'autre :
+
+```bash
+tar czf sauvegarde-$(date +%F).tar.gz /srv/acme/config /srv/acme/data
+```
+
+Restaurer = détarrer et relancer. Pas de dump, pas d'ordre de restauration : il
+n'y a pas de base de données, et c'est précisément ce que ça achète.
 
 ### Les modèles de contrat, c'est le client qui les balise
 
@@ -142,7 +228,7 @@ Les deux voies mènent à `ContratPret`, puis à `ContratSigne`.
 
 1. `http://localhost:5000` — le formulaire, **rendu depuis `config/formulaire.json`**.
    Remplir, joindre 3 fichiers PDF/JPG.
-2. `http://localhost:5000/login` — `rh` / `wingstop-rh`. Le suivi liste soumissions
+2. `http://localhost:5000/login` — `rh` / `fixture`. Le suivi liste soumissions
    et dossiers, triés par date de début, retards en rouge.
 3. Ouvrir la demande → **Rejeter** avec un motif → mail de KO avec **lien signé de
    correction** dans la console : l'ouvrir, corriger. L'ancien lien est mort.

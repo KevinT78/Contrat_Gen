@@ -62,7 +62,7 @@ def main():
     assert anonyme.get("/suivi").status_code == 302, "suivi ouvert sans session"
 
     c = app.test_client()
-    c.post("/login", data={"identifiant": "rh", "mot_de_passe": "wingstop-rh"})
+    c.post("/login", data={"identifiant": "rh", "mot_de_passe": "fixture"})
     ecran(c, "/suivi")
     ecran(c, "/suivi?inactifs=1")
 

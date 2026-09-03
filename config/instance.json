@@ -1,6 +1,6 @@
 {
-  "client": "Wingstop France — RH",
-  "secret": "5df5ae87e2d92366a677b934e7ddf0e0d79ba0183b92cc238dd97fcfd680c3c4",
+  "client": "Démo — fixture de test (ne pas déployer)",
+  "secret": "fixture-de-test-publique-non-secrete-ne-jamais-deployer",
 
   "signature": {"mode": "manuel"},
 
@@ -22,7 +22,7 @@
 
   "utilisateurs": {
     "rh": {
-      "mdp_hash": "scrypt:32768:8:1$VfvbfNr4E4mcl7su$9b9f9ea1141c86e7d184b6e9de6d5c68438d6f9e01ff351a05fd04a801b0df6ce31e6126c58273497334a7489966c7b1632f6eaaf6fc56bb107b91b584332f40",
+      "mdp_hash": "scrypt:32768:8:1$hdAo448gVPVJStF3$4d3e3fec8a67454a70ea7e2e3852800190e17c724893b41f957b50a93c27cc22364f7658ff35029014c95d5eae2a131ce1d37abed6693876dc9c1c093c781137",
       "admin": true
     }
   },

@@ -1,12 +1,16 @@
-"""mails.envoyer — mode console, override MAILS_MODE, et TLS conditionne a l'auth.
+"""mails.envoyer, et la facon dont les routes rapportent un envoi rate.
 
     python tests/test_mails.py
 
-Aucun reseau : smtplib.SMTP est remplace par un faux qui enregistre ses appels.
+Aucun reseau reel : smtplib.SMTP est remplace par un faux qui enregistre ses
+appels, et le dernier bloc remplace mails.envoyer lui-meme.
   - mode console : rien ne part, un .eml est ecrit.
   - MAILS_MODE surclasse le mode du fichier.
   - SMTP sans `utilisateur` (catcher local type MailHog) : pas de STARTTLS ni login.
   - SMTP avec `utilisateur` : STARTTLS verifie + login, non negociable.
+  - un envoi rate est journalise ET dit a l'ecran -- verifie sur la ROUTE
+    /dossier/<uid>/rejeter, parce que tester mails.envoyer seul ne prouve pas
+    que son appelant regarde ce qu'il renvoie.
 """
 import os
 import sys
@@ -127,4 +131,57 @@ ok, raison = mails.envoyer("modele_inexistant", "dest@test.local", nom="X")
 assert not ok and "FileNotFoundError" in raison, (ok, raison)
 print("OK  template absent : (False, raison), aucune exception")
 
-print("\nmails.py OK — console, override, TLS conditionnee a l'auth, 5 templates couverts")
+
+# --- l'APPELANT rapporte l'echec : tester envoyer() seul ne le prouve pas ----
+# Un mail perdu portait le lien de correction du manager, et l'ecran affirmait
+# quand meme « lien de correction envoye ». Le controle porte donc sur la ROUTE,
+# pas sur mails.envoyer : retirer le store.noter d'app._mail doit faire rougir
+# ce bloc.
+import re                                                          # noqa: E402
+import store                                                       # noqa: E402
+import app as module                                               # noqa: E402
+from app import app                                                # noqa: E402
+
+app.config["PROPAGATE_EXCEPTIONS"] = True
+for _z in ("soumissions", "documents"):
+    (config.DONNEES / _z).mkdir(parents=True, exist_ok=True)
+
+_MSG = re.compile(r'<p class="msg[^"]*">([^<]*)</p>')
+
+
+def _rejet_avec_smtp(en_panne):
+    """-> (dernier message affiche, entrees mail_echoue du journal)"""
+    champs = {config.role("email"): "manager@test.local",
+              config.role("nom"): "Martin", config.role("prenom"): "Camille",
+              config.role("etablissement"): config.etablissements()[0][0],
+              config.role("poste"): list(config.instance()["templates"])[0]}
+    uid = store.creer_soumission(champs, {})
+    c = app.test_client()
+    c.post("/login", data={"identifiant": "rh", "mot_de_passe": "fixture"})
+    vrai = module.mails.envoyer
+    module.mails.envoyer = ((lambda *a, **k: (False, "SMTPServerDisconnected: simule"))
+                            if en_panne else (lambda *a, **k: (True, None)))
+    try:
+        r = c.post("/dossier/%s/rejeter" % uid,
+                   data={"motif": config.instance()["motifs_ko"][0],
+                         "commentaire": "piece floue"}, follow_redirects=True)
+    finally:
+        module.mails.envoyer = vrai
+    ecran = [m.strip() for m in _MSG.findall(r.get_data(as_text=True))]
+    journal = [e for e in store.lire(uid)["journal"] if e.get("type") == "mail_echoue"]
+    return (ecran[-1] if ecran else ""), journal
+
+
+_ecran, _journal = _rejet_avec_smtp(en_panne=False)
+assert "envoy" in _ecran, _ecran
+assert not _journal, _journal
+
+_ecran, _journal = _rejet_avec_smtp(en_panne=True)
+assert _journal, "echec d'envoi non journalise : la RH n'a aucune trace"
+assert _journal[0]["modele"] == "rejet", _journal[0]
+assert "SMTPServerDisconnected" in _journal[0]["motif"], _journal[0]
+assert "PAS re" in _ecran, "l'ecran affirme un envoi qui a echoue : %r" % _ecran
+print("OK  echec d'envoi : journalise ET dit a l'ecran (route /rejeter)")
+
+print("\nmails.py OK — console, override, TLS conditionnee a l'auth, 5 templates,")
+print("               echec d'envoi remonte par la route /rejeter")

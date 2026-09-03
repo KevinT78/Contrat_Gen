@@ -224,7 +224,7 @@ def main():
 
     # sans session, toute action RH est fermée
     assert c.get("/suivi").status_code == 302
-    c.post("/login", data={"identifiant": "rh", "mot_de_passe": "wingstop-rh"})
+    c.post("/login", data={"identifiant": "rh", "mot_de_passe": "fixture"})
     assert c.get("/suivi").status_code == 200
 
     dk = couloir_dark_kitchen(c)

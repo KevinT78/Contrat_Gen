@@ -9,12 +9,13 @@ import os
 import time
 import zipfile
 from collections import defaultdict
-from datetime import date
+from datetime import date, timedelta
 from functools import wraps
 from pathlib import Path
 
 from flask import (Flask, abort, flash, redirect, render_template, request,
                    send_file, send_from_directory, session, url_for)
+from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.security import check_password_hash
 
 import config
@@ -41,36 +42,78 @@ def _jours_ouvrables_entre(de, a):
 
 CONTRAT_EXT = {".pdf", ".docx"}          # contrat venu de myrhis / PDF signé
 
-# --- garde-fous formulaire public -----------------------------------------
-# Le seul endpoint non authentifie qui ecrit sur disque. Pas de captcha
-# (le vrai destinataire est un manager, pas un RH spammeur), mais un
-# minimum de garde-fou contre les bots et le flood.
+# --- rate-limit par IP ----------------------------------------------------
+# Deux pots : le formulaire public (seul endpoint non authentifie qui ecrit sur
+# disque) et /login. Pas de captcha (le vrai destinataire du formulaire est un
+# manager, pas un spammeur), mais un minimum de garde-fou contre bots et flood.
 #
-# AVANT DE DEPLOYER DERRIERE UN REVERSE PROXY (nginx/gunicorn) : envelopper
-# l'app avec werkzeug.middleware.proxy_fix.ProxyFix, sinon request.remote_addr
-# vaut l'IP du proxy pour tout le monde -> tous les visiteurs partagent le
-# meme compteur et la Nieme soumission legitime est jetee en silence.
-_POT_PAR_IP = defaultdict(list)          # {ip: [timestamps]}
+# MONO-PROCESS IMPOSE : ces pots -- comme store._verrou -- vivent en memoire.
+# Sous plusieurs process les plafonds seraient divises d'autant, et pire,
+# store._verrou cesserait d'exclure quoi que ce soit (perte d'entrees de
+# journal). C'est pourquoi `python app.py` demarre waitress, mono-process par
+# construction (voir le bas de ce fichier). Attention : `app` reste un objet
+# WSGI importable, donc `gunicorn app:app` ou `waitress-serve --processes=N`
+# cassent l'invariant SANS RIEN SIGNALER -- il est tenu par la facon de
+# lancer, pas par le code. Passer a plusieurs process exige d'abord un verrou
+# fichier dans store et un compteur partage ici.
+# Voir le meme avertissement a store._verrou.
+_POT_PAR_IP = defaultdict(list)          # formulaire public : {ip: [timestamps]}
 _FENETRE = 300                           # 5 minutes
 _PLAFOND = 10                            # max soumissions / fenetre
 
-def _soumission_autorisee(ip):
-    """Rate-limit par IP en memoire. Pas de persistence — un redemarrage
+_POT_LOGIN = defaultdict(list)           # /login : {ip: [timestamps]}
+_FENETRE_LOGIN = 900                     # 15 minutes
+_PLAFOND_LOGIN = 10                      # max tentatives / fenetre
+
+
+def _autorise(pot, cle, fenetre, plafond):
+    """Rate-limit glissant en memoire. Pas de persistence — un redemarrage
     remet le compteur a zero, c'est acceptable."""
     now = time.time()
-    _POT_PAR_IP[ip] = [t for t in _POT_PAR_IP[ip] if now - t < _FENETRE]
-    if len(_POT_PAR_IP[ip]) >= _PLAFOND:
+    pot[cle] = [t for t in pot[cle] if now - t < fenetre]
+    if len(pot[cle]) >= plafond:
         return False
-    _POT_PAR_IP[ip].append(now)
+    pot[cle].append(now)
     return True
+
+
+def _soumission_autorisee(ip):
+    return _autorise(_POT_PAR_IP, ip, _FENETRE, _PLAFOND)
 
 def _pot_rempli():
     """Honeypot : champ invisible que les bots remplissent mais pas les humains."""
     return bool(request.form.get("website"))
 
 app = Flask(__name__)
+# X-Forwarded-For n'est digne de confiance QUE s'il est pose par un proxy a
+# nous. Sans proxy devant, c'est un en-tete fourni par le client : le faire
+# tourner contournerait entierement les deux rate-limits ci-dessus (verifie).
+# PROXIES declare donc le nombre REEL de proxies devant l'app -- 0 par defaut
+# (`python app.py` en direct), 1 derriere Caddy, 2 si un CDN s'ajoute devant.
+# Trop haut = remote_addr forgeable ; trop bas = tous les visiteurs partagent
+# le meme compteur et la Nieme requete legitime est jetee en silence.
+try:
+    _PROXIES = int(os.environ.get("PROXIES", 0))
+except ValueError:
+    raise SystemExit("PROXIES doit etre un entier : 0 en direct, 1 derriere "
+                     "Caddy, 2 avec un CDN devant. Recu : "
+                     + repr(os.environ["PROXIES"]))
+if _PROXIES:
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=_PROXIES, x_proto=_PROXIES)
 app.secret_key = config.instance()["secret"]
 app.config["MAX_CONTENT_LENGTH"] = 40 * 1024 * 1024
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    # SameSite=Lax n'est PAS cosmetique : c'est la seule protection CSRF de
+    # l'app. Toutes les routes mutantes sont des POST derriere @rh, et rien
+    # d'autre ne verifie l'origine — un POST cross-site n'emporte pas le
+    # cookie grace a cette ligne. Ne pas la retirer en croyant nettoyer.
+    SESSION_COOKIE_SAMESITE="Lax",
+    # Defaut sur : le dev local en http passe par `DEBUG=1 python app.py`,
+    # deja l'incantation documentee plus bas.
+    SESSION_COOKIE_SECURE=not os.environ.get("DEBUG"),
+    PERMANENT_SESSION_LIFETIME=timedelta(hours=12),
+)
 
 
 def _nom(champs):
@@ -82,6 +125,20 @@ def _nom(champs):
 
 def _email_demandeur(champs):
     return config.valeur(champs, "email")
+
+
+def _mail(uid, modele, a, **vals):
+    """Envoie, et JOURNALISE l'echec. -> True si parti.
+
+    Un mail perdu ne doit jamais etre silencieux : c'est lui qui porte le lien
+    de correction du manager ou l'avis au cabinet comptable. En mode console
+    l'echec creve les yeux, mais une instance client tourne en SMTP et personne
+    ne regarde sa sortie standard -- la trace doit etre dans le dossier."""
+    ok, raison = mails.envoyer(modele, a, **vals)
+    if not ok:
+        store.noter(uid, type="mail_echoue", par="systeme",
+                    modele=modele, motif=raison)
+    return ok
 
 
 # Libelles et tons d'affichage des etats -- presentation seule, l'etat
@@ -128,8 +185,19 @@ def rh(vue):
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "POST":
+        # Budget consomme a CHAQUE POST, pas seulement aux echecs : ne compter
+        # que les echecs imposerait de separer lecture et ecriture du compteur.
+        # Par IP seulement — avec un compte unique, un compteur par identifiant
+        # serait global, donc un levier de deni de service contre la seule
+        # utilisatrice, pour zero gain defensif.
+        if not _autorise(_POT_LOGIN, request.remote_addr,
+                         _FENETRE_LOGIN, _PLAFOND_LOGIN):
+            flash("Trop de tentatives. Réessayez dans quelques minutes.", "erreur")
+            return render_template("login.html"), 429
         u = config.instance()["utilisateurs"].get(request.form.get("identifiant", ""))
         if u and check_password_hash(u["mdp_hash"], request.form.get("mot_de_passe", "")):
+            # Sans `permanent`, PERMANENT_SESSION_LIFETIME ne fait rien du tout.
+            session.permanent = True
             session["utilisateur"] = request.form["identifiant"]
             return redirect(request.args.get("suite") or url_for("suivi"))
         flash("Identifiant ou mot de passe incorrect.", "erreur")
@@ -208,12 +276,15 @@ def formulaire():
             return render_template("formulaire.html", champs=champs,
                                    erreurs=erreurs, action=url_for("formulaire"))
         uid = store.creer_soumission(champs, request.files)
-        mails.envoyer("nouvelle_soumission", config.instance()["mails"]["rh"],
-                      nom=_nom(champs), id=uid,
-                      lien=url_for("detail", uid=uid, _external=True))
+        ok = _mail(uid, "nouvelle_soumission", config.instance()["mails"]["rh"],
+                   nom=_nom(champs), id=uid,
+                   lien=url_for("detail", uid=uid, _external=True))
         return render_template("message.html", titre="Demande envoyée",
-                               texte="Le service RH a été prévenu. Vous serez "
-                                     "recontacté si une pièce manque.")
+                               texte=("Le service RH a été prévenu. Vous serez "
+                                      "recontacté si une pièce manque." if ok else
+                                      "Votre demande est bien enregistrée, mais "
+                                      "l'avis au service RH n'a pas pu partir : "
+                                      "prévenez-le si vous restez sans réponse."))
     return render_template("formulaire.html", champs={}, erreurs=[],
                            action=url_for("formulaire"))
 
@@ -236,11 +307,16 @@ def corriger(jeton):
             return render_template("formulaire.html", champs=champs, erreurs=erreurs,
                                    ko=ko, action=request.path)
         store.resoumettre(item["id"], champs, request.files)
-        mails.envoyer("nouvelle_soumission", config.instance()["mails"]["rh"],
-                      nom=_nom(champs), id=item["id"],
-                      lien=url_for("detail", uid=item["id"], _external=True))
+        ok = _mail(item["id"], "nouvelle_soumission",
+                   config.instance()["mails"]["rh"], nom=_nom(champs),
+                   id=item["id"],
+                   lien=url_for("detail", uid=item["id"], _external=True))
         return render_template("message.html", titre="Correction envoyée",
-                               texte="Le service RH va réexaminer la demande.")
+                               texte=("Le service RH va réexaminer la demande."
+                                      if ok else
+                                      "Votre correction est bien enregistrée, mais "
+                                      "l'avis au service RH n'a pas pu partir : "
+                                      "prévenez-le si vous restez sans réponse."))
     return render_template("formulaire.html", champs=item["champs"], erreurs=[],
                            ko=ko, action=request.path)
 
@@ -367,10 +443,13 @@ def rejeter(uid):
     item = store.lire(uid)
     lien = url_for("corriger", jeton=store.signer("correction", uid, item["link_epoch"]),
                    _external=True)
-    mails.envoyer("rejet", _email_demandeur(item["champs"]),
-                  motif=motif, commentaire=commentaire, lien=lien,
-                  nom=_nom(item["champs"]))
-    flash("Demande rejetée, lien de correction envoyé.", "ok")
+    ok = _mail(uid, "rejet", _email_demandeur(item["champs"]),
+               motif=motif, commentaire=commentaire, lien=lien,
+               nom=_nom(item["champs"]))
+    flash("Demande rejetée, lien de correction envoyé." if ok
+          else "Demande rejetée, mais le mail n'est pas parti : le manager n'a "
+               "PAS reçu le lien de correction — voir le journal.",
+          "ok" if ok else "erreur")
     return redirect(url_for("detail", uid=uid))
 
 
@@ -519,11 +598,12 @@ def rappel_dpae(uid):
     if not item:
         return redirect(url_for("detail", uid=uid))
     conf = config.instance()["mails"]
-    mails.envoyer("rappel_dpae", conf.get("dpae") or conf["rh"],
-                  nom=_nom(item["champs"]),
-                  debut=config.valeur(item["champs"], "date_debut"),
-                  lien=url_for("detail", uid=uid, _external=True))
-    flash("Rappel DPAE envoyé.", "ok")
+    ok = _mail(uid, "rappel_dpae", conf.get("dpae") or conf["rh"],
+               nom=_nom(item["champs"]),
+               debut=config.valeur(item["champs"], "date_debut"),
+               lien=url_for("detail", uid=uid, _external=True))
+    flash("Rappel DPAE envoyé." if ok
+          else "Rappel DPAE NON envoyé — voir le journal.", "ok" if ok else "erreur")
     return redirect(url_for("detail", uid=uid))
 
 
@@ -552,12 +632,9 @@ def dpae_faite(uid):
 def _avis_comptable(item, epoch):
     lien = url_for("lot", jeton=store.signer("lot_comptable", item["id"], epoch),
                    _external=True)
-    ok, raison = mails.envoyer(
-        "avis_comptable",
-        config.comptable(config.valeur(item["champs"], "etablissement")),
-        nom=_nom(item["champs"]), id=item["id"], lien=lien)
-    if not ok:
-        store.noter(item["id"], type="mail_echoue", par="systeme", motif=raison)
+    ok = _mail(item["id"], "avis_comptable",
+               config.comptable(config.valeur(item["champs"], "etablissement")),
+               nom=_nom(item["champs"]), id=item["id"], lien=lien)
     return ok, lien
 
 
@@ -645,6 +722,24 @@ if __name__ == "__main__":
         raise SystemExit("Configuration incomplète — le serveur ne sert pas. "
                          "Voir ci-dessus ; au besoin : python installer.py \"<Client>\"")
     print(f"{config.instance()['client']} — données : {config.DONNEES}", flush=True)
-    # debug (debugger interactif Werkzeug) OFF par defaut : l'app sert des
-    # pieces d'identite. `DEBUG=1 python app.py` pour le developpement local.
-    app.run(debug=bool(os.environ.get("DEBUG")), port=int(os.environ.get("PORT", 5000)))
+    port = int(os.environ.get("PORT", 5000))
+    if os.environ.get("DEBUG"):
+        # Developpement local seulement : serveur Werkzeug + debugger interactif.
+        # OFF par defaut, l'app sert des pieces d'identite.
+        app.run(debug=True, port=port)
+    else:
+        # Production : waitress. Choisi plutot que gunicorn parce qu'il tourne
+        # aussi sous Windows (gunicorn depend de fcntl, absent la) et surtout
+        # parce qu'il est MONO-PROCESS multi-thread par construction : la
+        # contrainte de store._verrou est alors garantie par le serveur, pas
+        # par un drapeau qu'un fichier de service peut ecraser.
+        from waitress import serve
+        # 127.0.0.1 par defaut, comme app.run() avant lui : l'app se sert
+        # DERRIERE un reverse proxy qui porte le TLS, elle ne s'expose pas
+        # elle-meme. HOST=0.0.0.0 seulement quand le proxy est ailleurs
+        # (autre conteneur, autre machine) -- jamais pour ouvrir sur
+        # l'exterieur en clair : le formulaire est public et l'app sert
+        # des pieces d'identite.
+        hote = os.environ.get("HOST", "127.0.0.1")
+        print(f"waitress sur {hote}:{port} (mono-process, 4 threads)", flush=True)
+        serve(app, host=hote, port=port, threads=4)

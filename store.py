@@ -54,6 +54,18 @@ def maintenant():
 
 
 def _verrou(uid):
+    """Exclusion entre threads d'UN SEUL process.
+
+    Servi depuis un serveur multi-process, ce verrou n'exclut plus rien : deux
+    read-modify-write concurrents sur le meme dossier.json (cf. transition())
+    perdent une entree de journal — de la perte de donnees, pas une lenteur.
+
+    `python app.py` demarre donc waitress, mono-process par construction. Mais
+    `app` reste un objet WSGI importable : `gunicorn app:app` ou un waitress
+    multi-process cassent l'invariant SANS RIEN SIGNALER. Il tient a la facon
+    de lancer, pas au code. Y passer exige d'abord un verrou fichier ici
+    (portalocker ; fcntl n'existe pas sous Windows) et un compteur partage pour
+    les pots de rate-limit d'app.py."""
     with _garde:
         return _verrous.setdefault(uid, threading.Lock())
 
