@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "titre": "Demande d'embauche",
+  "intro": "À remplir par le manager du restaurant. Les pièces du candidat sont jointes ici ; le service RH prend la suite.",
+
+  "champs": [
+    {"id": "etablissement", "libelle": "Établissement", "type": "etablissement", "requis": true},
+    {"id": "email_demandeur", "libelle": "Votre email", "type": "email", "requis": true,
+     "aide": "pour vous répondre si une pièce manque"},
+
+    {"id": "nom_naissance", "libelle": "Nom de naissance", "type": "texte", "requis": true,
+     "placeholder": "NomNaissance"},
+    {"id": "nom_usage", "libelle": "Nom d'usage", "type": "texte",
+     "aide": "si différent", "placeholder": "NomUsage"},
+    {"id": "prenom", "libelle": "Prénom", "type": "texte", "requis": true,
+     "placeholder": "Prenom"},
+    {"id": "date_naissance", "libelle": "Date de naissance", "type": "date", "requis": true,
+     "placeholder": "DateNaissance"},
+    {"id": "lieu_naissance", "libelle": "Lieu de naissance", "type": "texte", "requis": true,
+     "placeholder": "LieuNaissance"},
+    {"id": "nationalite", "libelle": "Nationalité", "type": "texte", "requis": true,
+     "placeholder": "Nationalite"},
+    {"id": "num_secu", "libelle": "Numéro de sécurité sociale", "type": "texte", "requis": true,
+     "placeholder": "NumeroSecu"},
+    {"id": "adresse", "libelle": "Adresse", "type": "texte_long", "requis": true,
+     "placeholder": "Adresse"},
+
+    {"id": "poste", "libelle": "Poste", "type": "choix", "requis": true,
+     "options": ["Équipier polyvalent", "Assistant manager", "Manager"],
+     "placeholder": "Poste"},
+    {"id": "type_contrat", "libelle": "Type de contrat", "type": "choix", "requis": true,
+     "options": ["CDI", "CDD"], "defaut": "CDI", "placeholder": "TypeContrat"},
+    {"id": "date_debut", "libelle": "Date de début", "type": "date", "requis": true,
+     "placeholder": "DateDebut"},
+    {"id": "temps_partiel", "libelle": "Temps partiel", "type": "choix", "requis": true,
+     "options": ["Non", "Oui"], "defaut": "Non"},
+    {"id": "heures_hebdo", "libelle": "Heures par semaine", "type": "nombre", "requis": true,
+     "defaut": "35", "requis_si": ["temps_partiel", "Oui"], "placeholder": "HeuresHebdo"},
+    {"id": "salaire", "libelle": "Salaire mensuel brut (€)", "type": "montant", "requis": true,
+     "placeholder": "SalaireChiffres"},
+
+    {"id": "identite", "libelle": "Pièce d'identité", "type": "piece_jointe",
+     "role": "identite", "requis": true},
+    {"id": "carte_vitale", "libelle": "Attestation de carte vitale", "type": "piece_jointe",
+     "role": "carte-vitale", "requis": true},
+    {"id": "rib", "libelle": "RIB", "type": "piece_jointe", "role": "rib", "requis": true}
+  ]
+}

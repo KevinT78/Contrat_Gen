@@ -19,10 +19,12 @@ import sys
 import tempfile
 from pathlib import Path
 
+from docx import Document
+
 sys.stdout.reconfigure(encoding="utf-8")
 RACINE = Path(__file__).resolve().parent.parent
 CODE = ["app.py", "config.py", "contrat.py", "mails.py", "signature.py",
-        "store.py", "installer.py", "recap.py"]
+        "store.py", "installer.py", "recap.py", "placeholders.py"]
 
 MENTIONS = ["RaisonSociale", "FormeCapital", "RCS", "SiegeSocial", "ConventionCollective"]
 
@@ -75,16 +77,33 @@ CLIENTS = [
 ]
 
 
-def installer_copie(base, client):
-    copie = base / client["slug"]
+def modele_docx(chemin, lignes):
+    """Un .docx de test genere a la volee. Les fixtures ne peuvent pas venir de
+    config/ : c'est l'instance locale, hors du depot depuis que le produit et
+    l'instance sont separes -- un clone frais n'en a pas."""
+    doc = Document()
+    for l in lignes:
+        doc.add_paragraph(l)
+    chemin.parent.mkdir(parents=True, exist_ok=True)
+    doc.save(str(chemin))
+
+
+def poser_code(copie):
+    """Une copie du PRODUIT : le code + le squelette config.exemple/, jamais
+    l'instance d'un autre client."""
     (copie / "templates").mkdir(parents=True)
     for f in CODE:
         shutil.copy2(RACINE / f, copie / f)
     for t in (RACINE / "templates").glob("*.html"):
         shutil.copy2(t, copie / "templates" / t.name)
-    shutil.copytree(RACINE / "config", copie / "config")
+    shutil.copytree(RACINE / "config.exemple", copie / "config.exemple")
 
-    out = subprocess.run([sys.executable, "installer.py", client["nom"]],
+
+def installer_copie(base, client):
+    copie = base / client["slug"]
+    poser_code(copie)
+
+    out = subprocess.run([sys.executable, "installer.py", client["nom"], "."],
                          cwd=copie, capture_output=True, text=True, encoding="utf-8")
     assert out.returncode == 0, out.stderr
     mdp = re.search(r"rh / (\S+)", out.stdout)
@@ -100,22 +119,32 @@ def installer_copie(base, client):
     inst["fiche_salarie"] = "fiche_salarie.docx"
     (copie / "config" / "instance.json").write_text(
         json.dumps(inst, ensure_ascii=False, indent=2), encoding="utf-8")
-    shutil.copy2(RACINE / "config" / "contrats" / "CDI_Equipier.docx",
-                 copie / "config" / "contrats" / "contrat.docx")
-    shutil.copy2(RACINE / "config" / "contrats" / "fiche_salarie.docx",
-                 copie / "config" / "contrats" / "fiche_salarie.docx")
+    modele_docx(copie / "config" / "contrats" / "contrat.docx", [
+        "CONTRAT DE TRAVAIL",
+        "Entre {{RaisonSociale}}, {{FormeCapital}}, {{RCS}},",
+        "dont le siege social est {{SiegeSocial}},",
+        "etablissement {{Etablissement}} — SIRET {{Siret}},",
+        "et {{NomPrenom}}, engage(e) au poste de {{Poste}}.",
+        "Convention collective : {{ConventionCollective}}.",
+    ])
+    modele_docx(copie / "config" / "contrats" / "fiche_salarie.docx", [
+        "FICHE SALARIE — {{NomPrenom}}",
+        "Pieces fournies : {{PiecesFournies}}",
+        "Pieces manquantes : {{PiecesManquantes}}",
+    ])
     return copie
 
 
 def refus_avant_config(base, client):
     """Juste après installer.py, sans societes.json rempli : refus de servir."""
     copie = base / (client["slug"] + "-nu")
-    (copie / "templates").mkdir(parents=True)
-    for f in CODE:
-        shutil.copy2(RACINE / f, copie / f)
-    shutil.copytree(RACINE / "config", copie / "config")
-    subprocess.run([sys.executable, "installer.py", client["nom"]],
+    poser_code(copie)
+    subprocess.run([sys.executable, "installer.py", client["nom"], "."],
                    cwd=copie, capture_output=True, text=True, encoding="utf-8", check=True)
+    assert subprocess.run([sys.executable, "installer.py", client["nom"], "."],
+                          cwd=copie, capture_output=True, text=True,
+                          encoding="utf-8").returncode != 0, \
+        "réinstaller par-dessus une instance existante doit être refusé"
     r = subprocess.run(
         [sys.executable, "-c", "import config,sys; sys.exit(0 if config.verifier() else 1)"],
         cwd=copie, capture_output=True, text=True, encoding="utf-8")

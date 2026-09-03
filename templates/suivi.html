@@ -12,6 +12,11 @@
   </div>
   <a class="bouton discret" href="{{ url_for('suivi', inactifs='0' if voir_inactifs else '1') }}">
     {{ 'Masquer' if voir_inactifs else 'Afficher' }} les closes</a>
+  <form method="post" action="{{ url_for('recharger') }}" style="display:inline">
+    <button class="bouton discret" type="submit"
+            title="Relire config/ après une modification (établissement, salaires, clause)">
+      Recharger la configuration</button>
+  </form>
 </div>
 
 <div class="tableau">

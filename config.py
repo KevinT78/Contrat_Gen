@@ -7,7 +7,7 @@ instance.json et on dépose les .docx.
 """
 import json
 import os
-from functools import lru_cache
+import re
 from pathlib import Path
 
 RACINE = Path(__file__).parent
@@ -17,27 +17,47 @@ DONNEES = Path(os.environ.get("DONNEES", RACINE / "data"))
 SECRET_A_INSTALLER = "REMPLACER-A-L-INSTALLATION"
 MDP_PAR_DEFAUT = "demo"          # l'ancien mot de passe de démo — refusé au démarrage
 
+# Version du FORMAT de config/, pas du produit. Le code est un paquet versionne,
+# config/ vit chez le client : une config ecrite pour un format qu'on ne
+# comprend plus doit refuser de demarrer en disant quoi faire, pas se faire
+# reecrire dans le dos (l'app n'ecrit jamais sa config).
+CONFIG_VERSION = 1
 
-# ponytail: config lue une fois au demarrage (lru_cache) -- editer un .json
-# demande un restart. Un rechargement a chaud quand un ecran de service
-# existera (ticket 11).
+# Cache simple plutot que lru_cache : `recharger()` a besoin de reposer
+# l'ancienne config si la nouvelle est invalide, ce qu'un cache_clear() ne
+# permet pas.
+_CACHE = {}
+
+
 def _lire(nom):
-    return json.loads((CLIENT / nom).read_text(encoding="utf-8"))
+    if nom not in _CACHE:
+        _CACHE[nom] = json.loads((CLIENT / nom).read_text(encoding="utf-8"))
+    return _CACHE[nom]
 
 
-@lru_cache(maxsize=None)
 def instance():
     return _lire("instance.json")
 
 
-@lru_cache(maxsize=None)
 def formulaire():
     return _lire("formulaire.json")
 
 
-@lru_cache(maxsize=None)
 def societes():
     return _lire("societes.json")
+
+
+def recharger():
+    """Relit config/ a chaud, sans redemarrer. Renvoie {} si la nouvelle config
+    est valide (elle est alors active), sinon les manques -- et l'ancienne
+    config reste en place : une instance qui servait continue de servir."""
+    ancien = dict(_CACHE)
+    _CACHE.clear()
+    if manques := verifier():
+        _CACHE.clear()
+        _CACHE.update(ancien)
+        return manques
+    return {}
 
 
 def etablissements():
@@ -123,12 +143,13 @@ def critiques():
     return ph | set(instance().get("critiques", []))
 
 
-@lru_cache(maxsize=None)
 def grille():
     """Grille de remuneration du client (salaire par poste). {} si absente : un
     client peut faire saisir le salaire a la RH plutot que le tirer d'une grille."""
-    f = CLIENT / "grille.json"
-    return json.loads(f.read_text(encoding="utf-8")) if f.exists() else {}
+    if "grille.json" not in _CACHE:
+        f = CLIENT / "grille.json"
+        _CACHE["grille.json"] = json.loads(f.read_text(encoding="utf-8")) if f.exists() else {}
+    return _CACHE["grille.json"]
 
 
 def champs():
@@ -170,11 +191,63 @@ def _templates_actifs():
     return noms
 
 
+# Volontairement laxiste : on veut VOIR « {{ Nom }} » et « {{nom}} » pour les
+# refuser au demarrage. Une regex stricte (\w+) les rend invisibles au garde-fou
+# et les laisse exploser a la generation du contrat d'un vrai salarie -- c'est
+# le mode d'echec a eviter quand c'est le CLIENT qui balise ses .docx.
+JETON = re.compile(r"\{\{([^}\n]{0,60})\}\}")
+
+
+def placeholders_connus():
+    """{placeholder: d'ou vient sa valeur} pour CETTE config. Deux usages :
+    le garde-fou de demarrage, et la fiche remise au client qui balise ses
+    propres .docx (`python placeholders.py`)."""
+    import contrat
+
+    src = {}
+    for c in champs():
+        if c.get("placeholder"):
+            src[c["placeholder"]] = f"Question « {c['libelle']} » du formulaire"
+    for p in contrat.CALCULES:
+        src[p] = "Calculé automatiquement"
+    src["PiecesFournies"] = "Liste des pièces jointes fournies"
+    src["PiecesManquantes"] = "Liste des pièces jointes manquantes"
+    for d in derives():
+        src[d["placeholder"]] = "Règle dérivée (instance.json → derives)"
+    for p in saisie_rh():
+        src[p] = "Saisi par la RH au moment de générer le contrat"
+    if grille():
+        src["SalaireChiffres"] = "Grille de salaires (config/grille.json)"
+        src["SalaireLettres"] = "Grille de salaires, en toutes lettres"
+    for s in societes():
+        for p in s.get("mentions", {}):
+            src[p] = "Mention légale de la société (societes.json)"
+        for e in s["etablissements"]:
+            for p in e.get("mentions", {}):
+                src[p] = "Mention légale de l'établissement (societes.json)"
+    for p in ("Societe", "Siren", "Etablissement", "Siret"):
+        src[p] = "Identité de la société / de l'établissement choisi"
+    return src
+
+
+def _jetons(chemin):
+    """Les {{jetons}} bruts d'un template, tels qu'ecrits -- espaces compris."""
+    if chemin.suffix.lower() == ".docx":
+        from docx import Document
+        import contrat
+        texte = "\n".join(p.text for p in contrat.paragraphes(Document(chemin)))
+    else:
+        texte = chemin.read_text(encoding="utf-8")
+    return set(JETON.findall(texte))
+
+
 def verifier():
     """Garde-fou de demarrage. Renvoie {} si tout va bien, sinon un dict
     {sujet: [raisons]} et l'instance ne sert pas.
 
-    Deux familles de refus :
+    Trois familles de refus :
+      - format de config d'une autre version majeure (le code est un paquet,
+        config/ vit chez le client et les deux avancent separement) ;
       - installation incomplete (secret/mdp par defaut, aucun etablissement) :
         un secret par defaut rend les liens du lot comptable forgeables, un mdp
         par defaut ouvre des pieces d'identite -- frontiere de confiance.
@@ -182,12 +255,16 @@ def verifier():
         d'adaptabilite du produit, verifiee au demarrage et pas a la generation
         du contrat d'un vrai salarie.
     """
-    import re
-    from docx import Document
     from werkzeug.security import check_password_hash
-    import contrat
 
     manques = {}
+
+    v = instance().get("config_version", CONFIG_VERSION)
+    if v != CONFIG_VERSION:
+        manques["config_version"] = [
+            f"config/ est au format {v}, ce code attend le format "
+            f"{CONFIG_VERSION} — mettez à jour config/instance.json "
+            f"(voir CHANGELOG) ou réinstallez la version correspondante"]
 
     if SECRET_A_INSTALLER in instance().get("secret", ""):
         manques["secret"] = [f"encore « {SECRET_A_INSTALLER} » — lancez : "
@@ -199,33 +276,26 @@ def verifier():
     if not etablissements():
         manques["établissements"] = ["aucun établissement dans config/societes.json"]
 
-    sources = {c["placeholder"] for c in champs() if c.get("placeholder")}
-    sources |= set(contrat.CALCULES)
-    sources |= {"PiecesFournies", "PiecesManquantes"}
-    sources |= {d["placeholder"] for d in derives()}
-    sources |= set(saisie_rh())
-    if grille():
-        sources |= {"SalaireChiffres", "SalaireLettres"}
-    for s in societes():
-        sources |= set(s.get("mentions", {}))
-        for e in s["etablissements"]:
-            sources |= set(e.get("mentions", {}))
-    sources |= {"Siret", "Siren", "Etablissement", "Societe"}
+    sources = placeholders_connus()
 
     for nom in _templates_actifs():
         chemin = CLIENT / "contrats" / nom
         if not chemin.exists():
             manques[nom] = ["fichier absent de config/contrats/"]
             continue
-        if chemin.suffix.lower() == ".docx":
-            doc = Document(chemin)
-            vus = {m for p in contrat.paragraphes(doc)
-                   for m in re.findall(r"\{\{(\w+)\}\}", p.text)}
-        else:
-            vus = set(re.findall(r"\{\{(\w+)\}\}",
-                                 chemin.read_text(encoding="utf-8")))
-        if vus - sources:
-            manques[nom] = sorted(vus - sources)
+        raisons = []
+        for j in sorted(_jetons(chemin)):
+            if j in sources:
+                continue
+            # Le client a bien vise une source, mais ne l'a pas ecrite comme il
+            # faut : la substitution est litterale, « {{ Nom }} » ne sera pas
+            # remplace. On le dit, plutot que de lister un jeton « inconnu ».
+            proche = next((s for s in sources if s.casefold() == j.strip().casefold()),
+                          None)
+            raisons.append(f"{{{{{j}}}}} → écrire exactement {{{{{proche}}}}}"
+                           if proche else f"{{{{{j}}}}} — aucune source ne l'alimente")
+        if raisons:
+            manques[nom] = raisons
 
     # Chaque poste du formulaire doit atteindre un modele : « Leavers » sans
     # regle bloque le demarrage, jamais la generation d'un vrai contrat.

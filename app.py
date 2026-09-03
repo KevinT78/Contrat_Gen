@@ -27,8 +27,6 @@ app = Flask(__name__)
 app.secret_key = config.instance()["secret"]
 app.config["MAX_CONTENT_LENGTH"] = 40 * 1024 * 1024
 
-MOTIFS_KO = config.instance()["motifs_ko"]
-
 
 def _nom(champs):
     """Nom affiche du salarie (suivi, mails, journal). Formulaire a champs
@@ -97,6 +95,29 @@ def login():
 def logout():
     session.clear()
     return redirect(url_for("login"))
+
+
+@app.post("/recharger")
+@rh
+def recharger():
+    """Relit config/ sans redemarrer : nouvel etablissement, salaire revalorise,
+    clause modifiee. C'est l'editeur qui edite les .json (pas d'ecran d'admin),
+    mais plus besoin d'un acces au serveur du client pour redemarrer.
+
+    Une config invalide ne prend pas : l'ancienne reste active et on dit ce qui
+    cloche -- une instance qui servait continue de servir."""
+    if manques := config.recharger():
+        for sujet, quoi in manques.items():
+            flash(f"{sujet} : {', '.join(quoi)}", "erreur")
+        flash("Configuration NON rechargée — la précédente reste active.", "erreur")
+        return redirect(url_for("suivi"))
+    # Le secret sert AUSSI a signer les cookies de session, et celui-la est fige
+    # a l'import : sans cette ligne, un secret change laisserait store.signer sur
+    # le nouveau et les cookies sur l'ancien -- liens du lot casses en silence.
+    # Un secret reellement change deconnecte tout le monde, c'est voulu.
+    app.secret_key = config.instance()["secret"]
+    flash("Configuration rechargée.", "ok")
+    return redirect(url_for("suivi"))
 
 
 # --- formulaire public ---------------------------------------------------
@@ -196,7 +217,8 @@ def detail(uid):
     return render_template("dossier.html", item=item, etat=store.etat(item),
                            pieces=store.fichiers(item, "pieces"),
                            produits=store.fichiers(item, "contrat"),
-                           manquantes=store.manquantes(item), motifs=MOTIFS_KO,
+                           manquantes=store.manquantes(item),
+                           motifs=config.instance()["motifs_ko"],
                            champ=config.champ, saisie_rh=config.saisie_rh(),
                            nom_affiche=_nom(item["champs"]),
                            mode_contrat=config.mode_contrat(item["champs"]["etablissement"]),
@@ -267,7 +289,7 @@ def valider(uid):
 def rejeter(uid):
     motif = request.form.get("motif")
     commentaire = (request.form.get("commentaire") or "").strip()
-    if motif not in MOTIFS_KO or not commentaire:
+    if motif not in config.instance()["motifs_ko"] or not commentaire:
         flash("Un motif et un commentaire sont obligatoires pour un KO.", "erreur")
         return redirect(url_for("detail", uid=uid))
     store.rejeter(uid, motif, commentaire, session["utilisateur"])

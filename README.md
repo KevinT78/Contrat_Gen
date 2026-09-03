@@ -12,27 +12,61 @@ mutualisé entre clients ; cette copie-ci porte les valeurs Wingstop.
 pip install -r requirements.txt
 python tests/test_parcours.py     # les deux couloirs, de bout en bout
 python tests/test_signature.py    # e-sign Yousign contre un transport factice
-python tests/test_clients.py      # 2 clients factices, chacun dans sa copie du repo
+python tests/test_clients.py      # 2 clients factices, chacun dans son instance
+python tests/test_produit.py      # garde-fou de balisage, fiche, config versionnée
 python app.py                # http://localhost:5000  (rh / wingstop-rh)
 ```
 
 ## Installer chez un nouveau client
 
+Le **code est le produit**, l'**instance** est un dossier à part qui ne contient
+que ce qui appartient au client. `config.exemple/` est le squelette versionné :
+une instance ne se copie jamais depuis celle d'un autre.
+
 ```bash
-cp -r Contrat_Gen/ AcmeRH/ && cd AcmeRH/
-python installer.py "ACME Restauration"   # secret HMAC + mot de passe RH générés
+python installer.py "ACME Restauration" /srv/acme
+CONFIG_DIR=/srv/acme/config DONNEES=/srv/acme/data python app.py
 ```
 
-`installer.py` agit **sur place** : il génère les secrets, vide `config/societes.json`,
-les `templates` et `fiche_salarie` de `config/instance.json`, et supprime les
-`.docx` de `config/contrats/`. Ne restent que le squelette commun (formulaire,
-motifs de KO, textes des mails) et le compte RH.
+`installer.py` **copie** `config.exemple/` vers `/srv/acme/config/` et génère le
+secret HMAC et le mot de passe RH. Aucune valeur d'un autre client ne peut
+survivre par oubli — c'est structurel, pas une liste de champs à nettoyer. Une
+réinstallation par-dessus un `config/` existant est **refusée**.
 
 Il faut ensuite remplir `config/` puis démarrer. **Le démarrage refuse de servir**
 tant que l'installation est incomplète : secret encore par défaut, compte RH au
 mot de passe par défaut, ou aucun établissement déclaré (`config.verifier()`).
 Un secret par défaut rend les liens du lot comptable forgeables, un mot de passe
 par défaut ouvre des pièces d'identité — c'est une frontière de confiance.
+
+`config_version` dans `instance.json` fixe le format de la config. Le code
+avançant séparément des instances déjà installées, une config d'une autre
+version majeure refuse de démarrer en disant quoi faire — l'app ne réécrit
+**jamais** la config du client dans son dos.
+
+### Les modèles de contrat, c'est le client qui les balise
+
+Le client renvoie ses `.docx` avec les `{{Placeholders}}` **déjà en place**. La
+liste des jetons valides dépend de sa config, donc elle se génère :
+
+```bash
+CONFIG_DIR=/srv/acme/config python placeholders.py   # -> config/PLACEHOLDERS.md
+```
+
+C'est le document à lui envoyer, et à régénérer après toute modification de sa
+config. `config.verifier()` refuse au **démarrage** un jeton mal écrit —
+`{{ Nom }}`, `{{nom}}` — et dit lequel écrire à la place. La faute de frappe se
+paie à la mise en service, jamais à la génération du contrat d'un vrai salarié.
+
+La **relecture juridique** du modèle balisé reste au client : le garde-fou
+vérifie qu'un placeholder est alimenté, pas qu'il est au bon endroit.
+
+### Un changement plus tard
+
+Nouvel établissement, salaire revalorisé, clause modifiée : éditer les `.json`,
+puis **« Recharger la configuration »** depuis l'écran de suivi — pas de
+redémarrage, donc pas besoin d'un accès au serveur du client. Une config
+invalide ne prend pas : l'ancienne reste active et l'écran dit ce qui cloche.
 
 `config/societes.json` (forme attendue) :
 
@@ -115,7 +149,7 @@ Tout vit dans `config/` — aucun `.py` n'y entre jamais :
 
 | Fichier | Ce qu'il porte |
 |---|---|
-| `instance.json` | nom, secret HMAC, signature, fiche salarié, SMTP, destinataires, motifs de KO, comptes, poste → template |
+| `instance.json` | `config_version`, nom, secret HMAC, signature, fiche salarié, SMTP, destinataires, motifs de KO, comptes, poste → template |
 | `formulaire.json` | les champs du formulaire, leur type, le placeholder `.docx` de chacun |
 | `societes.json` | sociétés (SIREN, mentions, cabinet) et établissements (SIRET, couloir `contrat`) |
 | `contrats/*.docx` | modèles de contrat + `fiche_salarie.docx`, à placeholders `{{Nom}}` |
@@ -153,11 +187,13 @@ seulement caché dans le template.
 | `config.py` | lecture de `config/` + garde-fou de démarrage |
 | `mails.py` | rendu des templates + SMTP ou console |
 | `signature.py` | e-sign Yousign, optionnel, désactivé par défaut |
-| `installer.py` | remet `config/` à blanc pour un nouveau client |
+| `installer.py` | crée l'instance d'un nouveau client depuis `config.exemple/` |
+| `placeholders.py` | fiche des `{{Jetons}}` à remettre au client, dérivée de sa config |
 | `recap.py` | récap hebdomadaire des nouveaux salariés (CLI, à mettre en cron) |
 | `tests/test_parcours.py` | les deux couloirs, signature, fiche, récap, refus attendus |
 | `tests/test_signature.py` | `signature.py` contre un transport factice |
-| `tests/test_clients.py` | plusieurs clients factices, une copie du repo chacun, copies étanches |
+| `tests/test_clients.py` | plusieurs clients factices, une instance chacun, étanches |
+| `tests/test_produit.py` | balisage client refusé si mal écrit, fiche dérivée, config versionnée, rechargement à chaud |
 
 ## Ce que le squelette ne fait pas encore
 
@@ -169,4 +205,17 @@ seulement caché dans le template.
 - **Relance automatique** à J+3 sur la validation.
 - **Anti-robot du formulaire public** (Altcha, honeypot, rate-limit).
 - **Scan de démarrage** signalant les écarts disque / `dossier.json`.
-- Config lue une fois au démarrage : éditer un `.json` demande un redémarrage.
+- **Échéance légale de remise d'un CDD** (2 jours ouvrables) : le type de contrat
+  est de la pure config (une règle `templates` peut porter sur n'importe quel
+  champ du formulaire), mais aucun délai n'est suivi — seule la date de début
+  passe en rouge.
+- **Pas d'écran d'administration** : c'est l'éditeur qui édite les `.json` du
+  client. Le rechargement à chaud rend ça tenable sans accès au serveur.
+- **`config/` est encore versionné**, secret et hash du compte RH compris, alors
+  que ce dossier est une instance et pas du produit. Le sortir du dépôt suppose
+  d'abord de rendre `test_parcours`, `test_ecrans` et `test_signature`
+  indépendants de `config/` — ils s'en servent comme jeu de démo. Deux tests
+  (`test_wingstop`, `test_parcours_wingstop`) sont déjà dans ce cas avec
+  `config_wingstop/`, ignoré de longue date : **un clone frais ne peut pas
+  lancer toute la suite**. À traiter par une instance de démo versionnée sous
+  `tests/`.

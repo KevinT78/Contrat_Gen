@@ -1,0 +1,9 @@
+Objet: Nouveaux salariés de la semaine — {periode}
+Bonjour,
+
+{nombre} salarié(s) sont entrés sur la période {periode} :
+
+{liste}
+
+--
+Envoi automatique, ne pas répondre.

@@ -1,0 +1,33 @@
+{
+  "config_version": 1,
+  "client": "À REMPLIR",
+  "secret": "REMPLACER-A-L-INSTALLATION",
+
+  "signature": {"mode": "manuel"},
+
+  "mails": {
+    "mode": "console",
+    "hote": "smtp.example.com",
+    "port": 587,
+    "utilisateur": "",
+    "mot_de_passe": "",
+    "expediteur": "",
+    "rh": [],
+    "superviseur": "",
+    "dpae": null,
+    "recap": null,
+    "comptable_defaut": ""
+  },
+
+  "utilisateurs": {},
+
+  "motifs_ko": [
+    "Pièce illisible ou manquante",
+    "Informations incohérentes",
+    "Établissement ou poste erroné",
+    "Rémunération à revoir",
+    "Autre"
+  ],
+
+  "templates": {}
+}
