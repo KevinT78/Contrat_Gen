@@ -95,6 +95,35 @@ def test_fiche_des_jetons_derivee_de_la_config():
     assert "{{Inconnu}}" not in texte
 
 
+def test_derive_mal_ecrite_refusee_au_demarrage():
+    """Meme argument que pour les jetons : une regle malformee levait un
+    KeyError a la generation d'un vrai contrat, devant la RH.
+
+    Chaque cas est une forme de regle qui CASSAIT ailleurs :
+    _appliquer_derives lit d["placeholder"], d["de"], d["alors"] sans garde, et
+    _teste depaquete `si` en trois. Le dernier cas est le garde-fou teste contre
+    lui-meme : `si: ["nom"]` faisait lever un IndexError DANS verifier()."""
+    def refus(derive, attendu):
+        ecrire({**INSTANCE, "derives": [derive]})
+        manques = config.verifier()
+        sujet = next(s for s in manques if s.startswith("derives"))
+        assert attendu in " ".join(manques[sujet]), (attendu, manques)
+
+    refus({"placeholder": "Nom", "format": "mensualisé", "de": "nom"}, "formateur")
+    refus({"placeholder": "Nom", "format": "lettres"}, "« de »")
+    refus({"format": "lettres", "de": "nom"}, "placeholder")
+    refus({"placeholder": "Nom", "si": ["nom", "égal", "x"], "alors": "a"}, "opérateur")
+    refus({"placeholder": "Nom", "si": ["nom"], "alors": "a"}, "[champ, opérateur")
+    refus({"placeholder": "Nom", "si": "nom == x", "alors": "a"}, "[champ, opérateur")
+    refus({"placeholder": "Nom", "si": ["nom", "==", "x"]}, "ne produit rien")
+
+    ecrire({**INSTANCE, "derives": [
+        {"placeholder": "Nom", "si": ["nom", "==", "x"], "alors": "a"}]})
+    assert config.verifier() == {}, config.verifier()
+    ecrire({**INSTANCE, "derives": [{"placeholder": "Nom", "alors": "toujours"}]})
+    assert config.verifier() == {}, config.verifier()
+
+
 def test_format_de_config_inconnu_refuse():
     ecrire({**INSTANCE, "config_version": 99})
     assert "config_version" in config.verifier()

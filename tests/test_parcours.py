@@ -145,6 +145,16 @@ def couloir_dark_kitchen(c):
         "contrat/fiche-salarie.docx", "pieces/carte-vitale.pdf",
         "pieces/identite.pdf", "pieces/rib.pdf"], z.namelist()
 
+    # Le lot est public (possession du lien = accès) et un contrat peut être un
+    # .html rempli de valeurs venues du formulaire public, sans échappement :
+    # servi inline ce serait du script sur l'origine de l'app.
+    r = anonyme.get(f"{lot}/fichier/contrat/contrat.docx")
+    assert "attachment" in r.headers.get("Content-Disposition", ""), r.headers
+    assert r.headers.get("X-Content-Type-Options") == "nosniff", r.headers
+    apercu = anonyme.get(f"{lot}/fichier/pieces/identite.pdf")
+    assert "attachment" not in apercu.headers.get("Content-Disposition", ""), \
+        "les pièces restent en aperçu"
+
     # renvoi : l'ancien lien meurt
     c.post(f"/dossier/{uid}/renvoyer")
     assert anonyme.get(lot).status_code == 410

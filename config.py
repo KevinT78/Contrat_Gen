@@ -213,7 +213,10 @@ def placeholders_connus():
     src["PiecesFournies"] = "Liste des pièces jointes fournies"
     src["PiecesManquantes"] = "Liste des pièces jointes manquantes"
     for d in derives():
-        src[d["placeholder"]] = "Règle dérivée (instance.json → derives)"
+        # .get : une regle sans placeholder est une config invalide, que
+        # verifier() rapporte -- elle ne doit pas faire planter le rapport.
+        if ph := d.get("placeholder"):
+            src[ph] = "Règle dérivée (instance.json → derives)"
     for p in saisie_rh():
         src[p] = "Saisi par la RH au moment de générer le contrat"
     if grille():
@@ -275,6 +278,35 @@ def verifier():
                                 "dans config/instance.json"]
     if not etablissements():
         manques["établissements"] = ["aucun établissement dans config/societes.json"]
+
+    # Meme argument que pour les jetons : une regle de `derives` malformee levait
+    # un KeyError a la generation du contrat d'un vrai salarie, devant la RH. On
+    # verifie la FORME de la regle avant ses valeurs -- sinon c'est le garde-fou
+    # lui-meme qui plante sur `si: ["nom"]`, et une config invalide fait tomber
+    # le demarrage au lieu d'etre refusee proprement.
+    import contrat
+    for d in derives():
+        ph = d.get("placeholder")
+        raisons = [] if ph else ["règle sans « placeholder » : rien à alimenter"]
+        if "format" in d:
+            if d["format"] not in contrat.FORMATEURS:
+                raisons.append(f"formateur « {d['format']} » inconnu — au choix : "
+                               + ", ".join(sorted(contrat.FORMATEURS)))
+            if not d.get("de"):
+                raisons.append("un « format » exige « de » : le champ à formater")
+        else:
+            if "alors" not in d:
+                raisons.append("ni « format » ni « alors » : la règle ne produit rien")
+            si = d.get("si")
+            if si is None:
+                pass                      # règle inconditionnelle : _teste(None) est vrai
+            elif not isinstance(si, (list, tuple)) or len(si) != 3:
+                raisons.append("« si » attend [champ, opérateur, valeur]")
+            elif si[1] not in contrat.OPERATEURS:
+                raisons.append(f"opérateur « {si[1]} » inconnu — au choix : "
+                               + ", ".join(contrat.OPERATEURS))
+        if raisons:
+            manques[f"derives → {ph or '?'}"] = raisons
 
     sources = placeholders_connus()
 

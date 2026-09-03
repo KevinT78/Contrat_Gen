@@ -191,6 +191,9 @@ def salaire(champs, grille):
     return (ligne["chiffres"], ligne["lettres"]) if ligne else ("", "")
 
 
+OPERATEURS = ("==", "!=", "in", "present", "absent")
+
+
 def _teste(triple, ctx):
     if not triple:
         return True

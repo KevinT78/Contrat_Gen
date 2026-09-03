@@ -226,13 +226,31 @@ def detail(uid):
                            .get("mode") == "yousign")
 
 
+@app.after_request
+def _entetes(reponse):
+    """L'app sert des fichiers deposes par des tiers depuis un formulaire
+    public. `nosniff` empeche le navigateur de requalifier un contenu en HTML
+    et de l'executer sur l'origine de l'app."""
+    reponse.headers.setdefault("X-Content-Type-Options", "nosniff")
+    return reponse
+
+
+# Le bucket `contrat` peut porter un .html (un client dont les modeles sont en
+# HTML, cf. contrat._generer_texte) rempli avec des valeurs venues du formulaire
+# public, SANS echappement. Servi inline, ce serait du script sur l'origine de
+# l'app -- et /lot/<jeton> est accessible sans compte. Un contrat se telecharge,
+# il ne se previsualise pas ; les pieces (pdf/jpg/png) restent en apercu.
+def _servir(dossier, nom, bucket):
+    return send_from_directory(dossier, nom, as_attachment=(bucket == "contrat"))
+
+
 @app.get("/dossier/<uid>/fichier/<bucket>/<nom>")
 @rh
 def fichier(uid, bucket, nom):
     if bucket not in ("pieces", "contrat"):
         abort(404)
     d = store.dossier_de(uid) or abort(404)
-    return send_from_directory(d / bucket, nom)
+    return _servir(d / bucket, nom, bucket)
 
 
 # --- actions RH ----------------------------------------------------------
@@ -542,7 +560,7 @@ def lot_fichier(jeton, bucket, nom):
     item = store.verifier_lien(jeton, "lot_comptable") or abort(410)
     if bucket not in ("pieces", "contrat"):
         abort(404)
-    return send_from_directory(Path(item["_dir"]) / bucket, nom)
+    return _servir(Path(item["_dir"]) / bucket, nom, bucket)
 
 
 if __name__ == "__main__":
