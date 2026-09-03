@@ -6,7 +6,9 @@ puis un POST (ticket 08).
 """
 import io
 import os
+import time
 import zipfile
+from collections import defaultdict
 from datetime import date
 from functools import wraps
 from pathlib import Path
@@ -21,7 +23,50 @@ import mails
 import signature
 import store
 
+
+def _jours_ouvrables_entre(de, a):
+    """Nombre de jours ouvrables (lun-ven, hors jours feries) entre `de` et `a`.
+    Positif si `a` est apres `de`, negatif sinon. Pas de gestion des jours
+    feries — c'est une estimation conservatrice pour un avertissement, pas un
+    calcul juridique."""
+    from datetime import timedelta
+    total = 0
+    signe = 1 if a >= de else -1
+    courant = de
+    while courant != a:
+        courant += timedelta(days=signe)
+        if courant.weekday() < 5:           # lun=0 .. ven=4
+            total += 1
+    return total * signe
+
 CONTRAT_EXT = {".pdf", ".docx"}          # contrat venu de myrhis / PDF signé
+
+# --- garde-fous formulaire public -----------------------------------------
+# Le seul endpoint non authentifie qui ecrit sur disque. Pas de captcha
+# (le vrai destinataire est un manager, pas un RH spammeur), mais un
+# minimum de garde-fou contre les bots et le flood.
+#
+# AVANT DE DEPLOYER DERRIERE UN REVERSE PROXY (nginx/gunicorn) : envelopper
+# l'app avec werkzeug.middleware.proxy_fix.ProxyFix, sinon request.remote_addr
+# vaut l'IP du proxy pour tout le monde -> tous les visiteurs partagent le
+# meme compteur et la Nieme soumission legitime est jetee en silence.
+_POT_PAR_IP = defaultdict(list)          # {ip: [timestamps]}
+_FENETRE = 300                           # 5 minutes
+_PLAFOND = 10                            # max soumissions / fenetre
+
+def _soumission_autorisee(ip):
+    """Rate-limit par IP en memoire. Pas de persistence — un redemarrage
+    remet le compteur a zero, c'est acceptable."""
+    now = time.time()
+    _POT_PAR_IP[ip] = [t for t in _POT_PAR_IP[ip] if now - t < _FENETRE]
+    if len(_POT_PAR_IP[ip]) >= _PLAFOND:
+        return False
+    _POT_PAR_IP[ip].append(now)
+    return True
+
+def _pot_rempli():
+    """Honeypot : champ invisible que les bots remplissent mais pas les humains."""
+    return bool(request.form.get("website"))
 
 app = Flask(__name__)
 app.secret_key = config.instance()["secret"]
@@ -154,6 +199,10 @@ def _saisie(item=None):
 @app.route("/", methods=["GET", "POST"])
 def formulaire():
     if request.method == "POST":
+        if _pot_rempli() or not _soumission_autorisee(request.remote_addr):
+            return render_template("message.html", titre="Demande envoyée",
+                                   texte="Le service RH a été prévenu. Vous serez "
+                                         "recontacté si une pièce manque.")
         champs, erreurs = _saisie()
         if erreurs:
             return render_template("formulaire.html", champs=champs,
@@ -179,6 +228,9 @@ def corriger(jeton):
                                      "demande n'attend plus de correction."), 410
     ko = item["journal"][-1]
     if request.method == "POST":
+        if _pot_rempli() or not _soumission_autorisee(request.remote_addr):
+            return render_template("message.html", titre="Correction envoyée",
+                                   texte="Le service RH va réexaminer la demande.")
         champs, erreurs = _saisie(item)
         if erreurs:
             return render_template("formulaire.html", champs=champs, erreurs=erreurs,
@@ -351,6 +403,22 @@ def generer_contrat(uid):
         flash(str(e), "erreur")
         return redirect(url_for("detail", uid=uid))
     _transition(uid, "ContratPret", modele=modele)
+    # Avertissement legal CDD : 2 jours ouvrables avant la date de debut.
+    type_c = config.valeur(item["champs"], "type_contrat")
+    if type_c == "CDD":
+        from datetime import date as _date
+        try:
+            debut = _date.fromisoformat(config.valeur(item["champs"], "date_debut"))
+            reste = _jours_ouvrables_entre(_date.today(), debut)
+            if reste < 0:
+                flash(f"Attention : la date de début est dépassée de {-reste} "
+                      f"jour(s) ouvrable(s).", "erreur")
+            elif reste <= 2:
+                flash(f"Attention : il reste {reste} jour(s) ouvrable(s) avant "
+                      f"la date de début — la remise au salarié doit intervenir "
+                      f"dans les 2 jours ouvrables.", "erreur")
+        except (ValueError, TypeError):
+            pass
     flash("Contrat généré.", "ok")
     return redirect(url_for("detail", uid=uid))
 
@@ -580,4 +648,4 @@ if __name__ == "__main__":
     print(f"{config.instance()['client']} — données : {config.DONNEES}", flush=True)
     # debug (debugger interactif Werkzeug) OFF par defaut : l'app sert des
     # pieces d'identite. `DEBUG=1 python app.py` pour le developpement local.
-    app.run(debug=bool(os.environ.get("DEBUG")), port=5000)
+    app.run(debug=bool(os.environ.get("DEBUG")), port=int(os.environ.get("PORT", 5000)))

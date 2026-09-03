@@ -131,14 +131,6 @@ def test_valeur_critique_vide_refuse_le_contrat():
         assert "NomPrenom" in str(e), e
 
 
-def test_leavers_mappe_provisoirement():
-    """« Leavers » (décision produit en attente) est mappé provisoirement pour
-    ne pas bloquer le démarrage — cf. instance.json _leavers."""
-    postes = next(c["options"] for c in config.champs() if c["id"] == "poste")
-    assert "Leavers" in postes
-    assert config.modele_pour({"poste": "Leavers"}) == "Equipier_Polyvalent.html"
-
-
 def main():
     test_config_wingstop_servable()
     test_salaire_vient_de_la_grille_par_poste()
@@ -147,7 +139,6 @@ def main():
     test_temps_partiel_bascule_le_template_et_mensualise()
     test_salarie_etranger_ajoute_le_bloc_titre_de_sejour()
     test_valeur_critique_vide_refuse_le_contrat()
-    test_leavers_mappe_provisoirement()
     print(f"Wingstop OK — grille de salaires + 4 templates réels, 0 placeholder orphelin\n{TMP}")
 
 

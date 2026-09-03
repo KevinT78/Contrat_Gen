@@ -13,6 +13,9 @@
   <span class="filet"></span>{{ valeur(item.champs, 'poste') }}
   <span class="filet"></span>{{ valeur(item.champs, 'etablissement') }}
   <span class="filet"></span>début {{ valeur(item.champs, 'date_debut') or '—' }}
+  {% if valeur(item.champs, 'type_contrat') == 'CDD' and valeur(item.champs, 'date_debut') %}
+    <span class="filet"></span><b>CDD</b>
+  {% endif %}
   <span class="filet"></span><code>{{ item.id }}</code></p>
 
 {% if etat not in ('Rejetee', 'Abandonnee') %}

@@ -286,31 +286,19 @@ def _jetons(chemin):
     return set(JETON.findall(texte))
 
 
-def verifier():
-    """Garde-fou de demarrage. Renvoie {} si tout va bien, sinon un dict
-    {sujet: [raisons]} et l'instance ne sert pas.
-
-    Trois familles de refus :
-      - format de config d'une autre version majeure (le code est un paquet,
-        config/ vit chez le client et les deux avancent separement) ;
-      - installation incomplete (secret/mdp par defaut, aucun etablissement) :
-        un secret par defaut rend les liens du lot comptable forgeables, un mdp
-        par defaut ouvre des pieces d'identite -- frontiere de confiance.
-      - un placeholder de .docx actif qu'aucune source n'alimente : la promesse
-        d'adaptabilite du produit, verifiee au demarrage et pas a la generation
-        du contrat d'un vrai salarie.
-    """
-    from werkzeug.security import check_password_hash
-
-    manques = {}
-
+def _verifier_version():
     v = instance().get("config_version", CONFIG_VERSION)
     if v != CONFIG_VERSION:
-        manques["config_version"] = [
+        return {"config_version": [
             f"config/ est au format {v}, ce code attend le format "
             f"{CONFIG_VERSION} — mettez à jour config/instance.json "
-            f"(voir CHANGELOG) ou réinstallez la version correspondante"]
+            f"(voir CHANGELOG) ou réinstallez la version correspondante"]}
+    return {}
 
+
+def _verifier_installation():
+    from werkzeug.security import check_password_hash
+    manques = {}
     if SECRET_A_INSTALLER in instance().get("secret", ""):
         manques["secret"] = [f"encore « {SECRET_A_INSTALLER} » — lancez : "
                              f"python installer.py \"<Client>\""]
@@ -320,13 +308,14 @@ def verifier():
                                 "dans config/instance.json"]
     if not etablissements():
         manques["établissements"] = ["aucun établissement dans config/societes.json"]
+    return manques
 
-    # Meme argument que pour les jetons : une regle de `derives` malformee levait
-    # un KeyError a la generation du contrat d'un vrai salarie, devant la RH. On
-    # verifie la FORME de la regle avant ses valeurs -- sinon c'est le garde-fou
-    # lui-meme qui plante sur `si: ["nom"]`, et une config invalide fait tomber
-    # le demarrage au lieu d'etre refusee proprement.
+
+def _verifier_derives():
+    """Verifie la FORME des regles derives avant leurs valeurs -- sinon c'est le
+    garde-fou lui-meme qui plante sur `si: ["nom"]`."""
     import contrat
+    manques = {}
     for d in derives():
         ph = d.get("placeholder")
         raisons = [] if ph else ["règle sans « placeholder » : rien à alimenter"]
@@ -341,7 +330,7 @@ def verifier():
                 raisons.append("ni « format » ni « alors » : la règle ne produit rien")
             si = d.get("si")
             if si is None:
-                pass                      # règle inconditionnelle : _teste(None) est vrai
+                pass
             elif not isinstance(si, (list, tuple)) or len(si) != 3:
                 raisons.append("« si » attend [champ, opérateur, valeur]")
             elif si[1] not in contrat.OPERATEURS:
@@ -349,41 +338,43 @@ def verifier():
                                + ", ".join(contrat.OPERATEURS))
         if raisons:
             manques[f"derives → {ph or '?'}"] = raisons
+    return manques
 
-    # Les roles sont la promesse « n'importe quelle PME » : le moteur ne lit que
-    # des roles, jamais un id de champ. Un role mal declare doit se payer au
-    # demarrage, pas par un dossier vide ou un mail sans destinataire six mois
-    # plus tard. Meme discipline que `derives` : la FORME avant les valeurs --
-    # un `roles` qui n'est pas un dict ferait exploser la boucle qui le lit.
+
+def _verifier_roles():
+    """Les roles sont la promesse « n'importe quelle PME » : le moteur ne lit que
+    des roles, jamais un id de champ. La FORME avant les valeurs."""
+    manques = {}
     declares = formulaire().get("roles", {})
     if not isinstance(declares, dict):
         manques["roles"] = ["formulaire.json → « roles » attend un objet "
                             "{rôle: id de champ}"]
-    else:
-        ids = {c["id"] for c in champs()}
-        raisons = []
-        for nom, cid in declares.items():
-            if nom not in ROLES:
-                raisons.append(f"rôle « {nom} » inconnu — au choix : "
-                               + ", ".join(sorted(ROLES)))
-            elif not isinstance(cid, str) or not cid:
-                # La FORME avant la valeur : « cid not in ids » leve un
-                # TypeError sur une liste ou un dict, donc le garde-fou tombait
-                # au lieu de refuser la config -- exactement le mode d'echec
-                # qu'il existe pour supprimer.
-                raisons.append(f"rôle « {nom} » : « {cid} » n'est pas un id de champ")
-            elif cid not in ids:
-                raisons.append(f"rôle « {nom} » → « {cid} », qui n'est pas un "
-                               "champ du formulaire")
-        for nom in ROLES_REQUIS:
-            if role(nom) not in ids:
-                raisons.append(f"rôle « {nom} » : aucun champ « {role(nom)} » — "
-                               f"déclarez-le dans formulaire.json → roles")
-        if raisons:
-            manques["roles"] = raisons
+        return manques
+    ids = {c["id"] for c in champs()}
+    raisons = []
+    for nom, cid in declares.items():
+        if nom not in ROLES:
+            raisons.append(f"rôle « {nom} » inconnu — au choix : "
+                           + ", ".join(sorted(ROLES)))
+        elif not isinstance(cid, str) or not cid:
+            raisons.append(f"rôle « {nom} » : « {cid} » n'est pas un id de champ")
+        elif cid not in ids:
+            raisons.append(f"rôle « {nom} » → « {cid} », qui n'est pas un "
+                           "champ du formulaire")
+    for nom in ROLES_REQUIS:
+        if role(nom) not in ids:
+            raisons.append(f"rôle « {nom} » : aucun champ « {role(nom)} » — "
+                           f"déclarez-le dans formulaire.json → roles")
+    if raisons:
+        manques["roles"] = raisons
+    return manques
 
+
+def _verifier_placeholders():
+    """Un placeholder de .docx actif qu'aucune source n'alimente : la promesse
+    d'adaptabilite du produit, verifiee au demarrage."""
+    manques = {}
     sources = placeholders_connus()
-
     for nom in _templates_actifs():
         chemin = CLIENT / "contrats" / nom
         if not chemin.exists():
@@ -393,18 +384,18 @@ def verifier():
         for j in sorted(_jetons(chemin)):
             if j in sources:
                 continue
-            # Le client a bien vise une source, mais ne l'a pas ecrite comme il
-            # faut : la substitution est litterale, « {{ Nom }} » ne sera pas
-            # remplace. On le dit, plutot que de lister un jeton « inconnu ».
             proche = next((s for s in sources if s.casefold() == j.strip().casefold()),
                           None)
             raisons.append(f"{{{{{j}}}}} → écrire exactement {{{{{proche}}}}}"
                            if proche else f"{{{{{j}}}}} — aucune source ne l'alimente")
         if raisons:
             manques[nom] = raisons
+    return manques
 
-    # Chaque poste du formulaire doit atteindre un modele : « Leavers » sans
-    # regle bloque le demarrage, jamais la generation d'un vrai contrat.
+
+def _verifier_postes():
+    """Chaque poste du formulaire doit atteindre un modele."""
+    manques = {}
     t = instance()["templates"]
     if isinstance(t, list):
         vises = set()
@@ -417,4 +408,14 @@ def verifier():
             for opt in c.get("options", []):
                 if not fourre_tout and opt not in vises:
                     manques[f"poste « {opt} »"] = ["aucune règle de template ne le vise"]
+    return manques
+
+
+def verifier():
+    """Garde-fou de demarrage. Renvoie {} si tout va bien, sinon un dict
+    {sujet: [raisons]} et l'instance ne sert pas."""
+    manques = {}
+    for check in (_verifier_version, _verifier_installation, _verifier_derives,
+                  _verifier_roles, _verifier_placeholders, _verifier_postes):
+        manques.update(check())
     return manques

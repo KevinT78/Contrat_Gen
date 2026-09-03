@@ -7,7 +7,7 @@ distinguer (poste × temps partiel × … × établissement) et le contrat est
 réellement généré dans un dossier temporaire. Trois issues par ligne :
 
     Manager  / NON / ACME — Siège    ✓ → …/doctor/01-Manager.txt
-    Leavers  / NON / ACME — Siège    ✗ aucun modèle ne vise ce cas
+    Stagiaire / NON / ACME — Siège   ✗ aucun modèle ne vise ce cas
     Equipier / OUI / ACME — Siège    ⚠ valeurs vides dans … : SalaireChiffres
 
 C'est le livrable de la relecture juridique : le client relit les contrats que
