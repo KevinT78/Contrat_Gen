@@ -445,13 +445,13 @@ def _verifier_grille():
                 manques[f"grille — poste « {opt} »"] = [
                     "aucune ligne de config/grille.json ne le rémunère"]
             elif (autre := pris.get(ligne["poste"])) is not None:
-                sur = (f"la ligne du poste « {autre} »" if autre == ligne["poste"]
-                       else f"la ligne « {ligne['poste']} », déjà celle du poste "
-                            f"« {autre} »")
-                manques[f"grille — poste « {opt} »"] = [
-                    f"aucune ligne ne lui est propre : il serait payé sur {sur} "
-                    f"— ajoutez-lui sa ligne dans config/grille.json (même montant "
-                    f"si le partage est voulu)"]
+                # On ne sait pas lequel des deux est le proprietaire legitime de
+                # la ligne (ca depend de l'ordre des options) : nommer les deux
+                # plutot que d'accuser au hasard celui vu en second.
+                manques[f"grille — postes « {autre} » et « {opt} »"] = [
+                    f"partagent la ligne « {ligne['poste']} » de config/grille.json "
+                    f"— l'un des deux doit avoir sa propre ligne (même montant si "
+                    f"le partage est voulu)"]
             else:
                 pris[ligne["poste"]] = opt
     return manques

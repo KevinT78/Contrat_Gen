@@ -6,6 +6,18 @@ Deux zones (ticket 07) :
 
 Le journal append-only de `<zone>.json` fait foi sur l'etat. La presence d'un
 fichier est une preuve corroborante, jamais decisive.
+
+SEAM DE STOCKAGE DES PIECES -- rien hors de ce module ne construit un chemin de
+piece ni n'ouvre un fichier de bucket. Pour basculer vers S3 / SharePoint /
+autre le jour ou le stockage sera decide, reimplementer ce petit jeu suffit,
+sans toucher app.py ni contrat.py :
+    chemin(uid, bucket, nom=None)   -- localiser  (interne : seul ce module l'appelle)
+    ouvrir(uid, bucket, nom)        -- lire  -> octets | None
+    deposer(uid, bucket, role, f)   -- ecrire un upload (liste blanche + archivage)
+    poser_octets(uid, bucket, nom, o) -- ecrire des octets qu'on produit
+    fichiers(item, bucket)          -- lister
+Le journal (dossier.json) et son deplacement soumissions->documents (valider())
+restent sur disque local quoi qu'il arrive -- c'est l'etat, pas des pieces.
 """
 import hashlib
 import hmac
@@ -85,6 +97,19 @@ def _fichier_json(d):
     return d / ("dossier.json" if d.parent.name == "documents" else "soumission.json")
 
 
+def chemin(uid, bucket, nom=None):
+    """Repertoire d'un bucket de pieces (pieces / contrat / _versions), ou un
+    fichier nomme dedans. None si le dossier est inconnu.
+
+    LE seul endroit hors de ce module ou l'agencement <dossier>/<bucket>/<nom>
+    est construit -- avec deposer() et poser_octets(). Sortir les pieces vers un
+    SharePoint ou un stockage objet se joue ici, sans toucher a app.py."""
+    d = dossier_de(uid)
+    if not d:
+        return None
+    return d / bucket / nom if nom else d / bucket
+
+
 # --- lecture / ecriture --------------------------------------------------
 
 def lire(uid):
@@ -128,13 +153,16 @@ EXTENSIONS = {".pdf", ".jpg", ".jpeg", ".png"}
 TAILLE_MAX = 15 * 1024 * 1024
 
 
-def deposer(d, bucket, role, fichier, extensions=EXTENSIONS):
+def deposer(uid, bucket, role, fichier, extensions=EXTENSIONS):
     """Ecrit une piece sous un nom semantique. Un re-depot archive l'ancien.
 
     `extensions` surcharge la liste blanche par defaut : le contrat venu de
     myrhis est un PDF ou un .docx, mais on n'elargit PAS EXTENSIONS, qui
     protege le formulaire public.
     """
+    d = dossier_de(uid)
+    if not d:
+        raise ValueError(f"dossier inconnu : {uid}")
     ext = os.path.splitext(fichier.filename or "")[1].lower()
     if ext not in extensions:
         raise ValueError(f"format refuse ({ext or 'sans extension'}) : "
@@ -157,9 +185,30 @@ def deposer(d, bucket, role, fichier, extensions=EXTENSIONS):
     return cible.name
 
 
+def poser_octets(uid, bucket, nom, octets):
+    """Ecrit des octets qu'on produit nous-memes (PDF revenu de l'e-signature).
+    Atomique, sans validation d'upload : la source n'est pas le formulaire
+    public. -> le nom de fichier ecrit."""
+    cible = chemin(uid, bucket, nom)
+    if not cible:
+        raise ValueError(f"dossier inconnu : {uid}")
+    cible.parent.mkdir(parents=True, exist_ok=True)
+    tmp = cible.with_suffix(cible.suffix + ".tmp")
+    tmp.write_bytes(octets)
+    os.replace(tmp, cible)
+    return cible.name
+
+
+def ouvrir(uid, bucket, nom):
+    """Le contenu d'une piece (octets), ou None si absente. Point de lecture
+    unique -- cf. le SEAM en tete de module."""
+    p = chemin(uid, bucket, nom)
+    return p.read_bytes() if p and p.is_file() else None
+
+
 def fichiers(item, bucket):
-    d = config.DONNEES / item["_zone"] / item["id"] / bucket
-    return sorted(f.name for f in d.glob("*") if f.is_file()) if d.is_dir() else []
+    d = chemin(item["id"], bucket)
+    return sorted(f.name for f in d.glob("*") if f.is_file()) if d and d.is_dir() else []
 
 
 def manquantes(item):
@@ -182,7 +231,7 @@ def creer_soumission(champs, fichiers_recus):
     for c in config.pieces():
         f = fichiers_recus.get(c["id"])
         if f and f.filename:
-            deposer(d, "pieces", c["role"], f)
+            deposer(uid, "pieces", c["role"], f)
     _ecrire(d, item)
     return uid
 
@@ -196,7 +245,7 @@ def resoumettre(uid, champs, fichiers_recus):
         for c in config.pieces():
             f = fichiers_recus.get(c["id"])
             if f and f.filename:
-                deposer(d, "pieces", c["role"], f)
+                deposer(uid, "pieces", c["role"], f)
         item["journal"].append({"de": etat(item), "vers": "Soumise",
                                 "le": maintenant(), "par": "formulaire",
                                 "motif": "correction"})

@@ -167,9 +167,9 @@ def test_poste_sans_sa_ligne_de_grille_refuse_au_demarrage():
         "le tarif herite ne se produit plus : ce test ne prouve plus rien"
     ecrire(formulaire=TROIS, grille=ampute)
     manques = config.verifier()
-    sujet = "grille — poste « Apprenti couvreur »"
+    sujet = "grille — postes « Couvreur » et « Apprenti couvreur »"
     assert sujet in manques, manques
-    assert "aucune ligne ne lui est propre" in " ".join(manques[sujet]), manques
+    assert "sa propre ligne" in " ".join(manques[sujet]), manques
 
     # 2. Un poste qu'aucune ligne ne vise (aucun mot en commun) : vide, pas faux.
     sans_chef = {"postes": [e for e in GRILLE["postes"] if e["poste"] != "Chef d'équipe"]}

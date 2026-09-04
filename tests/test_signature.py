@@ -52,8 +52,8 @@ signature._TRANSPORT = faux_transport
 docx = Path(tempfile.mkstemp(suffix=".docx")[1])
 docx.write_bytes(b"%PDF-fake-docx-bytes")
 
-pid = signature.envoyer(str(docx), {"prenom": "Cam", "nom": "Martin",
-                                    "email": "cand@example.com"})
+pid = signature.envoyer(docx.read_bytes(), {"prenom": "Cam", "nom": "Martin",
+                                            "email": "cand@example.com"})
 assert pid == "req1", pid
 assert appels == [
     "POST /signature_requests",
@@ -69,7 +69,7 @@ assert signature.recuperer("req1") == b"%PDF-1.4 signed"
 # mode manuel -> refus net
 config.instance()["signature"] = {"mode": "manuel"}
 try:
-    signature.envoyer(str(docx), {"email": "x@example.com"})
+    signature.envoyer(docx.read_bytes(), {"email": "x@example.com"})
     raise AssertionError("envoyer() accepté en mode manuel")
 except RuntimeError:
     pass

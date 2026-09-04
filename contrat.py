@@ -4,6 +4,7 @@
 reellement reemployable, zero reseau) ; les regles de balisage calibrees sur la
 prose Wingstop ne sont PAS reprises -- ici les templates arrivent deja balises.
 """
+import io
 import re
 from datetime import date
 from pathlib import Path
@@ -277,11 +278,15 @@ def valeurs(champs, mentions, extra=None):
     return vals
 
 
-def generer(template, vals, dest):
+def generer(template, vals, dest=None):
     """Remplit les {{Placeholder}}. Refuse d'ecrire s'il en reste un : un contrat
     troue -- ou pire, portant le nom de l'ancien salarie -- ne doit pas sortir.
     Dispatch sur l'extension : .docx via python-docx (runs preserves), tout le
-    reste (.html, .txt, .md...) en substitution texte plate."""
+    reste (.html, .txt, .md...) en substitution texte plate.
+
+    `dest` None -> retourne les octets du document, a charge de l'appelant de
+    les confier a store.poser_octets (le moteur ne connait pas le stockage).
+    `dest` fourni -> ecrit dans ce Path et le retourne (doctor, tests)."""
     if Path(template).suffix.lower() == ".docx":
         return _generer_docx(template, vals, dest)
     return _generer_texte(template, vals, dest)
@@ -316,6 +321,10 @@ def _generer_docx(template, vals, dest):
     if restants:
         raise ValueError(f"placeholders non remplis dans {Path(template).name} : "
                          + ", ".join(restants))
+    if dest is None:
+        buf = io.BytesIO()
+        doc.save(buf)
+        return buf.getvalue()
     dest.parent.mkdir(parents=True, exist_ok=True)
     doc.save(str(dest))
     return dest
@@ -330,6 +339,8 @@ def _generer_texte(template, vals, dest):
     if restants:
         raise ValueError(f"placeholders non remplis dans {Path(template).name} : "
                          + ", ".join(restants))
+    if dest is None:
+        return txt.encode("utf-8")
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(txt, encoding="utf-8")
     return dest

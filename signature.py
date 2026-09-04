@@ -18,7 +18,6 @@ le seul point d'injection : les tests y branchent un transport factice.
 import json
 import urllib.request
 import uuid
-from pathlib import Path
 
 import config
 
@@ -50,25 +49,26 @@ def _appel(methode, chemin, cle, corps=b"", type_contenu="application/json"):
     return brut
 
 
-def _multipart(chemin_docx):
+def _multipart(contrat_octets):
     """Corps multipart minimal : file + nature=signable_document."""
     limite = uuid.uuid4().hex
     tete = (f'--{limite}\r\nContent-Disposition: form-data; name="file"; '
             f'filename="contrat.docx"\r\nContent-Type: application/octet-stream\r\n\r\n')
     milieu = (f'\r\n--{limite}\r\nContent-Disposition: form-data; name="nature"\r\n\r\n'
               f'signable_document\r\n--{limite}--\r\n')
-    corps = tete.encode() + Path(chemin_docx).read_bytes() + milieu.encode()
+    corps = tete.encode() + contrat_octets + milieu.encode()
     return corps, f"multipart/form-data; boundary={limite}"
 
 
-def envoyer(chemin_docx, signataire):
+def envoyer(contrat_octets, signataire):
     """Crée la procédure, joint le contrat, ajoute le signataire, active.
+    `contrat_octets` : le document à signer (bytes, lu via store.ouvrir).
     `signataire` : {"prenom", "nom", "email"}. -> id de procédure."""
     _, cle = _conf()
     pid = json.loads(_appel("POST", "/signature_requests", cle,
                             json.dumps({"name": f"Contrat {signataire.get('nom', '')}".strip(),
                                         "delivery_mode": "email"}).encode()))["id"]
-    corps, tc = _multipart(chemin_docx)
+    corps, tc = _multipart(contrat_octets)
     did = json.loads(_appel("POST", f"/signature_requests/{pid}/documents", cle,
                             corps, tc))["id"]
     _appel("POST", f"/signature_requests/{pid}/signers", cle, json.dumps({

@@ -5,6 +5,7 @@ Aucune action au GET : chaque decision passe par un ecran de confirmation
 puis un POST (ticket 08).
 """
 import io
+import mimetypes
 import os
 import time
 import zipfile
@@ -14,7 +15,7 @@ from functools import wraps
 from pathlib import Path
 
 from flask import (Flask, abort, flash, redirect, render_template, request,
-                   send_file, send_from_directory, session, url_for)
+                   send_file, session, url_for)
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.security import check_password_hash
 
@@ -368,8 +369,12 @@ def _entetes(reponse):
 # public, SANS echappement. Servi inline, ce serait du script sur l'origine de
 # l'app -- et /lot/<jeton> est accessible sans compte. Un contrat se telecharge,
 # il ne se previsualise pas ; les pieces (pdf/jpg/png) restent en apercu.
-def _servir(dossier, nom, bucket):
-    return send_from_directory(dossier, nom, as_attachment=(bucket == "contrat"))
+def _servir(octets, nom, bucket):
+    if octets is None:
+        abort(404)
+    return send_file(io.BytesIO(octets), download_name=nom,
+                     as_attachment=(bucket == "contrat"),
+                     mimetype=mimetypes.guess_type(nom)[0] or "application/octet-stream")
 
 
 @app.get("/dossier/<uid>/fichier/<bucket>/<nom>")
@@ -377,8 +382,7 @@ def _servir(dossier, nom, bucket):
 def fichier(uid, bucket, nom):
     if bucket not in ("pieces", "contrat"):
         abort(404)
-    d = store.dossier_de(uid) or abort(404)
-    return _servir(d / bucket, nom, bucket)
+    return _servir(store.ouvrir(uid, bucket, nom), nom, bucket)
 
 
 # --- actions RH ----------------------------------------------------------
@@ -410,8 +414,8 @@ def _fiche_salarie(item):
         extra={"PiecesFournies": ", ".join(fournies) or "—",
                "PiecesManquantes": ", ".join(manquantes) or "aucune"})
     try:
-        contrat.generer(config.CLIENT / "contrats" / modele, vals,
-                        Path(item["_dir"]) / "contrat" / "fiche-salarie.docx")
+        store.poser_octets(item["id"], "contrat", "fiche-salarie.docx",
+                           contrat.generer(config.CLIENT / "contrats" / modele, vals))
         store.noter(item["id"], type="fiche_salarie", par="systeme")
     except (ValueError, OSError) as e:
         store.noter(item["id"], type="fiche_echouee", par="systeme", motif=str(e))
@@ -474,12 +478,12 @@ def generer_contrat(uid):
     vals = contrat.valeurs(item["champs"],
                            config.mentions(config.valeur(item["champs"], "etablissement")),
                            extra=extra)
-    dest = Path(item["_dir"]) / "contrat" / ("contrat" + Path(modele).suffix.lower())
     try:
-        contrat.generer(config.CLIENT / "contrats" / modele, vals, dest)
+        octets = contrat.generer(config.CLIENT / "contrats" / modele, vals)
     except ValueError as e:
         flash(str(e), "erreur")
         return redirect(url_for("detail", uid=uid))
+    store.poser_octets(uid, "contrat", "contrat" + Path(modele).suffix.lower(), octets)
     _transition(uid, "ContratPret", modele=modele)
     # Avertissement legal CDD : 2 jours ouvrables avant la date de debut.
     type_c = config.valeur(item["champs"], "type_contrat")
@@ -507,7 +511,6 @@ def contrat_depose(uid):
     """Couloir Restaurant : le contrat est fait à la main sur myrhis, la RH
     dépose le PDF/.docx ici."""
     item = store.lire(uid) or abort(404)
-    d = store.dossier_de(uid) or abort(404)
     if config.mode_contrat(config.valeur(item["champs"], "etablissement")) != "depose":
         flash("Cet établissement génère son contrat : utilisez « Générer ».", "erreur")
         return redirect(url_for("detail", uid=uid))
@@ -516,7 +519,7 @@ def contrat_depose(uid):
         flash("Le fichier du contrat est obligatoire.", "erreur")
         return redirect(url_for("detail", uid=uid))
     try:
-        store.deposer(d, "contrat", "contrat", f, extensions=CONTRAT_EXT)
+        store.deposer(uid, "contrat", "contrat", f, extensions=CONTRAT_EXT)
     except ValueError as e:
         flash(str(e), "erreur")
         return redirect(url_for("detail", uid=uid))
@@ -529,13 +532,13 @@ def contrat_depose(uid):
 @rh
 def contrat_signe(uid):
     """Signature manuelle : la RH dépose le contrat signé hors app."""
-    d = store.dossier_de(uid) or abort(404)
+    store.lire(uid) or abort(404)
     f = request.files.get("signe")
     if not (f and f.filename):
         flash("Le contrat signé est obligatoire.", "erreur")
         return redirect(url_for("detail", uid=uid))
     try:
-        store.deposer(d, "contrat", "contrat-signe", f, extensions=CONTRAT_EXT)
+        store.deposer(uid, "contrat", "contrat-signe", f, extensions=CONTRAT_EXT)
     except ValueError as e:
         flash(str(e), "erreur")
         return redirect(url_for("detail", uid=uid))
@@ -550,13 +553,14 @@ def signature_envoyer(uid):
     item = store.lire(uid) or abort(404)
     contrats = store.fichiers(item, "contrat")
     src = next((c for c in contrats if c.startswith("contrat.")), None)
-    if not src:
+    octets = store.ouvrir(item["id"], "contrat", src) if src else None
+    if octets is None:
         flash("Aucun contrat à envoyer.", "erreur")
         return redirect(url_for("detail", uid=uid))
     c = item["champs"]
     try:
         pid = signature.envoyer(
-            Path(item["_dir"]) / "contrat" / src,
+            octets,
             {"prenom": config.valeur(c, "prenom"),
              "nom": _nom(c) or "",
              "email": _email_demandeur(c)})
@@ -585,7 +589,7 @@ def signature_verifier(uid):
     if not pdf:
         flash("La signature n'est pas encore terminée.", "ok")
         return redirect(url_for("detail", uid=uid))
-    (Path(item["_dir"]) / "contrat" / "contrat-signe.pdf").write_bytes(pdf)
+    store.poser_octets(item["id"], "contrat", "contrat-signe.pdf", pdf)
     _transition(uid, "ContratSigne", procedure=pid)
     flash("Contrat signé récupéré.", "ok")
     return redirect(url_for("detail", uid=uid))
@@ -611,7 +615,6 @@ def rappel_dpae(uid):
 @rh
 def dpae_faite(uid):
     item = store.lire(uid) or abort(404)
-    d = Path(item["_dir"])
     if "DpaeFaite" not in store.TRANSITIONS.get(store.etat(item), set()):
         flash("La DPAE ne peut être déclarée qu'une fois le contrat signé.", "erreur")
         return redirect(url_for("detail", uid=uid))
@@ -620,7 +623,7 @@ def dpae_faite(uid):
         flash("L'accusé DPAE est obligatoire pour déclarer la DPAE faite.", "erreur")
         return redirect(url_for("detail", uid=uid))
     try:
-        store.deposer(d, "contrat", "accuse-dpae", accuse)
+        store.deposer(uid, "contrat", "accuse-dpae", accuse)
     except ValueError as e:
         flash(str(e), "erreur")
         return redirect(url_for("detail", uid=uid))
@@ -692,11 +695,16 @@ def lot(jeton):
 def lot_zip(jeton):
     item = store.verifier_lien(jeton, "lot_comptable") or abort(410)
     store.noter(item["id"], type="acces_lot", par=None, ip=request.remote_addr)
+    # Le zip entier est assemble en RAM (tampon) avant l'envoi -- c'etait deja
+    # le cas quand on streamait depuis le disque. z.writestr ajoute au pic, le
+    # temps d'une iteration, un fichier decompresse (<= store.TAILLE_MAX, 15 Mo).
+    # simplification volontaire : suffisant a 1-2 utilisateurs et lien par
+    # dossier ; passer a un flux (store + z.open) si le lot grossit.
     tampon = io.BytesIO()
     with zipfile.ZipFile(tampon, "w", zipfile.ZIP_DEFLATED) as z:
         for bucket in ("pieces", "contrat"):        # jamais _versions
             for nom in store.fichiers(item, bucket):
-                z.write(Path(item["_dir"]) / bucket / nom, f"{bucket}/{nom}")
+                z.writestr(f"{bucket}/{nom}", store.ouvrir(item["id"], bucket, nom))
     tampon.seek(0)
     return send_file(tampon, mimetype="application/zip", as_attachment=True,
                      download_name=f"lot-{item['id']}.zip")
@@ -707,7 +715,7 @@ def lot_fichier(jeton, bucket, nom):
     item = store.verifier_lien(jeton, "lot_comptable") or abort(410)
     if bucket not in ("pieces", "contrat"):
         abort(404)
-    return _servir(Path(item["_dir"]) / bucket, nom, bucket)
+    return _servir(store.ouvrir(item["id"], bucket, nom), nom, bucket)
 
 
 if __name__ == "__main__":
