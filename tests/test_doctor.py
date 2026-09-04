@@ -41,8 +41,7 @@ INSTANCE = {
     "mails": {"mode": "console", "hote": "", "port": 587, "utilisateur": "",
               "mot_de_passe": "", "expediteur": "", "rh": [],
               "dpae": None, "recap": None, "comptable_defaut": "c@acme.example"},
-    "utilisateurs": {"rh": {"mdp_hash": generate_password_hash("pas-demo"),
-                            "admin": True}},
+    "utilisateurs": {"rh": {"mdp_hash": generate_password_hash("pas-demo")}},
     "motifs_ko": ["Autre"],
     "templates": {"Manager": "contrat.txt"},
 }
@@ -89,11 +88,15 @@ def test_chaque_cas_produit_un_contrat_relisible():
     ecrire({"templates": {"Manager": "contrat.txt", "Leavers": "contrat.txt"}})
     lignes = doctor.examiner()
 
+    from docx import Document
+    import contrat as moteur
+
     ok = [l for l in lignes if l["statut"] == "ok"]
     assert len(ok) == 2, [l["libelle"] for l in lignes]      # 2 postes × 1 étab généré
     for l in ok:
         assert Path(l["fichier"]).exists(), l
-        assert "ACME SAS" in Path(l["fichier"]).read_text(encoding="utf-8")
+        texte = "\n".join(p.text for p in moteur.paragraphes(Document(l["fichier"])))
+        assert "ACME SAS" in texte
 
 
 def test_etablissement_en_contrat_depose_ignore_pas_en_echec():

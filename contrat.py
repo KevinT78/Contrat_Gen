@@ -1,4 +1,8 @@
-"""Moteur de contrats : remplit les {{Placeholder}} d'un template .docx.
+"""Moteur de contrats : remplit les {{Placeholder}} d'un template.
+
+Le template peut etre un .docx ou un .html ; le contrat PRODUIT est toujours un
+.docx (un .html rempli est rendu en Word via htmldocx). Le circuit RH, la
+remise au comptable et la signature ne manipulent donc qu'un seul format.
 
 `paragraphes` et `remplacer` sont repris de wingstop_/contrat.py (le seul bloc
 reellement reemployable, zero reseau) ; les regles de balisage calibrees sur la
@@ -10,6 +14,7 @@ from datetime import date
 from pathlib import Path
 
 from docx import Document
+from htmldocx import HtmlToDocx
 from num2words import num2words
 
 MOIS_FR = ["janvier", "février", "mars", "avril", "mai", "juin", "juillet",
@@ -281,15 +286,44 @@ def valeurs(champs, mentions, extra=None):
 def generer(template, vals, dest=None):
     """Remplit les {{Placeholder}}. Refuse d'ecrire s'il en reste un : un contrat
     troue -- ou pire, portant le nom de l'ancien salarie -- ne doit pas sortir.
-    Dispatch sur l'extension : .docx via python-docx (runs preserves), tout le
-    reste (.html, .txt, .md...) en substitution texte plate.
+    Le produit est TOUJOURS un .docx : template .docx via python-docx (runs
+    preserves), template .html (ou .txt/.md) en substitution texte plate puis
+    rendu Word via htmldocx.
 
     `dest` None -> retourne les octets du document, a charge de l'appelant de
     les confier a store.poser_octets (le moteur ne connait pas le stockage).
     `dest` fourni -> ecrit dans ce Path et le retourne (doctor, tests)."""
     if Path(template).suffix.lower() == ".docx":
         return _generer_docx(template, vals, dest)
-    return _generer_texte(template, vals, dest)
+    return _texte_vers_docx(remplir(template, vals), dest)
+
+
+def remplir(template, vals):
+    """Template texte (.html/.txt/.md) -> son contenu, {{jetons}} substitues.
+    Leve si une valeur critique est vide ou si un {{jeton}} reste orphelin.
+    Point d'entree du rendu (generer) et des tests qui asserten la prose."""
+    txt = Path(template).read_text(encoding="utf-8")
+    _verifier_critiques(Path(template).name, txt, vals)
+    for cle, val in vals.items():
+        txt = txt.replace("{{" + cle + "}}", str(val))
+    restants = _restants(txt)
+    if restants:
+        raise ValueError(f"placeholders non remplis dans {Path(template).name} : "
+                         + ", ".join(restants))
+    return txt
+
+
+def _texte_vers_docx(html, dest):
+    """HTML rempli -> .docx via htmldocx. `dest` None -> octets ; sinon ecrit."""
+    doc = Document()
+    HtmlToDocx().add_html_to_document(html, doc)
+    if dest is None:
+        buf = io.BytesIO()
+        doc.save(buf)
+        return buf.getvalue()
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    doc.save(str(dest))
+    return dest
 
 
 def _restants(texte):
@@ -327,20 +361,4 @@ def _generer_docx(template, vals, dest):
         return buf.getvalue()
     dest.parent.mkdir(parents=True, exist_ok=True)
     doc.save(str(dest))
-    return dest
-
-
-def _generer_texte(template, vals, dest):
-    txt = Path(template).read_text(encoding="utf-8")
-    _verifier_critiques(Path(template).name, txt, vals)
-    for cle, val in vals.items():
-        txt = txt.replace("{{" + cle + "}}", str(val))
-    restants = _restants(txt)
-    if restants:
-        raise ValueError(f"placeholders non remplis dans {Path(template).name} : "
-                         + ", ".join(restants))
-    if dest is None:
-        return txt.encode("utf-8")
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_text(txt, encoding="utf-8")
     return dest

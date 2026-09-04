@@ -4,7 +4,7 @@
 <h1>Dossier {{ nom_de(item.champs) or item.id }}</h1>
 <p class="sous">{{ valeur(item.champs, 'etablissement') }}
   <span class="filet"></span>{{ valeur(item.champs, 'poste') }}
-  <span class="filet"></span>début {{ valeur(item.champs, 'date_debut') }}
+  <span class="filet"></span>début {{ date_fr(valeur(item.champs, 'date_debut')) }}
   <span class="filet"></span><code>{{ item.id }}</code></p>
 
 <div class="carte">

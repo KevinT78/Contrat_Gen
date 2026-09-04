@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block titre %}Suivi des demandes{% endblock %}
+{% block classe_main %}large{% endblock %}
 {% block corps %}
 <div class="entete">
   <div>
@@ -10,20 +11,22 @@
       <span class="filet"></span>{{ items|length }} affichée{{ 's' if items|length > 1 }}
       <span class="filet"></span>triées par date de début</p>
   </div>
-  <a class="bouton discret" href="{{ url_for('suivi', inactifs='0' if voir_inactifs else '1') }}">
-    {{ 'Masquer' if voir_inactifs else 'Afficher' }} les closes</a>
-  <form method="post" action="{{ url_for('recharger') }}" style="display:inline">
-    <button class="bouton discret" type="submit"
-            title="Relire config/ après une modification (établissement, salaires, clause)">
-      Recharger la configuration</button>
-  </form>
+  <div class="actions">
+    <a class="bouton discret" href="{{ url_for('suivi', inactifs='0' if voir_inactifs else '1') }}">
+      {{ 'Masquer' if voir_inactifs else 'Afficher' }} les closes</a>
+    <form method="post" action="{{ url_for('recharger') }}">
+      <button class="bouton" type="submit"
+              title="Relire config/ après une modification (établissement, salaires, clause)">
+        Recharger la configuration</button>
+    </form>
+  </div>
 </div>
 
 <div class="tableau">
 <table>
   <thead>
     <tr><th>Salarié</th><th>Établissement</th><th>Poste</th><th>Début</th>
-        <th>État</th><th>Pièces</th></tr>
+        <th>État</th><th>Dernière activité</th><th>Pièces manquantes</th></tr>
   </thead>
   <tbody>
   {% for i in items %}
@@ -35,14 +38,17 @@
         {{ nom_de(i.champs) or i.id }}</a></td>
       <td class="secondaire">{{ valeur(i.champs, 'etablissement') }}</td>
       <td class="secondaire">{{ valeur(i.champs, 'poste') }}</td>
-      <td {{ 'class=manque'|safe if retard }}>{{ debut or '—' }}
+      <td {{ 'class=manque'|safe if retard }}>{{ date_fr(debut) or '—' }}
         {{ '· en retard' if retard }}</td>
       <td><span class="badge {{ ton_etat(e) }}">{{ libelle_etat(e) }}</span></td>
+      {% set j = depuis(i.journal[-1].le) %}
+      <td class="{{ 'manque' if j > 7 and e not in inactifs else 'secondaire' }}">
+        {{ "aujourd'hui" if j <= 0 else 'hier' if j == 1 else 'il y a ' ~ j ~ ' j' }}</td>
       <td class="{{ 'manque' if manquantes(i) }}">
-        {{ manquantes(i)|length ~ ' manquante(s)' if manquantes(i) else '—' }}</td>
+        {{ manquantes(i)|length if manquantes(i) else '—' }}</td>
     </tr>
   {% else %}
-    <tr><td colspan="6" class="vide">Aucune demande pour l'instant.</td></tr>
+    <tr><td colspan="7" class="vide">Aucune demande pour l'instant.</td></tr>
   {% endfor %}
   </tbody>
 </table>

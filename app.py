@@ -10,7 +10,7 @@ import os
 import time
 import zipfile
 from collections import defaultdict
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from functools import wraps
 from pathlib import Path
 
@@ -155,12 +155,28 @@ TONS_ETAT = {"Soumise": "attente", "ATraiter": "attente", "Rejetee": "ko",
              "RemisComptable": "", "Abandonnee": ""}
 
 
+def _depuis(iso):
+    """Jours ecoules depuis un horodatage ISO du journal (derniere activite)."""
+    d = datetime.fromisoformat(iso)
+    return (datetime.now(d.tzinfo) - d).days
+
+
+def _date_fr(iso):
+    """AAAA-MM-JJ -> JJ/MM/AAAA. Valeur non datee : rendue telle quelle."""
+    try:
+        return date.fromisoformat(iso).strftime("%d/%m/%Y")
+    except (ValueError, TypeError):
+        return iso or ""
+
+
 @app.context_processor
 def _aides():
     return {"nom_de": _nom,
             # Les ecrans lisaient « item.champs.poste » en dur : chez un client
             # qui renomme ses champs, la colonne sortait VIDE au lieu de crier.
             "valeur": config.valeur,
+            "depuis": _depuis,
+            "date_fr": _date_fr,
             "libelle_etat": lambda e: LIBELLES_ETAT.get(e, e),
             "ton_etat": lambda e: TONS_ETAT.get(e, "")}
 
@@ -195,7 +211,7 @@ def login():
                          _FENETRE_LOGIN, _PLAFOND_LOGIN):
             flash("Trop de tentatives. Réessayez dans quelques minutes.", "erreur")
             return render_template("login.html"), 429
-        u = config.instance()["utilisateurs"].get(request.form.get("identifiant", ""))
+        u = config.comptes().get(request.form.get("identifiant", ""))
         if u and check_password_hash(u["mdp_hash"], request.form.get("mot_de_passe", "")):
             # Sans `permanent`, PERMANENT_SESSION_LIFETIME ne fait rien du tout.
             session.permanent = True
@@ -364,11 +380,10 @@ def _entetes(reponse):
     return reponse
 
 
-# Le bucket `contrat` peut porter un .html (un client dont les modeles sont en
-# HTML, cf. contrat._generer_texte) rempli avec des valeurs venues du formulaire
-# public, SANS echappement. Servi inline, ce serait du script sur l'origine de
-# l'app -- et /lot/<jeton> est accessible sans compte. Un contrat se telecharge,
-# il ne se previsualise pas ; les pieces (pdf/jpg/png) restent en apercu.
+# Le contrat genere est toujours un .docx (cf. contrat.generer), mais il porte
+# des valeurs venues du formulaire public : on ne le sert jamais inline. Un
+# contrat se telecharge, il ne se previsualise pas ; les pieces (pdf/jpg/png)
+# restent en apercu.
 def _servir(octets, nom, bucket):
     if octets is None:
         abort(404)
@@ -483,7 +498,7 @@ def generer_contrat(uid):
     except ValueError as e:
         flash(str(e), "erreur")
         return redirect(url_for("detail", uid=uid))
-    store.poser_octets(uid, "contrat", "contrat" + Path(modele).suffix.lower(), octets)
+    store.poser_octets(uid, "contrat", "contrat.docx", octets)
     _transition(uid, "ContratPret", modele=modele)
     # Avertissement legal CDD : 2 jours ouvrables avant la date de debut.
     type_c = config.valeur(item["champs"], "type_contrat")

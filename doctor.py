@@ -127,7 +127,7 @@ def examiner():
         # Nom de fichier lisible ET sain : le libellé contient des « / » qui
         # feraient des dossiers, et des accents que Word n'aime pas partout.
         court = store.SAIN.sub("-", contrat.sans_accent(libelle))[:40].strip("-")
-        dest = DOSSIER / f"{n:02d}-{court}{Path(modele).suffix}"
+        dest = DOSSIER / f"{n:02d}-{court}.docx"          # generer sort toujours du .docx
         try:
             vals = contrat.valeurs(champs, config.mentions(cle), extra=extra)
             contrat.generer(config.CLIENT / "contrats" / modele, vals, dest)

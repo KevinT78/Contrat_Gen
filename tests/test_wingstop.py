@@ -61,11 +61,13 @@ def champs(**over):
 
 
 def rendre(ch, nom):
+    # Ce test asserte sur la PROSE remplie (substitution, roles, grille, derives,
+    # bascule de template) -- pas sur le .docx final, couvert par
+    # test_parcours_wingstop. On lit donc le HTML rempli via contrat.remplir.
     vals = contrat.valeurs(ch, config.mentions(ch["etablissement"]), extra=RH)
     modele = config.modele_pour(ch)
     assert modele, f"aucun modèle pour poste={ch['poste']} partiel={ch['temps_partiel']}"
-    dest = contrat.generer(CONTRATS / modele, vals, TMP / nom)
-    return modele, dest.read_text(encoding="utf-8")
+    return modele, contrat.remplir(CONTRATS / modele, vals)
 
 
 def test_config_wingstop_servable():
@@ -125,8 +127,8 @@ def test_valeur_critique_vide_refuse_le_contrat():
     vals = contrat.valeurs(champs(nom_prenom=""), config.mentions(champs()["etablissement"]),
                            extra=RH)
     try:
-        contrat.generer(CONTRATS / "Equipier_Polyvalent.html", vals, TMP / "vide.html")
-        assert False, "contrat écrit malgré NomPrenom vide"
+        contrat.remplir(CONTRATS / "Equipier_Polyvalent.html", vals)
+        assert False, "contrat rempli malgré NomPrenom vide"
     except ValueError as e:
         assert "NomPrenom" in str(e), e
 

@@ -40,8 +40,7 @@ INSTANCE = {
     "mails": {"mode": "console", "hote": "", "port": 587, "utilisateur": "",
               "mot_de_passe": "", "expediteur": "", "rh": [],
               "dpae": None, "recap": None, "comptable_defaut": "c@acme.example"},
-    "utilisateurs": {"rh": {"mdp_hash": generate_password_hash("pas-demo"),
-                            "admin": True}},
+    "utilisateurs": {"rh": {"mdp_hash": generate_password_hash("pas-demo")}},
     "motifs_ko": ["Autre"],
     "templates": {"Manager": "contrat.txt"},
 }
@@ -83,6 +82,16 @@ def ecrire(instance=None, contrat="Bonjour {{Nom}}, poste {{Poste}}.",
 def test_config_saine_sert():
     ecrire()
     assert config.verifier() == {}, config.verifier()
+
+
+def test_utilisateurs_malforme_refuse_au_demarrage():
+    """Le bloc `utilisateurs` de instance.json est la seule source des comptes :
+    une forme cassée doit refuser le démarrage, pas planter login()."""
+    for mauvais in ({}, "pas-un-dict", {"rh": "pas-un-dict"},
+                    {"rh": {"role": "rh"}}, {"rh": {"mdp_hash": ""}}):
+        ecrire(instance={**INSTANCE, "utilisateurs": mauvais})
+        # verifier() ne doit pas planter et doit signaler « comptes »
+        assert "comptes" in config.verifier(), f"{mauvais!r} passe le garde-fou"
 
 
 def test_jeton_mal_ecrit_refuse_au_demarrage():

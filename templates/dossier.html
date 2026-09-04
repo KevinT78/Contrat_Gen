@@ -7,12 +7,13 @@
                  'ContratPret': 'Contrat prêt', 'ContratSigne': 'Contrat signé',
                  'DpaeFaite': 'DPAE faite', 'RemisComptable': 'Remis au comptable'} %}
 
+<a class="retour" href="{{ url_for('suivi') }}">← Toutes les demandes</a>
 <h1>{{ nom_affiche or item.id }}</h1>
 <p class="sous">
   <span class="badge {{ ton_etat(etat) }}">{{ libelle_etat(etat) }}</span>
   <span class="filet"></span>{{ valeur(item.champs, 'poste') }}
   <span class="filet"></span>{{ valeur(item.champs, 'etablissement') }}
-  <span class="filet"></span>début {{ valeur(item.champs, 'date_debut') or '—' }}
+  <span class="filet"></span>début {{ date_fr(valeur(item.champs, 'date_debut')) or '—' }}
   {% if valeur(item.champs, 'type_contrat') == 'CDD' and valeur(item.champs, 'date_debut') %}
     <span class="filet"></span><b>CDD</b>
   {% endif %}
@@ -59,7 +60,7 @@
 
   {% elif etat == 'Rejetee' %}
     <p class="titre-carte">Rejetée</p>
-    <p style="margin:0">Rejetée le {{ item.journal[-1].le[:10] }} —
+    <p style="margin:0">Rejetée le {{ date_fr(item.journal[-1].le[:10]) }} —
       {{ item.journal[-1].motif }}.</p>
     <p class="indice">Un lien de correction a été envoyé ; la demande reviendra ici corrigée.</p>
 
@@ -161,7 +162,9 @@
     <h2>Informations saisies</h2>
     <div class="carte"><dl class="infos">
       {% for cle, val in item.champs.items() if val %}
-        <div><dt>{{ champ(cle).libelle }}</dt><dd>{{ val }}</dd></div>
+        {% set c = champ(cle) %}
+        <div><dt>{{ c.libelle }}</dt>
+          <dd>{{ date_fr(val) if c.type == 'date' else val }}</dd></div>
       {% endfor %}
     </dl></div>
   </div>
@@ -188,7 +191,7 @@
 <h2>Journal</h2>
 <div class="carte"><ul class="journal">
   {% for e in item.journal|reverse %}
-    <li><time>{{ e.le[:16]|replace('T', ' ') }}</time>
+    <li><time>{{ date_fr(e.le[:10]) }} {{ e.le[11:16] }}</time>
       {% if e.type %}<b>{{ e.type }}</b>{% else %}{{ libelle_etat(e.de) if e.de else 'création' }}
         → <b>{{ libelle_etat(e.vers) }}</b>{% endif %}
       {% if e.par %} par {{ e.par }}{% endif %}

@@ -55,6 +55,7 @@
   /* --- structure --- */
   main { max-width:1080px; margin:0 auto; padding:48px 40px 120px }
   main.etroit { max-width:460px; padding-top:96px }
+  main.large { max-width:1320px }
   h1 { font:500 34px/1.15 var(--titre); letter-spacing:-.005em; margin:0 0 10px }
   h2 { font-size:11px; text-transform:uppercase; letter-spacing:.14em; font-weight:600;
        color:var(--gris-clair); margin:48px 0 14px; padding-bottom:10px;
@@ -62,6 +63,9 @@
   .sous { color:var(--gris); margin:0 0 36px; display:flex; flex-wrap:wrap;
           align-items:center; gap:14px; font-size:13.5px }
   .sous .filet { width:1px; height:12px; background:var(--bord-fort) }
+  .retour { display:inline-block; margin:0 0 22px; font-size:12px; letter-spacing:.02em;
+            color:var(--gris); text-decoration:none }
+  .retour:hover { color:var(--accent) }
   .carte { background:var(--surface); border:1px solid var(--bord); border-radius:var(--r);
            padding:28px 32px; margin-bottom:20px }
   .carte > :first-child { margin-top:0 } .carte > :last-child { margin-bottom:0 }
@@ -73,7 +77,8 @@
   .entete { display:flex; justify-content:space-between; align-items:flex-start; gap:32px }
 
   /* --- tableau --- */
-  .tableau { background:var(--surface); border:1px solid var(--bord); border-radius:var(--r) }
+  .tableau { background:var(--surface); border:1px solid var(--bord); border-radius:var(--r);
+             overflow-x:auto }
   table { width:100%; border-collapse:collapse; font-size:13.5px }
   th,td { text-align:left; padding:15px 20px; border-bottom:1px solid var(--bord);
           white-space:nowrap }
@@ -212,8 +217,10 @@
 <header>
   <a class="marque" href="/"><i>{{ client[:2]|upper }}</i>{{ client }}</a>
   {% if session.utilisateur %}
-    <nav><a href="{{ url_for('suivi') }}"
-       {{ 'aria-current=page'|safe if request.endpoint in ('suivi', 'detail') }}>Suivi</a></nav>
+    <nav>
+      <a href="{{ url_for('suivi') }}"
+         {{ 'aria-current=page'|safe if request.endpoint in ('suivi', 'detail') }}>Suivi</a>
+    </nav>
     <span class="utilisateur">{{ session.utilisateur }} —
       <a href="{{ url_for('logout') }}">quitter</a></span>
   {% endif %}

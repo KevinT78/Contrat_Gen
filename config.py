@@ -47,6 +47,11 @@ def societes():
     return _lire("societes.json")
 
 
+def comptes():
+    """Les comptes de connexion : le bloc `utilisateurs` de instance.json."""
+    return instance().get("utilisateurs", {})
+
+
 def recharger():
     """Relit config/ a chaud, sans redemarrer. Renvoie {} si la nouvelle config
     est valide (elle est alors active), sinon les manques -- et l'ancienne
@@ -302,13 +307,33 @@ def _verifier_installation():
     if SECRET_A_INSTALLER in instance().get("secret", ""):
         manques["secret"] = [f"encore « {SECRET_A_INSTALLER} » — lancez : "
                              f"python installer.py \"<Client>\""]
-    if any(check_password_hash(u["mdp_hash"], MDP_PAR_DEFAUT)
-           for u in instance().get("utilisateurs", {}).values()):
-        manques["compte RH"] = ["mot de passe par défaut — changez mdp_hash "
-                                "dans config/instance.json"]
+    # _verifier_comptes valide deja la FORME ; ici on garde quand meme les
+    # isinstance -- verifier() lance tous les checks, celui-ci tourne meme si
+    # le bloc utilisateurs est malforme, et ne doit pas planter dessus.
+    users = comptes()
+    if isinstance(users, dict) and any(
+            isinstance(u, dict) and isinstance(u.get("mdp_hash"), str)
+            and check_password_hash(u["mdp_hash"], MDP_PAR_DEFAUT)
+            for u in users.values()):
+        manques["compte RH"] = ["mot de passe par défaut — changez le hash dans "
+                                "config/instance.json (bloc utilisateurs)"]
     if not etablissements():
         manques["établissements"] = ["aucun établissement dans config/societes.json"]
     return manques
+
+
+def _verifier_comptes():
+    """Forme de comptes() avant ses valeurs -- un bloc `utilisateurs` malforme
+    dans instance.json doit refuser de demarrer proprement, pas planter login()."""
+    d = comptes()
+    if not isinstance(d, dict) or not d:
+        return {"comptes": ["aucun compte de connexion — lancez : "
+                            "python installer.py \"<Client>\""]}
+    raisons = [f"« {ident} » : mdp_hash absent ou invalide"
+               for ident, u in d.items()
+               if not isinstance(u, dict) or not isinstance(u.get("mdp_hash"), str)
+               or not u["mdp_hash"]]
+    return {"comptes": raisons} if raisons else {}
 
 
 def _verifier_derives():
@@ -461,8 +486,8 @@ def verifier():
     """Garde-fou de demarrage. Renvoie {} si tout va bien, sinon un dict
     {sujet: [raisons]} et l'instance ne sert pas."""
     manques = {}
-    for check in (_verifier_version, _verifier_installation, _verifier_derives,
-                  _verifier_roles, _verifier_placeholders, _verifier_postes,
-                  _verifier_grille):
+    for check in (_verifier_version, _verifier_comptes, _verifier_installation,
+                  _verifier_derives, _verifier_roles, _verifier_placeholders,
+                  _verifier_postes, _verifier_grille):
         manques.update(check())
     return manques

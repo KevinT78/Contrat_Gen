@@ -40,8 +40,7 @@ def main(nom, cible):
     conf = json.loads((config / "instance.json").read_text(encoding="utf-8"))
     conf["client"] = nom
     conf["secret"] = secrets.token_hex(32)
-    conf["utilisateurs"] = {"rh": {"mdp_hash": generate_password_hash(mdp),
-                                   "admin": True}}
+    conf["utilisateurs"] = {"rh": {"mdp_hash": generate_password_hash(mdp)}}
     (config / "instance.json").write_text(
         json.dumps(conf, ensure_ascii=False, indent=2), encoding="utf-8")
 

@@ -22,8 +22,7 @@
 
   "utilisateurs": {
     "rh": {
-      "mdp_hash": "scrypt:32768:8:1$hdAo448gVPVJStF3$4d3e3fec8a67454a70ea7e2e3852800190e17c724893b41f957b50a93c27cc22364f7658ff35029014c95d5eae2a131ce1d37abed6693876dc9c1c093c781137",
-      "admin": true
+      "mdp_hash": "scrypt:32768:8:1$hdAo448gVPVJStF3$4d3e3fec8a67454a70ea7e2e3852800190e17c724893b41f957b50a93c27cc22364f7658ff35029014c95d5eae2a131ce1d37abed6693876dc9c1c093c781137"
     }
   },
 

@@ -3,10 +3,10 @@
     python tests/test_parcours_wingstop.py
 
 Formulaire réel (30 questions, NOM+Prénom en un champ, e-mail, dates) -> suivi
--> validation -> saisie RH du planning -> contrat .html généré -> signé -> DPAE
--> remise au comptable. Prouve que l'app tourne sur une config où les ids de
-champs ne matchent plus ceux codés en dur (indirection de rôle) et où le
-contrat n'est pas un .docx.
+-> validation -> saisie RH du planning -> contrat généré (templates .html,
+rendu .docx) -> signé -> DPAE -> remise au comptable. Prouve que l'app tourne
+sur une config où les ids de champs ne matchent plus ceux codés en dur
+(indirection de rôle) et où les modèles de contrat sont en HTML.
 
 Écrit dans un dossier temporaire, ne touche jamais data/.
 """
@@ -66,6 +66,14 @@ def dernier_mail(nom):
     return msg["To"] + "\n" + msg.get_payload(decode=True).decode("utf-8")
 
 
+def contrat_texte(item):
+    """Le texte du contrat.docx produit (corps + cellules de tableau)."""
+    from docx import Document
+    import contrat as moteur
+    doc = Document(str(Path(item["_dir"]) / "contrat" / "contrat.docx"))
+    return "\n".join(p.text for p in moteur.paragraphes(doc))
+
+
 def soumettre(c, s):
     r = c.post("/", data={**s, "carte_vitale": piece(), "rib": piece(),
                           "cni": piece(), "justif_domicile": piece()},
@@ -109,8 +117,8 @@ def parcours_manager(c):
     assert store.etat(item) == "ContratPret", item["journal"][-1]
     assert item["journal"][-1]["modele"] == "Manager.html"
     produits = store.fichiers(item, "contrat")
-    assert "contrat.html" in produits, produits
-    txt = (Path(item["_dir"]) / "contrat" / "contrat.html").read_text(encoding="utf-8")
+    assert "contrat.docx" in produits, produits
+    txt = contrat_texte(item)
     assert "{{" not in txt, "contrat troué"
     for attendu in ("Madame Awa NKEMBA", "1er octobre 2026",
                     "2 500 (deux mille cinq cents) euros bruts",
@@ -135,7 +143,7 @@ def parcours_manager(c):
     assert "compta@wingflavors.example" in mail
     lot = re.search(r"http://localhost/lot/[\w.=-]+", mail).group(0)
     z = zipfile.ZipFile(BytesIO(app.test_client().get(lot + "/zip").data))
-    assert "contrat/contrat.html" in z.namelist(), z.namelist()
+    assert "contrat/contrat.docx" in z.namelist(), z.namelist()
     assert "contrat/contrat-signe.pdf" in z.namelist()
     return uid
 
@@ -156,14 +164,14 @@ def parcours_equipier_partiel_etranger(c):
     item = store.lire(uid)
     assert store.etat(item) == "ContratPret", item["journal"][-1]
     assert item["journal"][-1]["modele"] == "Equipier_Partiel.html", item["journal"][-1]
-    txt = (Path(item["_dir"]) / "contrat" / "contrat.html").read_text(encoding="utf-8")
+    txt = contrat_texte(item)
     assert "{{" not in txt
     for attendu in ("Monsieur Jean DUPONT",
                     "104 heures par mois",                       # 24 h/sem mensualisé
                     "1 280,24 (mille deux cent quatre-vingts euros et vingt-quatre centimes)",
                     "titre de séjour de type « Carte de séjour »",
                     "valable jusqu'au 31 août 2027",
-                    "<td>9h-15h</td>"):
+                    "9h-15h"):                                    # cellule du tableau planning
         assert attendu in txt, f"« {attendu} » absent du contrat partiel"
     return uid
 
