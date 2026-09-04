@@ -175,8 +175,9 @@ après chaque modification de `config/`.
 
 Rien n'est écrit hors du dossier temporaire : la commande est sûre sur une
 instance en production. Elle attrape ce que `config.verifier()` ne peut pas
-voir — un poste correctement routé vers un modèle mais absent de la grille de
-salaires sort ici en `⚠`, au lieu d'exploser devant la RH le jour de l'embauche.
+voir — une durée hebdomadaire hors du barème de `grille.json`, par exemple,
+sort ici en `⚠` (rémunération vide) au lieu d'exploser devant la RH le jour de
+l'embauche.
 
 ### Un changement plus tard
 
@@ -276,12 +277,24 @@ Tout vit dans `config/` — aucun `.py` n'y entre jamais :
 | `instance.json` | `config_version`, nom, secret HMAC, signature, fiche salarié, SMTP, destinataires, motifs de KO, comptes, poste → template |
 | `formulaire.json` | les champs du formulaire, leur type, le placeholder `.docx` de chacun, et la table `roles` |
 | `societes.json` | sociétés (SIREN, mentions, cabinet) et établissements (SIRET, couloir `contrat`) |
+| `grille.json` | grille de rémunération (facultative : sans elle, le salaire est saisi au formulaire) |
 | `contrats/*.docx` | modèles de contrat + `fiche_salarie.docx`, à placeholders `{{Nom}}` |
 | `mails/*.txt` | objet + corps de chaque mail |
 
 Au démarrage, `config.verifier()` extrait les `{{placeholders}}` des `.docx`
 actifs et refuse ceux qu'aucune source n'alimente — le garde-fou qui rend
 l'adaptation à un nouveau client vérifiable.
+
+Il exige aussi, quand un `grille.json` est présent, **une ligne de grille par
+poste du formulaire**. La grille reconnaît un poste par mots normalisés et la
+ligne la plus spécifique gagne : cette souplesse est voulue (« Équipier
+Polyvalent » prend le tarif « Équipier » quand le client n'a pas fait plus fin),
+mais un poste *privé* de sa ligne tomberait alors en silence sur celle d'un
+poste dont l'intitulé est contenu dans le sien — « Apprenti couvreur » payé au
+tarif « Couvreur ». Le contrat n'est pas vide, il est **faux**, donc invisible
+pour `doctor` comme pour la RH. Deux postes qui visent la même ligne sont donc
+refusés au démarrage ; si le partage est voulu, deux lignes de même montant le
+disent.
 
 ### Les rôles : comment le moteur lit un formulaire qu'il ne connaît pas
 

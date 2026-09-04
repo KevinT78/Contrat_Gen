@@ -411,11 +411,58 @@ def _verifier_postes():
     return manques
 
 
+def _verifier_grille():
+    """Chaque poste du formulaire doit avoir SA ligne dans grille.json.
+
+    La grille reconnait un poste par mots normalises, la plus specifique
+    gagne -- souple exprès (« Equipier Polyvalent » prend le tarif
+    « Equipier »), mais un poste PRIVE de sa ligne tombe alors en silence sur
+    celle d'un poste dont l'intitule est contenu dans le sien : « Apprenti
+    couvreur » sort au tarif « Couvreur ». Le contrat n'est pas vide, il est
+    FAUX -- invisible pour doctor comme pour la RH, et sur le seul champ dont
+    personne ne doute. Deux postes qui visent la meme ligne sont donc refuses
+    ici : si le partage est voulu, deux lignes de meme montant le disent.
+    """
+    g = grille()
+    if not g:
+        return {}
+    import contrat
+    # La FORME avant les valeurs : sans ca, une ligne sans « poste » fait
+    # planter le garde-fou (KeyError) au lieu d'etre refusee -- et le meme
+    # acces non garde est dans contrat.ligne_grille().
+    lignes = g.get("postes")
+    if not isinstance(lignes, list) or not all(
+            isinstance(e, dict) and isinstance(e.get("poste"), str) for e in lignes):
+        return {"grille.json": ["« postes » attend une liste d'objets portant "
+                                "chacun un « poste » (texte)"]}
+    manques, pris = {}, {}
+    for c in champs():
+        if c["id"] != role("poste"):
+            continue
+        for opt in c.get("options", []):
+            ligne = contrat.ligne_grille(opt, g)
+            if ligne is None:
+                manques[f"grille — poste « {opt} »"] = [
+                    "aucune ligne de config/grille.json ne le rémunère"]
+            elif (autre := pris.get(ligne["poste"])) is not None:
+                sur = (f"la ligne du poste « {autre} »" if autre == ligne["poste"]
+                       else f"la ligne « {ligne['poste']} », déjà celle du poste "
+                            f"« {autre} »")
+                manques[f"grille — poste « {opt} »"] = [
+                    f"aucune ligne ne lui est propre : il serait payé sur {sur} "
+                    f"— ajoutez-lui sa ligne dans config/grille.json (même montant "
+                    f"si le partage est voulu)"]
+            else:
+                pris[ligne["poste"]] = opt
+    return manques
+
+
 def verifier():
     """Garde-fou de demarrage. Renvoie {} si tout va bien, sinon un dict
     {sujet: [raisons]} et l'instance ne sert pas."""
     manques = {}
     for check in (_verifier_version, _verifier_installation, _verifier_derives,
-                  _verifier_roles, _verifier_placeholders, _verifier_postes):
+                  _verifier_roles, _verifier_placeholders, _verifier_postes,
+                  _verifier_grille):
         manques.update(check())
     return manques

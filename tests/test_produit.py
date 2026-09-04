@@ -67,9 +67,12 @@ SOCIETES = [{"nom": "ACME", "siren": "111 111 111",
 
 
 def ecrire(instance=None, contrat="Bonjour {{Nom}}, poste {{Poste}}.",
-           formulaire=None):
+           formulaire=None, grille=None):
     (CONF / "instance.json").write_text(
         json.dumps(instance or INSTANCE, ensure_ascii=False), encoding="utf-8")
+    fg = CONF / "grille.json"
+    fg.write_text(json.dumps(grille, ensure_ascii=False), encoding="utf-8") \
+        if grille else fg.unlink(missing_ok=True)
     (CONF / "formulaire.json").write_text(
         json.dumps(formulaire or FORMULAIRE), encoding="utf-8")
     (CONF / "societes.json").write_text(json.dumps(SOCIETES), encoding="utf-8")
@@ -131,6 +134,60 @@ def test_derive_mal_ecrite_refusee_au_demarrage():
         {"placeholder": "Nom", "si": ["nom", "==", "x"], "alors": "a"}]})
     assert config.verifier() == {}, config.verifier()
     ecrire({**INSTANCE, "derives": [{"placeholder": "Nom", "alors": "toujours"}]})
+    assert config.verifier() == {}, config.verifier()
+
+
+def test_poste_sans_sa_ligne_de_grille_refuse_au_demarrage():
+    """Le salaire est le champ dont personne ne doute en relisant un contrat.
+
+    La grille reconnait un poste par mots normalises, la ligne la plus
+    specifique gagne. Un poste prive de SA ligne ne sort donc pas un contrat
+    vide -- il sort au tarif d'un poste dont l'intitule est contenu dans le
+    sien, et ni doctor ni la RH ne le voient. Mesure faite en montant
+    « Toitures du Nord » (SCENARIOS.md) : « Apprenti couvreur » retire de la
+    grille etait paye au tarif « Couvreur », doctor tout vert."""
+    import contrat as moteur
+
+    def form(*options):
+        return {**FORMULAIRE,
+                "champs": [{**c, "options": list(options)} if c["id"] == "poste" else c
+                           for c in FORMULAIRE["champs"]]}
+
+    TROIS = form("Couvreur", "Apprenti couvreur", "Chef d'équipe")
+    GRILLE = {"postes": [{"poste": "Couvreur", "mensuel": 1900},
+                         {"poste": "Apprenti couvreur", "mensuel": 950},
+                         {"poste": "Chef d'équipe", "mensuel": 2650}]}
+    ecrire(formulaire=TROIS, grille=GRILLE)
+    assert config.verifier() == {}, config.verifier()
+
+    # 1. La ligne de l'apprenti disparait -> il herite de celle du couvreur.
+    ampute = {"postes": [e for e in GRILLE["postes"] if e["poste"] != "Apprenti couvreur"]}
+    assert moteur.salaire({"poste": "Apprenti couvreur"}, ampute) \
+        == moteur.salaire({"poste": "Couvreur"}, ampute), \
+        "le tarif herite ne se produit plus : ce test ne prouve plus rien"
+    ecrire(formulaire=TROIS, grille=ampute)
+    manques = config.verifier()
+    sujet = "grille — poste « Apprenti couvreur »"
+    assert sujet in manques, manques
+    assert "aucune ligne ne lui est propre" in " ".join(manques[sujet]), manques
+
+    # 2. Un poste qu'aucune ligne ne vise (aucun mot en commun) : vide, pas faux.
+    sans_chef = {"postes": [e for e in GRILLE["postes"] if e["poste"] != "Chef d'équipe"]}
+    ecrire(formulaire=TROIS, grille=sans_chef)
+    assert "ne le rémunère" in " ".join(
+        config.verifier()["grille — poste « Chef d'équipe »"]), config.verifier()
+
+    # 3. La FORME avant les valeurs : sans ce garde, une ligne sans « poste »
+    #    faisait planter le garde-fou (KeyError) au lieu de refuser.
+    for mauvaise in ({"postes": [{"mensuel": 900}]}, {"postes": {"Couvreur": 1900}},
+                     {"postes": ["Couvreur"]}, {"postes": [{"poste": 42}]}):
+        ecrire(formulaire=TROIS, grille=mauvaise)
+        assert "grille.json" in config.verifier(), mauvaise
+
+    # 4. Le match partiel VOULU reste legal : le client n'a pas fait plus fin
+    #    qu'« Equipier » et ses equipiers polyvalents prennent cette ligne.
+    ecrire(formulaire=form("Equipier Polyvalent"),
+           grille={"postes": [{"poste": "Equipier", "mensuel": 1867}]})
     assert config.verifier() == {}, config.verifier()
 
 

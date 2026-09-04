@@ -169,6 +169,22 @@ def _mots(s):
     return {w for w in re.split(r"[^a-z0-9]+", sans_accent(s).lower()) if w and w != "dk"}
 
 
+def ligne_grille(poste, grille):
+    """La ligne de grille qui remunere ce poste, ou None.
+
+    Match par mots normalises, la plus specifique gagne : « Assistant Manager »
+    ne prend pas le tarif « Manager », et « Equipier Polyvalent » prend celui
+    d'« Equipier » quand le client n'a pas fait plus fin. Le revers de cette
+    souplesse -- un poste sans ligne qui tombe sur celle d'un poste dont
+    l'intitule est contenu dans le sien -- est refuse au demarrage par
+    config._verifier_grille(), pas ici : a la generation, il est trop tard."""
+    demande = _mots(poste)
+    if not demande or not grille:
+        return None
+    compat = [e for e in grille.get("postes", []) if _mots(e["poste"]) <= demande]
+    return max(compat, key=lambda e: len(_mots(e["poste"]))) if compat else None
+
+
 def salaire(champs, grille):
     """(chiffres, lettres) de la remuneration mensuelle brute depuis la grille du
     client -- le formulaire n'en collecte pas.
@@ -184,13 +200,9 @@ def salaire(champs, grille):
     normalises, le plus specifique gagne (« Assistant Manager » ne prend pas le
     tarif « Manager »)."""
     import config
-    demande = _mots(config.valeur(champs, "poste"))
-    if not demande or not grille:
+    e = ligne_grille(config.valeur(champs, "poste"), grille)
+    if e is None:
         return "", ""
-    compat = [e for e in grille.get("postes", []) if _mots(e["poste"]) <= demande]
-    if not compat:
-        return "", ""
-    e = max(compat, key=lambda e: len(_mots(e["poste"])))
     if "mensuel" in e:
         v = float(e["mensuel"])
         return montant_fr(v), lettres_fr(v)
