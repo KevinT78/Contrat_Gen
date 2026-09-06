@@ -175,7 +175,7 @@
       {% for f in pieces %}
         <li><a href="{{ url_for('fichier', uid=item.id, bucket='pieces', nom=f) }}">{{ f }}</a></li>
       {% endfor %}
-      {% for c in manquantes %}<li class="manque">{{ c.libelle }} — manquante</li>{% endfor %}
+      {% for m in manquantes %}<li class="manque">{{ m.champ.libelle }} — manquante</li>{% endfor %}
       {% if not pieces and not manquantes %}<li class="vide">Aucune.</li>{% endif %}
     </ul></div>
 

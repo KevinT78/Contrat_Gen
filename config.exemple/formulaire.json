@@ -44,8 +44,8 @@
     {"id": "salaire", "libelle": "Salaire mensuel brut (€)", "type": "montant", "requis": true,
      "placeholder": "SalaireChiffres"},
 
-    {"id": "identite", "libelle": "Pièce d'identité", "type": "piece_jointe",
-     "role": "identite", "requis": true},
+    {"id": "identite", "libelle": "Pièce d'identité (recto + verso)", "type": "piece_jointe",
+     "role": "identite", "requis": true, "max_fichiers": 2},
     {"id": "carte_vitale", "libelle": "Attestation de carte vitale", "type": "piece_jointe",
      "role": "carte-vitale", "requis": true},
     {"id": "rib", "libelle": "RIB", "type": "piece_jointe", "role": "rib", "requis": true}

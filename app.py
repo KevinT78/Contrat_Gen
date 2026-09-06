@@ -260,12 +260,22 @@ def _saisie(item=None):
     """
     champs, erreurs = {}, []
     deja = set() if item is None else (
-        {c["role"] for c in config.pieces()} - {c["role"] for c in store.manquantes(item)})
+        {c["role"] for c in config.pieces()}
+        - {m["champ"]["role"] for m in store.manquantes(item)})
     for c in config.champs():
         if c["type"] == "piece_jointe":
-            f = request.files.get(c["id"])
-            if c.get("requis") and not (f and f.filename) and c["role"] not in deja:
-                erreurs.append(f"« {c['libelle'] } » est obligatoire.")
+            max_f = c.get("max_fichiers", 1)
+            if max_f > 1:
+                liste = request.files.getlist(c["id"])
+                nb = sum(1 for f in liste if f and f.filename)
+                if c.get("requis") and nb == 0 and c["role"] not in deja:
+                    erreurs.append(f"« {c['libelle'] } » est obligatoire ({max_f} fichiers attendus).")
+                elif nb > max_f:
+                    erreurs.append(f"« {c['libelle'] } » : maximum {max_f} fichiers.")
+            else:
+                f = request.files.get(c["id"])
+                if c.get("requis") and not (f and f.filename) and c["role"] not in deja:
+                    erreurs.append(f"« {c['libelle'] } » est obligatoire.")
             continue
         v = (request.form.get(c["id"]) or "").strip()
         champs[c["id"]] = v
@@ -419,10 +429,9 @@ def _fiche_salarie(item):
     modele = config.instance().get("fiche_salarie")
     if not modele:
         return
-    present = {f.rsplit(".", 1)[0] for f in store.fichiers(item, "pieces")}
     fournies = [c["libelle"] for c in config.pieces()
-                if store.SAIN.sub("-", c["role"]) in present]
-    manquantes = [c["libelle"] for c in store.manquantes(item)]
+                if store.fichiers_role(item, "pieces", c["role"])]
+    manquantes = [m["champ"]["libelle"] for m in store.manquantes(item)]
     vals = contrat.valeurs(
         item["champs"],
         config.mentions(config.valeur(item["champs"], "etablissement")),

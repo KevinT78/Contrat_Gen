@@ -35,7 +35,11 @@
       <textarea name="{{ c.id }}" id="{{ c.id }}" rows="3">{{ v }}</textarea>
     {% elif c.type == 'piece_jointe' %}
       <input type="file" name="{{ c.id }}" id="{{ c.id }}"
-             accept=".pdf,.jpg,.jpeg,.png">
+             accept=".pdf,.jpg,.jpeg,.png"
+             {{ 'multiple' if c.max_fichiers and c.max_fichiers > 1 }}>
+      {% if c.max_fichiers and c.max_fichiers > 1 %}
+        <span class="aide">{{ c.max_fichiers }} fichiers maximum (ex. recto + verso)</span>
+      {% endif %}
     {% else %}
       {% set html = {'date':'date','nombre':'number','montant':'number',
                      'email':'email','tel':'tel'}.get(c.type, 'text') %}

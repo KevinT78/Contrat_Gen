@@ -153,12 +153,16 @@ EXTENSIONS = {".pdf", ".jpg", ".jpeg", ".png"}
 TAILLE_MAX = 15 * 1024 * 1024
 
 
-def deposer(uid, bucket, role, fichier, extensions=EXTENSIONS):
+def deposer(uid, bucket, role, fichier, extensions=EXTENSIONS, index=None):
     """Ecrit une piece sous un nom semantique. Un re-depot archive l'ancien.
 
     `extensions` surcharge la liste blanche par defaut : le contrat venu de
     myrhis est un PDF ou un .docx, mais on n'elargit PAS EXTENSIONS, qui
     protege le formulaire public.
+
+    `index` (optionnel) : rang 1..N pour les champs multi-fichiers. Le 1er
+    fichier garde le nom `{role}.{ext}` (retro-compatible mono-fichier), les
+    suivants deviennent `{role}_2.{ext}`, `{role}_3.{ext}`...
     """
     d = dossier_de(uid)
     if not d:
@@ -167,7 +171,10 @@ def deposer(uid, bucket, role, fichier, extensions=EXTENSIONS):
     if ext not in extensions:
         raise ValueError(f"format refuse ({ext or 'sans extension'}) : "
                          + ", ".join(sorted(extensions)))
-    cible = d / bucket / (SAIN.sub("-", role) + ext)
+    nom_role = SAIN.sub("-", role)
+    if index is not None and index > 1:
+        nom_role = f"{nom_role}_{index}"
+    cible = d / bucket / (nom_role + ext)
     cible.parent.mkdir(parents=True, exist_ok=True)
     # Valider le fichier entrant AVANT de deplacer l'ancien : sinon un re-depot
     # refuse (trop lourd) laisse le dossier sans piece et l'ancienne copie
@@ -211,14 +218,55 @@ def fichiers(item, bucket):
     return sorted(f.name for f in d.glob("*") if f.is_file()) if d and d.is_dir() else []
 
 
+def _extraire_role(nom_fichier):
+    """Extrait le role d'un nom de fichier (sans extension, sans index).
+
+    'identite.pdf' -> 'identite'
+    'identite_1.pdf' -> 'identite'
+    'carte-vitale.jpg' -> 'carte-vitale'
+    """
+    base = nom_fichier.rsplit(".", 1)[0]
+    match = re.match(r"^(.+?)_\d+$", base)
+    return match.group(1) if match else base
+
+
+def fichiers_role(item, bucket, role):
+    """Liste des noms de fichiers pour un role donne (indexe ou non)."""
+    role_propre = SAIN.sub("-", role)
+    return [f for f in fichiers(item, bucket) if _extraire_role(f) == role_propre]
+
+
 def manquantes(item):
-    """Roles de pieces requis par le schema et absents du disque."""
-    presents = {f.rsplit(".", 1)[0] for f in fichiers(item, "pieces")}
-    return [c for c in config.pieces()
+    """Pieces requises par le schema et absentes du disque.
+
+    Retourne une liste de dicts {'champ': config}.  `max_fichiers` est un
+    plafond, pas un minimum : un role avec au moins un fichier est satisfait.
+    Compatible bool : [] == tout est la.
+    """
+    presents = {_extraire_role(f) for f in fichiers(item, "pieces")}
+    return [{"champ": c} for c in config.pieces()
             if c.get("requis") and SAIN.sub("-", c["role"]) not in presents]
 
 
 # --- cycle de vie --------------------------------------------------------
+
+def _deposer_champ(uid, c, fichiers_recus):
+    """Depose le(s) fichier(s) recu(s) pour un champ piece_jointe.
+
+    `fichiers_recus` peut etre un MultiDict (request.files) ou un simple dict
+    (import myrhis, tests). Le multi-fichiers n'est possible que sur le premier.
+    """
+    if c.get("max_fichiers", 1) > 1 and hasattr(fichiers_recus, "getlist"):
+        recus = fichiers_recus.getlist(c["id"])
+    else:
+        f = fichiers_recus.get(c["id"])
+        recus = [f] if f else []
+    rang = 0
+    for f in recus:
+        if f and f.filename:
+            rang += 1
+            deposer(uid, "pieces", c["role"], f, index=rang)
+
 
 def creer_soumission(champs, fichiers_recus):
     uid = nouvel_id()
@@ -229,9 +277,7 @@ def creer_soumission(champs, fichiers_recus):
             "journal": [{"de": None, "vers": "Soumise", "le": maintenant(),
                          "par": "formulaire"}]}
     for c in config.pieces():
-        f = fichiers_recus.get(c["id"])
-        if f and f.filename:
-            deposer(uid, "pieces", c["role"], f)
+        _deposer_champ(uid, c, fichiers_recus)
     _ecrire(d, item)
     return uid
 
@@ -243,9 +289,7 @@ def resoumettre(uid, champs, fichiers_recus):
         d = config.DONNEES / "soumissions" / uid
         item["champs"] = champs
         for c in config.pieces():
-            f = fichiers_recus.get(c["id"])
-            if f and f.filename:
-                deposer(uid, "pieces", c["role"], f)
+            _deposer_champ(uid, c, fichiers_recus)
         item["journal"].append({"de": etat(item), "vers": "Soumise",
                                 "le": maintenant(), "par": "formulaire",
                                 "motif": "correction"})
