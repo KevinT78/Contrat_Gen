@@ -64,7 +64,10 @@ def main():
     c = app.test_client()
     c.post("/login", data={"identifiant": "rh", "mot_de_passe": "fixture"})
     ecran(c, "/suivi")
-    ecran(c, "/suivi?inactifs=1")
+    ecran(c, "/suivi?etat=RemisComptable")
+    ecran(c, f"/suivi?etablissement={ETAB}")
+    vide = ecran(c, "/suivi?etat=NExistePas")   # 200, pas 500
+    assert 'class="nom"' not in vide, "un ?etat= inconnu doit rendre zéro ligne"
 
     vus = set()
     uid = soumettre(c)
@@ -98,6 +101,14 @@ def main():
     voir()                                                          # DpaeFaite
     c.post(f"/dossier/{uid}/remettre")
     voir()                                                          # RemisComptable
+
+    # Un dossier au bout du parcours reste visible sur /suivi sans filtre
+    # (contrôle négatif : échouait quand la vue masquait store.INACTIFS).
+    lien = f"/dossier/{uid}"
+    assert lien in ecran(c, "/suivi"), "RemisComptable masqué du suivi par défaut"
+    assert lien not in ecran(c, "/suivi?etat=Soumise"), "filtre état inopérant"
+    autre = config.etablissements()[1][0]
+    assert lien not in ecran(c, f"/suivi?etablissement={autre}"), "filtre établissement inopérant"
 
     item = store.lire(uid)
     jeton = store.signer("lot_comptable", uid, item.get("lien_comptable_epoch", 0))

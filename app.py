@@ -152,7 +152,7 @@ LIBELLES_ETAT = {"Soumise": "Soumise", "Rejetee": "Rejetée",
 TONS_ETAT = {"Soumise": "attente", "ATraiter": "attente", "Rejetee": "ko",
              "ContratPret": "actif", "ContratSigne": "actif",
              "DpaeFaite": "actif",
-             "RemisComptable": "", "Abandonnee": ""}
+             "RemisComptable": "fini", "Abandonnee": ""}
 
 
 def _depuis(iso):
@@ -365,12 +365,15 @@ def corriger(jeton):
 @rh
 def suivi():
     items = store.tout()
-    voir_inactifs = request.args.get("inactifs") == "1"
+    etab = request.args.get("etablissement") or ""
+    etat_f = request.args.get("etat") or ""
     visibles = [i for i in items
-                if voir_inactifs or store.etat(i) not in store.INACTIFS]
+                if (not etab or config.valeur(i["champs"], "etablissement") == etab)
+                and (not etat_f or store.etat(i) == etat_f)]
     return render_template("suivi.html", items=visibles, etat=store.etat,
-                           inactifs=store.INACTIFS, voir_inactifs=voir_inactifs,
-                           manquantes=store.manquantes,
+                           inactifs=store.INACTIFS, total=len(items),
+                           etab=etab, etat_f=etat_f, libelles=LIBELLES_ETAT,
+                           etats=store.ETATS, manquantes=store.manquantes,
                            aujourdhui=date.today().isoformat(),
                            a_traiter=sum(store.etat(i) in ("Soumise", "ATraiter")
                                          for i in items))

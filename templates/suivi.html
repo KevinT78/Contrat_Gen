@@ -8,19 +8,44 @@
     <p class="sous">
       {% if a_traiter %}<span class="badge attente">{{ a_traiter }} en attente d'action</span>
       {% else %}<span class="badge">Rien en attente</span>{% endif %}
-      <span class="filet"></span>{{ items|length }} affichée{{ 's' if items|length > 1 }}
+      <span class="filet"></span>
+      {% if etab or etat_f %}{{ items|length }} affichée{{ 's' if items|length > 1 }} sur {{ total }}
+      {% else %}{{ items|length }} affichée{{ 's' if items|length > 1 }}{% endif %}
       <span class="filet"></span>triées par date de début</p>
   </div>
-  <div class="actions">
-    <a class="bouton discret" href="{{ url_for('suivi', inactifs='0' if voir_inactifs else '1') }}">
-      {{ 'Masquer' if voir_inactifs else 'Afficher' }} les closes</a>
-    <form method="post" action="{{ url_for('recharger') }}">
-      <button class="bouton" type="submit"
-              title="Relire config/ après une modification (établissement, salaires, clause)">
-        Recharger la configuration</button>
-    </form>
-  </div>
+  <form method="post" action="{{ url_for('recharger') }}">
+    <button class="discret" type="submit"
+            title="Relire config/ après une modification (établissement, salaires, clause)">
+      Recharger la configuration</button>
+  </form>
 </div>
+
+<form method="get" action="{{ url_for('suivi') }}" class="barre-filtres">
+  <div class="champ">
+    <label for="f-etab">Établissement</label>
+    <select id="f-etab" name="etablissement">
+      <option value="">Tous</option>
+      {% for cle, lib in etablissements %}
+        <option value="{{ cle }}" {{ 'selected' if cle == etab }}>{{ lib }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="champ">
+    <label for="f-etat">État</label>
+    <select id="f-etat" name="etat">
+      <option value="">Tous</option>
+      {% for e in etats %}
+        <option value="{{ e }}" {{ 'selected' if e == etat_f }}>{{ libelles[e] }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="fin">
+    <button type="submit">Filtrer</button>
+    {% if etab or etat_f %}
+      <a class="bouton discret" href="{{ url_for('suivi') }}">Tout afficher</a>
+    {% endif %}
+  </div>
+</form>
 
 <div class="tableau">
 <table>
@@ -33,7 +58,8 @@
     {% set e = etat(i) %}
     {% set debut = valeur(i.champs, 'date_debut') %}
     {% set retard = debut and debut < aujourdhui and e not in inactifs %}
-    <tr class="{{ 'inactif' if e in inactifs }}">
+    {% set nb = manquantes(i)|length %}
+    <tr class="{{ 'ton-' ~ ton_etat(e) if ton_etat(e) }} {{ 'inactif' if e in inactifs }}">
       <td><a class="nom" href="{{ url_for('detail', uid=i.id) }}">
         {{ nom_de(i.champs) or i.id }}</a></td>
       <td class="secondaire">{{ valeur(i.champs, 'etablissement') }}</td>
@@ -44,11 +70,12 @@
       {% set j = depuis(i.journal[-1].le) %}
       <td class="{{ 'manque' if j > 7 and e not in inactifs else 'secondaire' }}">
         {{ "aujourd'hui" if j <= 0 else 'hier' if j == 1 else 'il y a ' ~ j ~ ' j' }}</td>
-      <td class="{{ 'manque' if manquantes(i) }}">
-        {{ manquantes(i)|length if manquantes(i) else '—' }}</td>
+      <td class="{{ 'manque' if nb }}">{{ nb if nb else '—' }}</td>
     </tr>
   {% else %}
-    <tr><td colspan="7" class="vide">Aucune demande pour l'instant.</td></tr>
+    <tr><td colspan="7" class="vide">
+      {% if etab or etat_f %}Aucune demande ne correspond à ce filtre.
+      {% else %}Aucune demande pour l'instant.{% endif %}</td></tr>
   {% endfor %}
   </tbody>
 </table>

@@ -17,6 +17,13 @@
     --accent:#1f4d3f; --accent-sombre:#143229; --accent-clair:#e7efeb;
     --alerte:#8a2e21; --alerte-clair:#f7e9e5;
     --attente:#7a5510; --attente-clair:#f8efdc;
+    /* fonds de ligne du suivi : une teinte par famille d'etat (memes hues
+       que les badges), + une variante -survol un cran plus soutenue */
+    --attente-fond:#f6ead0; --attente-survol:#eeddb6;
+    --actif-fond:#e2eee7;   --actif-survol:#cfe4d9;
+    --alerte-fond:#f3dbd2;  --alerte-survol:#e8c6ba;
+    --fini-fond:#e7eae1;    --fini-survol:#d7dbcc;
+    --fini:#5a6b60;   /* gris-vert desature : parcours termine */
     --r:3px;
     --titre:"Libre Bodoni","Iowan Old Style","Palatino Linotype",Georgia,serif;
     --corps:"Public Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
@@ -74,7 +81,11 @@
   .sep { border:0; border-top:1px solid var(--bord); margin:28px -32px }
   .duo { display:grid; grid-template-columns:minmax(0,1.45fr) minmax(0,1fr);
          gap:0 48px; align-items:start }
-  .entete { display:flex; justify-content:space-between; align-items:flex-start; gap:32px }
+  /* titre a gauche, action secondaire a droite -- les filtres ont leur propre
+     rangee pleine largeur (.barre-filtres), sous le sous-titre */
+  .entete { display:flex; justify-content:space-between; align-items:flex-start;
+            gap:32px; margin:0 0 26px }
+  .entete .sous { margin-bottom:0 }
 
   /* --- tableau --- */
   .tableau { background:var(--surface); border:1px solid var(--bord); border-radius:var(--r);
@@ -87,7 +98,23 @@
              text-transform:uppercase; letter-spacing:.12em; color:var(--gris-clair) }
   tbody tr:last-child td { border-bottom:0 }
   tbody tr { transition:background var(--pas) }
-  tbody tr:hover { background:var(--surface-2) }
+  /* couleur de ligne : filet de ton a gauche + fond teinte, une teinte par
+     famille d'etat (memes hues que les badges). Le survol fonce la teinte,
+     sinon il effacerait l'etat. */
+  .tableau tbody td:first-child { border-left:4px solid transparent }
+  .tableau tr.ton-attente td:first-child { border-left-color:var(--attente) }
+  .tableau tr.ton-actif   td:first-child { border-left-color:var(--accent) }
+  .tableau tr.ton-ko      td:first-child { border-left-color:var(--alerte) }
+  .tableau tr.ton-fini    td:first-child { border-left-color:var(--fini) }
+  .tableau tr.ton-attente td { background:var(--attente-fond) }
+  .tableau tr.ton-actif   td { background:var(--actif-fond) }
+  .tableau tr.ton-ko      td { background:var(--alerte-fond) }
+  .tableau tr.ton-fini    td { background:var(--fini-fond) }
+  tbody tr:hover td { background:var(--surface-2) }
+  .tableau tr.ton-attente:hover td { background:var(--attente-survol) }
+  .tableau tr.ton-actif:hover   td { background:var(--actif-survol) }
+  .tableau tr.ton-ko:hover      td { background:var(--alerte-survol) }
+  .tableau tr.ton-fini:hover    td { background:var(--fini-survol) }
   tr.inactif td { color:var(--gris-clair) }
   .nom { font-weight:500; color:var(--texte); text-decoration:none;
          border-bottom:1px solid var(--bord-fort); transition:border-color var(--pas) }
@@ -102,6 +129,7 @@
   .badge.actif { color:var(--accent) } .badge.actif::before { background:var(--accent) }
   .badge.attente { color:var(--attente) } .badge.attente::before { background:var(--attente) }
   .badge.ko { color:var(--alerte) } .badge.ko::before { background:var(--alerte) }
+  .badge.fini { color:var(--fini) } .badge.fini::before { background:var(--fini) }
   .badge.nu::before { display:none }
 
   /* --- fil d'etapes : rail + graduations --- */
@@ -169,6 +197,12 @@
   .actions { display:flex; flex-wrap:wrap; gap:20px; align-items:flex-end }
   .actions form { display:flex; flex-wrap:wrap; gap:20px; align-items:flex-end }
   .actions .champ { margin-bottom:0; min-width:280px }
+  /* rangee de filtres pleine largeur, cadree par deux filets */
+  .barre-filtres { display:flex; flex-wrap:wrap; align-items:flex-end; gap:16px 36px;
+           margin:0 0 26px; padding:14px 0; border-top:1px solid var(--bord);
+           border-bottom:1px solid var(--bord) }
+  .barre-filtres .champ { margin-bottom:0; flex:0 1 240px }
+  .barre-filtres .fin { margin-left:auto; display:flex; flex-wrap:wrap; gap:12px }
   .pied-actions { display:flex; justify-content:flex-end; margin:-4px 0 20px }
   .indice { font-size:12.5px; color:var(--gris); margin:16px 0 0; max-width:62ch }
   .indice.manque { color:var(--alerte) }
