@@ -50,6 +50,7 @@ class FauxSMTP:
         self.appels.append(("login", u))
 
     def send_message(self, msg):
+        self.msg = msg
         self.appels.append(("send_message", msg["To"]))
 
 
@@ -104,7 +105,7 @@ assert not ok and "destinataire" in raison, (ok, raison)
 assert FauxSMTP.dernier is None
 print("OK  destinataire vide : (False, raison), aucun envoi")
 
-# --- les 5 templates : rendus + envoyes, aucun {placeholder} orphelin ------
+# --- les 4 templates : rendus + envoyes, aucun {placeholder} orphelin ------
 # Les kwargs miment exactement chaque site d'appel (app.py / recap.py). Un
 # template qui reclame une variable qu'aucun appelant ne passe -> {var} reste
 # dans la sortie -> ici on le voit. Un .txt renomme/absent -> (False, raison).
@@ -112,10 +113,17 @@ MAILS.update(mode="smtp", hote="localhost", port=1025, utilisateur="", mot_de_pa
 SITES = {
     "nouvelle_soumission": dict(nom="Jean Test", id="ABC", lien="http://x/d"),
     "rejet":               dict(nom="Jean Test", motif="Autre", commentaire="RIB flou", lien="http://x/c"),
-    "rappel_dpae":         dict(nom="Jean Test", debut="2026-10-01", lien="http://x/d"),
-    "avis_comptable":      dict(nom="Jean Test", id="ABC", lien="http://x/lot"),
+    "rappel_dpae":         dict(nom="Jean Test", debut="1er octobre 2026", poste="Manager",
+                                societe="S", etablissement="E", siret="123", lien="http://x/d"),
     "recap_hebdo":         dict(periode="2026-08-01 -> 2026-08-08", nombre=2, liste="- A\n- B"),
 }
+# La RH est en copie du mail hebdo au cabinet : Cc pose, jamais le meme destinataire deux fois.
+ok, raison = mails.envoyer("recap_hebdo", "cab@test.local", cc=["rh@test.local", "cab@test.local"],
+                           **SITES["recap_hebdo"])
+assert ok, raison
+_msg = FauxSMTP.dernier.msg
+assert (_msg["To"], _msg["Cc"]) == ("cab@test.local", "rh@test.local"), (_msg["To"], _msg["Cc"])
+print("OK  cc : la RH en copie du mail au cabinet")
 for modele, vals in SITES.items():
     objet, corps = mails.rendre(modele, vals)
     assert objet and corps, modele
@@ -183,5 +191,5 @@ assert "SMTPServerDisconnected" in _journal[0]["motif"], _journal[0]
 assert "PAS re" in _ecran, "l'ecran affirme un envoi qui a echoue : %r" % _ecran
 print("OK  echec d'envoi : journalise ET dit a l'ecran (route /rejeter)")
 
-print("\nmails.py OK — console, override, TLS conditionnee a l'auth, 5 templates,")
+print("\nmails.py OK — console, override, TLS conditionnee a l'auth, 4 templates, cc,")
 print("               echec d'envoi remonte par la route /rejeter")

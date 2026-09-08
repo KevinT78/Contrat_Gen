@@ -35,10 +35,10 @@ CONF = BASE / "config"
 INSTANCE = {
     "config_version": 1,
     "client": "ACME v1",
-    "secret": "a" * 64,
+    "secret": "a" * 64, "url": "http://localhost",
     "signature": {"mode": "manuel"},
     "mails": {"mode": "console", "hote": "", "port": 587, "utilisateur": "",
-              "mot_de_passe": "", "expediteur": "", "rh": [],
+              "mot_de_passe": "", "expediteur": "rh@acme.example", "rh": ["rh@acme.example"],
               "dpae": None, "recap": None, "comptable_defaut": "c@acme.example"},
     "utilisateurs": {"rh": {"mdp_hash": generate_password_hash("pas-demo")}},
     "motifs_ko": ["Autre"],
@@ -82,6 +82,15 @@ def ecrire(instance=None, contrat="Bonjour {{Nom}}, poste {{Poste}}.",
 def test_config_saine_sert():
     ecrire()
     assert config.verifier() == {}, config.verifier()
+
+
+def test_mails_rh_vide_refuse_au_demarrage():
+    """Deux instances de verification ont servi avec mails.rh vide : chaque
+    soumission finissait en mail_echoue, verifier() disant OK."""
+    for mails in ({**INSTANCE["mails"], "rh": []}, {**INSTANCE["mails"], "rh": [""]},
+                  {**INSTANCE["mails"], "expediteur": ""}):
+        ecrire(instance={**INSTANCE, "mails": mails})
+        assert "mails" in config.verifier(), f"{mails!r} passe le garde-fou"
 
 
 def test_utilisateurs_malforme_refuse_au_demarrage():
@@ -277,8 +286,9 @@ def test_moteur_ne_lit_aucun_id_de_champ_en_dur():
     # retomber sur le role nom, pas sortir vide dans un contrat signe.
     assert vals["NomNaissanceUsage"] == "NKEMBA", vals["NomNaissanceUsage"]
 
-    ligne = recap.ligne({"champs": dossier, "journal": []})
+    ligne = recap.ligne({"id": "X", "champs": dossier, "journal": []})
     assert "NKEMBA" in ligne and "Manager" in ligne and "Siège" in ligne, ligne
+    assert "http://localhost/lot/lot_comptable.X." in ligne, ligne
 
     lignes = doctor.examiner()
     assert [l["statut"] for l in lignes] == ["ok"], lignes

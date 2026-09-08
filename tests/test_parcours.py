@@ -69,15 +69,33 @@ def soumettre(c, saisie):
     return max(i["id"] for i in store.tout())      # ULID le plus récent
 
 
+def piece_refusee(c):
+    """Formulaire public : une pièce hors liste blanche (.docx) est un message,
+    pas un 500, et ne laisse aucune soumission à moitié née sur le disque."""
+    avant = {d.name for d in (config.DONNEES / "soumissions").glob("*/")}
+    r = c.post("/", data={**base_saisie("Wingstop France / Lille Grand Place"),
+                          "identite": piece(), "carte_vitale": piece(),
+                          "rib": (BytesIO(b"PK"), "rib.docx")},
+               content_type="multipart/form-data")
+    assert r.status_code == 200 and "format .docx refusé" in r.text, \
+        (r.status_code, r.text[:300])
+    apres = {d.name for d in (config.DONNEES / "soumissions").glob("*/")}
+    assert apres == avant, f"soumission orpheline créée : {apres - avant}"
+
+
 def couloir_dark_kitchen(c):
     """Lille Grand Place — contrat généré par l'app, signature manuelle."""
+    piece_refusee(c)
     uid = soumettre(c, base_saisie("Wingstop France / Lille Grand Place"))
 
     # KO puis correction
     c.post(f"/dossier/{uid}/rejeter",
            data={"motif": "Pièce illisible ou manquante", "commentaire": "RIB flou"})
     assert store.etat(store.lire(uid)) == "Rejetee"
-    lien = lien_dans(dernier_mail("rejet"), "corriger")
+    ko = dernier_mail("rejet")
+    assert ko.startswith("manager@example.com\n"), \
+        "établissement sans manager_email : le rejet doit retomber sur l'email saisi"
+    lien = lien_dans(ko, "corriger")
     r = c.post(lien, data={**base_saisie("Wingstop France / Lille Grand Place"),
                            "rib": piece()}, content_type="multipart/form-data")
     assert "Correction envoyée" in r.text
@@ -91,6 +109,12 @@ def couloir_dark_kitchen(c):
     assert "fiche-salarie.docx" in store.fichiers(item, "contrat"), \
         "fiche salarié absente de contrat/ après validation"
     assert any(e.get("type") == "fiche_salarie" for e in item["journal"])
+    # le rappel DPAE est un EFFET de la validation (schéma, étape 6) : asserté
+    # ici, au niveau de l'appelant, avec les informations DPAE et le SIRET
+    rappel = dernier_mail("rappel_dpae")
+    for attendu in ("Martin", "01/10/2026", "884 512 336 00027",
+                    "Lille Grand Place", "http://localhost/dossier/"):
+        assert attendu in rappel, f"« {attendu} » absent du rappel DPAE :\n{rappel}"
 
     # refus : RemisComptable direct depuis ATraiter (garde de store.TRANSITIONS)
     try:
@@ -123,23 +147,27 @@ def couloir_dark_kitchen(c):
            content_type="multipart/form-data")
     assert store.etat(store.lire(uid)) == "ContratSigne"
 
-    # rappel DPAE puis DPAE faite
-    c.post(f"/dossier/{uid}/rappel-dpae")
-    assert store.etat(store.lire(uid)) == "RappelDpae"
-    rappel = dernier_mail("rappel_dpae")
-    assert "Martin" in rappel and "http://localhost/dossier/" in rappel
+    # DPAE faite (accusé obligatoire)
     c.post(f"/dossier/{uid}/dpae-faite", data={}, content_type="multipart/form-data")
-    assert store.etat(store.lire(uid)) == "RappelDpae", "DPAE validée sans accusé"
+    assert store.etat(store.lire(uid)) == "ContratSigne", "DPAE validée sans accusé"
     c.post(f"/dossier/{uid}/dpae-faite", data={"accuse": piece()},
            content_type="multipart/form-data")
     assert store.etat(store.lire(uid)) == "DpaeFaite"
 
-    # remise : le lot porte contrat, contrat signé, fiche salarié, accusé
+    # remise : plus de mail par dossier -- copie dans data/compta/, lien dans
+    # le mail hebdo. Le lot porte contrat, contrat signé, fiche salarié, accusé.
     c.post(f"/dossier/{uid}/remettre")
-    assert store.etat(store.lire(uid)) == "RemisComptable"
-    mail = dernier_mail("avis_comptable")
-    assert "cabinet-nord@example.com" in mail
-    lot = lien_dans(mail, "lot")
+    item = store.lire(uid)
+    assert store.etat(item) == "RemisComptable"
+    assert not list((config.DONNEES / "mails").glob("*-avis_comptable.eml")), \
+        "un mail par dossier est encore parti à la remise"
+    copie = config.DONNEES / "compta" / "Wingstop France" / f"Camille MARTIN - {uid}"
+    assert sorted(p.relative_to(copie).as_posix() for p in copie.rglob("*") if p.is_file()) == [
+        "contrat/accuse-dpae.pdf", "contrat/contrat-signe.pdf", "contrat/contrat.docx",
+        "contrat/fiche-salarie.docx", "pieces/carte-vitale.pdf",
+        "pieces/identite.pdf", "pieces/rib.pdf"], "copie compta incomplète"
+    lot = "http://localhost/lot/" + store.signer("lot_comptable", uid,
+                                                 item.get("lien_comptable_epoch", 0))
     anonyme = app.test_client()
     z = zipfile.ZipFile(BytesIO(anonyme.get(lot + "/zip").data))
     assert sorted(z.namelist()) == [
@@ -192,7 +220,7 @@ def couloir_restaurant(c):
     c.post(f"/dossier/{uid}/remettre")
     item = store.lire(uid)
     assert store.etat(item) == "RemisComptable"
-    assert "cabinet-sud@example.com" in dernier_mail("avis_comptable")
+    assert (config.DONNEES / "compta" / "Wingstop Sud").is_dir()
     return uid
 
 
@@ -208,14 +236,39 @@ def fiche_absente_si_non_declaree(c):
             config.instance()["fiche_salarie"] = garde
 
 
+def rejet_part_au_manager_de_l_etablissement(c):
+    """Paris Opéra déclare manager_email : le rejet y part, pas à l'email saisi."""
+    uid = soumettre(c, base_saisie("Wingstop France / Paris Opéra"))
+    c.post(f"/dossier/{uid}/rejeter",
+           data={"motif": "Autre", "commentaire": "test adresse fixe"})
+    ko = dernier_mail("rejet")
+    assert ko.startswith("opera@example.com\n"), ko.splitlines()[0]
+
+
 def recap_liste_la_semaine(uids):
+    """Un mail PAR CABINET, RH en copie, un lien de lot vivant par dossier remis."""
     import recap
     seuil = recap.datetime.now(recap.timezone.utc) - recap.timedelta(days=7)
-    entres = {i["id"] for i, _ in recap.entres_depuis(seuil)}
+    remis = {i["id"] for i in recap.remis_depuis(seuil)}
     for uid in uids:
-        assert uid in entres, f"{uid} absent du récap 7 jours"
-    ligne = recap.ligne(store.lire(uids[0]))
-    assert "Camille MARTIN" in ligne and "début" in ligne
+        assert uid in remis, f"{uid} absent du récap 7 jours"
+    try:
+        recap.main(7)
+    except SystemExit as e:
+        assert e.code == 0, "un mail hebdo n'est pas parti"
+    fichiers = sorted((config.DONNEES / "mails").glob("*-recap_hebdo.eml"))
+    assert len(fichiers) == 2, f"{len(fichiers)} mails hebdo pour 2 cabinets"
+    par_cabinet = {}
+    for f in fichiers:
+        msg = email.message_from_bytes(f.read_bytes())
+        assert msg["Cc"] == "rh@example.com", msg["Cc"]
+        par_cabinet[msg["To"]] = msg.get_payload(decode=True).decode("utf-8")
+    nord, sud = par_cabinet["cabinet-nord@example.com"], par_cabinet["cabinet-sud@example.com"]
+    assert uids[0] in nord and uids[1] not in nord, "un cabinet voit l'autre société"
+    assert uids[1] in sud and uids[0] not in sud
+    assert "Camille MARTIN" in nord and "début" in nord
+    lot = lien_dans(nord, "lot")
+    assert app.test_client().get(lot).status_code == 200, "lien du mail hebdo mort"
 
 
 def main():
@@ -230,6 +283,7 @@ def main():
     dk = couloir_dark_kitchen(c)
     resto = couloir_restaurant(c)
     fiche_absente_si_non_declaree(c)
+    rejet_part_au_manager_de_l_etablissement(c)
     recap_liste_la_semaine([dk, resto])
 
     # lien forgé

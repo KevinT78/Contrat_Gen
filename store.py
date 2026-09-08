@@ -33,7 +33,7 @@ from datetime import datetime, timedelta, timezone
 import config
 
 ETATS = ["Soumise", "Rejetee", "ATraiter", "ContratPret", "ContratSigne",
-         "RappelDpae", "DpaeFaite", "RemisComptable", "Abandonnee"]
+         "DpaeFaite", "RemisComptable", "Abandonnee"]
 INACTIFS = {"Rejetee", "Abandonnee", "RemisComptable"}   # grises dans le suivi
 
 # Transitions permises via transition() -- le point de passage unique de tous
@@ -45,8 +45,7 @@ TRANSITIONS = {
     "Rejetee":        {"Abandonnee"},
     "ATraiter":       {"ContratPret", "Abandonnee"},
     "ContratPret":    {"ContratSigne", "Abandonnee"},
-    "ContratSigne":   {"RappelDpae", "DpaeFaite", "Abandonnee"},
-    "RappelDpae":     {"DpaeFaite", "Abandonnee"},
+    "ContratSigne":   {"DpaeFaite", "Abandonnee"},
     "DpaeFaite":      {"RemisComptable", "Abandonnee"},
     "RemisComptable": {"Abandonnee"},
 }
@@ -218,6 +217,25 @@ def fichiers(item, bucket):
     return sorted(f.name for f in d.glob("*") if f.is_file()) if d and d.is_dir() else []
 
 
+_ILLEGAL = re.compile(r'[<>:"/\\|?*\x00-\x1f]+')
+
+
+def copier_compta(item):
+    """Duplique pieces/ et contrat/ dans data/compta/<Societe>/<Prenom NOM - id>/,
+    le dossier que le cabinet recupere (miroite sur un Drive au besoin).
+    Rejouable : un renvoi ecrase la copie precedente. -> le repertoire."""
+    societe, _ = config.etablissement(config.valeur(item["champs"], "etablissement"))
+    prenom, nom = config.identite(item["champs"])
+    libelle = " ".join(p for p in (prenom, nom.upper()) if p) or "sans nom"
+    dest = (config.DONNEES / "compta" / _ILLEGAL.sub("-", societe["nom"])
+            / f"{_ILLEGAL.sub('-', libelle)} - {item['id']}")
+    for bucket in ("pieces", "contrat"):           # jamais _versions
+        (dest / bucket).mkdir(parents=True, exist_ok=True)
+        for nom_f in fichiers(item, bucket):
+            (dest / bucket / nom_f).write_bytes(ouvrir(item["id"], bucket, nom_f))
+    return dest
+
+
 def _extraire_role(nom_fichier):
     """Extrait le role d'un nom de fichier (sans extension, sans index).
 
@@ -276,8 +294,12 @@ def creer_soumission(champs, fichiers_recus):
             "champs": champs, "link_epoch": 0,
             "journal": [{"de": None, "vers": "Soumise", "le": maintenant(),
                          "par": "formulaire"}]}
-    for c in config.pieces():
-        _deposer_champ(uid, c, fichiers_recus)
+    try:
+        for c in config.pieces():
+            _deposer_champ(uid, c, fichiers_recus)
+    except ValueError:              # piece refusee : pas de dossier a moitie ne
+        shutil.rmtree(d, ignore_errors=True)
+        raise
     _ecrire(d, item)
     return uid
 

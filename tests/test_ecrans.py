@@ -94,8 +94,6 @@ def main():
     voir()                                                          # ContratPret
     c.post(f"/dossier/{uid}/contrat-signe", data={"signe": piece()}, **fichier)
     voir()                                                          # ContratSigne
-    c.post(f"/dossier/{uid}/rappel-dpae")
-    voir()                                                          # RappelDpae
     c.post(f"/dossier/{uid}/dpae-faite", data={"accuse": piece()}, **fichier)
     voir()                                                          # DpaeFaite
     c.post(f"/dossier/{uid}/remettre")

@@ -146,12 +146,12 @@ def _mail(uid, modele, a, **vals):
 # machine reste celui de store.ETATS.
 LIBELLES_ETAT = {"Soumise": "Soumise", "Rejetee": "Rejetée",
                  "ATraiter": "À traiter", "ContratPret": "Contrat prêt",
-                 "ContratSigne": "Contrat signé", "RappelDpae": "Rappel DPAE",
+                 "ContratSigne": "Contrat signé",
                  "DpaeFaite": "DPAE faite", "RemisComptable": "Remis au comptable",
                  "Abandonnee": "Abandonnée"}
 TONS_ETAT = {"Soumise": "attente", "ATraiter": "attente", "Rejetee": "ko",
              "ContratPret": "actif", "ContratSigne": "actif",
-             "RappelDpae": "actif", "DpaeFaite": "actif",
+             "DpaeFaite": "actif",
              "RemisComptable": "", "Abandonnee": ""}
 
 
@@ -265,17 +265,20 @@ def _saisie(item=None):
     for c in config.champs():
         if c["type"] == "piece_jointe":
             max_f = c.get("max_fichiers", 1)
-            if max_f > 1:
-                liste = request.files.getlist(c["id"])
-                nb = sum(1 for f in liste if f and f.filename)
-                if c.get("requis") and nb == 0 and c["role"] not in deja:
-                    erreurs.append(f"« {c['libelle'] } » est obligatoire ({max_f} fichiers attendus).")
-                elif nb > max_f:
-                    erreurs.append(f"« {c['libelle'] } » : maximum {max_f} fichiers.")
-            else:
-                f = request.files.get(c["id"])
-                if c.get("requis") and not (f and f.filename) and c["role"] not in deja:
-                    erreurs.append(f"« {c['libelle'] } » est obligatoire.")
+            liste = [f for f in request.files.getlist(c["id"]) if f and f.filename]
+            if c.get("requis") and not liste and c["role"] not in deja:
+                erreurs.append(f"« {c['libelle']} » est obligatoire"
+                               + (f" ({max_f} fichiers attendus)." if max_f > 1 else "."))
+            elif len(liste) > max_f:
+                erreurs.append(f"« {c['libelle']} » : maximum {max_f} fichiers.")
+            # Format verifie ICI, avant toute ecriture : sinon store.deposer leve
+            # en plein creer_soumission -> 500 sur le formulaire public (vecu
+            # avec un diplome envoye en .docx).
+            for f in liste:
+                ext = os.path.splitext(f.filename)[1].lower()
+                if ext not in store.EXTENSIONS:
+                    erreurs.append(f"« {c['libelle']} » : format {ext or 'sans extension'} "
+                                   "refusé — " + ", ".join(sorted(store.EXTENSIONS)) + ".")
             continue
         v = (request.form.get(c["id"]) or "").strip()
         champs[c["id"]] = v
@@ -302,7 +305,11 @@ def formulaire():
         if erreurs:
             return render_template("formulaire.html", champs=champs,
                                    erreurs=erreurs, action=url_for("formulaire"))
-        uid = store.creer_soumission(champs, request.files)
+        try:                                      # reste : taille d'un fichier
+            uid = store.creer_soumission(champs, request.files)
+        except ValueError as e:
+            return render_template("formulaire.html", champs=champs,
+                                   erreurs=[str(e)], action=url_for("formulaire"))
         ok = _mail(uid, "nouvelle_soumission", config.instance()["mails"]["rh"],
                    nom=_nom(champs), id=uid,
                    lien=url_for("detail", uid=uid, _external=True))
@@ -333,7 +340,11 @@ def corriger(jeton):
         if erreurs:
             return render_template("formulaire.html", champs=champs, erreurs=erreurs,
                                    ko=ko, action=request.path)
-        store.resoumettre(item["id"], champs, request.files)
+        try:
+            store.resoumettre(item["id"], champs, request.files)
+        except ValueError as e:
+            return render_template("formulaire.html", champs=champs, erreurs=[str(e)],
+                                   ko=ko, action=request.path)
         ok = _mail(item["id"], "nouvelle_soumission",
                    config.instance()["mails"]["rh"], nom=_nom(champs),
                    id=item["id"],
@@ -374,7 +385,7 @@ def detail(uid):
                            produits=store.fichiers(item, "contrat"),
                            manquantes=store.manquantes(item),
                            motifs=config.instance()["motifs_ko"],
-                           champ=config.champ, saisie_rh=config.saisie_rh(),
+                           champ=config.champ, saisie_rh=config.saisie_rh_champs(),
                            nom_affiche=_nom(item["champs"]),
                            mode_contrat=config.mode_contrat(config.valeur(item["champs"], "etablissement")),
                            signature_esign=config.instance().get("signature", {})
@@ -454,9 +465,32 @@ def valider(uid):
     except ValueError as e:                       # déjà un dossier (double-clic / course)
         flash(str(e), "erreur")
         return redirect(url_for("detail", uid=uid))
-    _fiche_salarie(store.lire(uid))
-    flash("Soumission acceptée : dossier salarié ouvert.", "ok")
+    item = store.lire(uid)
+    _fiche_salarie(item)
+    ok = _rappel_dpae(item)
+    flash("Soumission acceptée : dossier salarié ouvert, rappel DPAE envoyé." if ok
+          else "Soumission acceptée, mais le rappel DPAE n'est PAS parti — voir le journal.",
+          "ok" if ok else "erreur")
     return redirect(url_for("detail", uid=uid))
+
+
+def _rappel_dpae(item):
+    """Effet de la validation, pas un etat : le rappel part dans la meme requete
+    (pas de cron = pas de second process ecrivain, cf. store._verrou), avec les
+    donnees que la DPAE reclame et qui sont deja dans le dossier."""
+    conf = config.instance()["mails"]
+    champs = item["champs"]
+    try:
+        m = config.mentions(config.valeur(champs, "etablissement"))
+    except KeyError:
+        m = {}
+    return _mail(item["id"], "rappel_dpae", conf.get("dpae") or conf["rh"],
+                 nom=_nom(champs),
+                 debut=_date_fr(config.valeur(champs, "date_debut")) or "—",
+                 poste=config.valeur(champs, "poste"),
+                 societe=m.get("Societe", ""), etablissement=m.get("Etablissement", ""),
+                 siret=m.get("Siret", ""),
+                 lien=url_for("detail", uid=item["id"], _external=True))
 
 
 @app.post("/dossier/<uid>/rejeter")
@@ -471,8 +505,12 @@ def rejeter(uid):
     item = store.lire(uid)
     lien = url_for("corriger", jeton=store.signer("correction", uid, item["link_epoch"]),
                    _external=True)
-    ok = _mail(uid, "rejet", _email_demandeur(item["champs"]),
-               motif=motif, commentaire=commentaire, lien=lien,
+    # Le lien de correction part a l'adresse FIXE du manager de l'etablissement
+    # (societes.json), pas a celle tapee dans le formulaire public ; l'email
+    # saisi ne sert que de repli pour un etablissement qui n'en declare pas.
+    a = (config.manager(config.valeur(item["champs"], "etablissement"))
+         or _email_demandeur(item["champs"]))
+    ok = _mail(uid, "rejet", a, motif=motif, commentaire=commentaire, lien=lien,
                nom=_nom(item["champs"]))
     flash("Demande rejetée, lien de correction envoyé." if ok
           else "Demande rejetée, mais le mail n'est pas parti : le manager n'a "
@@ -619,22 +657,6 @@ def signature_verifier(uid):
     return redirect(url_for("detail", uid=uid))
 
 
-@app.post("/dossier/<uid>/rappel-dpae")
-@rh
-def rappel_dpae(uid):
-    item = _transition(uid, "RappelDpae")
-    if not item:
-        return redirect(url_for("detail", uid=uid))
-    conf = config.instance()["mails"]
-    ok = _mail(uid, "rappel_dpae", conf.get("dpae") or conf["rh"],
-               nom=_nom(item["champs"]),
-               debut=config.valeur(item["champs"], "date_debut"),
-               lien=url_for("detail", uid=uid, _external=True))
-    flash("Rappel DPAE envoyé." if ok
-          else "Rappel DPAE NON envoyé — voir le journal.", "ok" if ok else "erreur")
-    return redirect(url_for("detail", uid=uid))
-
-
 @app.post("/dossier/<uid>/dpae-faite")
 @rh
 def dpae_faite(uid):
@@ -656,36 +678,29 @@ def dpae_faite(uid):
     return redirect(url_for("detail", uid=uid))
 
 
-def _avis_comptable(item, epoch):
-    lien = url_for("lot", jeton=store.signer("lot_comptable", item["id"], epoch),
-                   _external=True)
-    ok = _mail(item["id"], "avis_comptable",
-               config.comptable(config.valeur(item["champs"], "etablissement")),
-               nom=_nom(item["champs"]), id=item["id"], lien=lien)
-    return ok, lien
-
-
 @app.post("/dossier/<uid>/remettre")
 @rh
 def remettre(uid):
+    # Plus de mail par dossier : la remise DUPLIQUE le dossier dans data/compta/
+    # et le cabinet recoit un seul mail hebdomadaire (recap.py) avec un lien
+    # de lot par dossier remis dans la semaine.
     item = _transition(uid, "RemisComptable")
     if not item:
         return redirect(url_for("detail", uid=uid))
-    ok, _ = _avis_comptable(item, item.get("lien_comptable_epoch", 0))
-    flash("Remis au cabinet comptable." if ok
-          else "Dossier remis, mais l'avis n'est pas parti — voir le journal.",
-          "ok" if ok else "erreur")
+    dest = store.copier_compta(item)
+    flash(f"Remis au cabinet comptable — copie dans {dest.relative_to(config.DONNEES)}. "
+          "Le lien partira dans le mail hebdomadaire.", "ok")
     return redirect(url_for("detail", uid=uid))
 
 
 @app.post("/dossier/<uid>/renvoyer")
 @rh
 def renvoyer(uid):
-    epoch = store.bump_epoch(uid, "lien_comptable_epoch")     # tue l'ancien lien
-    item = store.lire(uid)
-    _avis_comptable(item, epoch)
+    store.bump_epoch(uid, "lien_comptable_epoch")             # tue l'ancien lien
+    store.copier_compta(store.lire(uid))
     store.noter(uid, type="renvoi_comptable", par=session["utilisateur"])
-    flash("Nouvel avis envoyé, l'ancien lien est révoqué.", "ok")
+    flash("Copie refaite, l'ancien lien est révoqué ; le dossier repartira dans "
+          "le prochain mail hebdomadaire.", "ok")
     return redirect(url_for("detail", uid=uid))
 
 
@@ -742,7 +757,8 @@ def lot_fichier(jeton, bucket, nom):
     return _servir(store.ouvrir(item["id"], bucket, nom), nom, bucket)
 
 
-if __name__ == "__main__":
+def demarrer():
+    """Verifie la config puis sert (waitress, ou Werkzeug si DEBUG)."""
     for zone in ("soumissions", "documents"):
         (config.DONNEES / zone).mkdir(parents=True, exist_ok=True)
     # Refus dur : installation incomplete (secret/mdp par defaut, aucun
@@ -775,3 +791,7 @@ if __name__ == "__main__":
         hote = os.environ.get("HOST", "127.0.0.1")
         print(f"waitress sur {hote}:{port} (mono-process, 4 threads)", flush=True)
         serve(app, host=hote, port=port, threads=4)
+
+
+if __name__ == "__main__":
+    demarrer()

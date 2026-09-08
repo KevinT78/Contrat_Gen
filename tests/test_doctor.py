@@ -36,10 +36,10 @@ CONF = BASE / "config"
 INSTANCE = {
     "config_version": 1,
     "client": "ACME",
-    "secret": "a" * 64,
+    "secret": "a" * 64, "url": "http://localhost",
     "signature": {"mode": "manuel"},
     "mails": {"mode": "console", "hote": "", "port": 587, "utilisateur": "",
-              "mot_de_passe": "", "expediteur": "", "rh": [],
+              "mot_de_passe": "", "expediteur": "rh@acme.example", "rh": ["rh@acme.example"],
               "dpae": None, "recap": None, "comptable_defaut": "c@acme.example"},
     "utilisateurs": {"rh": {"mdp_hash": generate_password_hash("pas-demo")}},
     "motifs_ko": ["Autre"],

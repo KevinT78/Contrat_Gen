@@ -12,6 +12,7 @@
     },
     "etablissements": [
       {"nom": "Paris Opéra", "siret": "884 512 336 00019",
+       "manager_email": "opera@example.com",
        "mentions": {"AdresseEtablissement": "8 boulevard des Capucines, 75009 Paris"}},
       {"nom": "Lille Grand Place", "siret": "884 512 336 00027",
        "mentions": {"AdresseEtablissement": "3 place du Général de Gaulle, 59000 Lille"}}

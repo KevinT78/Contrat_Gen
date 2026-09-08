@@ -14,8 +14,9 @@
   <div class="grille-champs">
   {% for c in schema.champs %}
     {% set v = champs.get(c.id) or c.defaut or '' %}
-    <div class="champ {{ 'pleine' if c.type in ('texte_long', 'piece_jointe') }}">
-    <label for="{{ c.id }}">{{ c.libelle }}{% if c.requis %} *{% endif %}
+    <div class="champ {{ 'pleine' if c.type in ('texte_long', 'piece_jointe') }}"
+         {% if c.requis_si %}data-si="{{ c.requis_si[0] }}" data-vaut="{{ c.requis_si[1] }}"{% endif %}>
+    <label for="{{ c.id }}">{{ c.libelle }}{% if c.requis or c.requis_si %} *{% endif %}
       {% if c.aide %}<span class="aide">— {{ c.aide }}</span>{% endif %}</label>
     {% if c.type == 'choix' %}
       <select name="{{ c.id }}" id="{{ c.id }}">
@@ -24,6 +25,10 @@
           <option value="{{ o }}" {{ 'selected' if o == v }}>{{ o }}</option>
         {% endfor %}
       </select>
+    {% elif c.type == 'etablissement' and etablissements|length == 1 %}
+      {# site unique : rien a choisir, le champ reste requis pour le moteur #}
+      <input type="text" name="{{ c.id }}" id="{{ c.id }}" readonly
+             value="{{ etablissements[0][0] }}">
     {% elif c.type == 'etablissement' %}
       <select name="{{ c.id }}" id="{{ c.id }}">
         <option value="">—</option>
@@ -58,4 +63,15 @@
     <span class="indice" style="margin:0">Les champs marqués * sont obligatoires.</span>
   </div>
 </form>
+<script>
+  // Champs conditionnels (requis_si) : masques tant que la condition n'est pas
+  // remplie. Le serveur revalide de toute facon ; ici c'est du confort.
+  document.querySelectorAll('[data-si]').forEach(function (bloc) {
+    var pilote = document.getElementById(bloc.dataset.si);
+    if (!pilote) return;
+    var maj = function () { bloc.hidden = pilote.value !== bloc.dataset.vaut; };
+    pilote.addEventListener('change', maj);
+    maj();
+  });
+</script>
 {% endblock %}

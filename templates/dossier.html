@@ -20,7 +20,7 @@
   <span class="filet"></span><code>{{ item.id }}</code></p>
 
 {% if etat not in ('Rejetee', 'Abandonnee') %}
-  {% set ici = flux.index('ContratSigne' if etat == 'RappelDpae' else etat) %}
+  {% set ici = flux.index(etat) %}
   <ul class="etapes">
     {% for e in flux %}
       <li class="{{ 'ici' if loop.index0 == ici else 'faite' if loop.index0 < ici }}">
@@ -79,9 +79,11 @@
     {% else %}
     <form method="post" action="{{ url_for('generer_contrat', uid=item.id) }}">
       <div class="grille-champs">
-        {% for ph in saisie_rh %}
-          <div class="champ"><label for="rh-{{ ph }}">{{ ph }}</label>
-            <input name="{{ ph }}" id="rh-{{ ph }}" value="{{ item.champs.get(ph, '') }}"></div>
+        {% for s in saisie_rh %}
+          <div class="champ"><label for="rh-{{ s.placeholder }}">{{ s.libelle }}
+              {% if s.aide %}<span class="aide">— {{ s.aide }}</span>{% endif %}</label>
+            <input name="{{ s.placeholder }}" id="rh-{{ s.placeholder }}"
+                   value="{{ item.champs.get(s.placeholder, '') }}"></div>
         {% endfor %}
       </div>
       <button>Générer le contrat</button>
@@ -110,15 +112,9 @@
     </form>
     <p class="indice">Le dossier passe à l'étape DPAE une fois le contrat signé déposé.</p>
 
-  {% elif etat in ('ContratSigne', 'RappelDpae') %}
+  {% elif etat == 'ContratSigne' %}
     <p class="titre-carte">Déclaration préalable à l'embauche</p>
-    {% if etat == 'ContratSigne' %}
-    <div class="actions">
-      <form method="post" action="{{ url_for('rappel_dpae', uid=item.id) }}">
-        <button class="discret">Envoyer le rappel DPAE</button></form>
-    </div>
-    <hr class="sep">
-    {% endif %}
+    <p class="indice">Le rappel DPAE est parti à la validation de la demande.</p>
     <form method="post" action="{{ url_for('dpae_faite', uid=item.id) }}"
           enctype="multipart/form-data" class="actions">
       <div class="champ" style="flex:1 1 320px">
@@ -133,16 +129,17 @@
       <form method="post" action="{{ url_for('remettre', uid=item.id) }}">
         <button>Remettre au cabinet comptable</button></form>
     </div>
-    <p class="indice">Un lien de téléchargement personnel, valable 30 jours,
-      sera envoyé au cabinet.</p>
+    <p class="indice">Le dossier est copié dans <code>data/compta/</code> ; le cabinet
+      reçoit son lien de téléchargement (valable 30 jours) dans le mail hebdomadaire.</p>
 
   {% elif etat == 'RemisComptable' %}
     <p class="titre-carte">Lien comptable</p>
     <div class="actions">
       <form method="post" action="{{ url_for('renvoyer', uid=item.id) }}">
-        <button class="discret">Renvoyer au comptable</button></form>
+        <button class="discret">Refaire la copie et le lien</button></form>
     </div>
-    <p class="indice">Le renvoi révoque le lien précédent.</p>
+    <p class="indice">Révoque le lien précédent ; le dossier repart dans le prochain
+      mail hebdomadaire.</p>
 
   {% else %}
     <p class="titre-carte">Dossier clos</p>

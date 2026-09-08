@@ -40,7 +40,30 @@ réinstallation par-dessus un `config/` existant est **refusée**.
 
 Il faut ensuite remplir `config/` puis démarrer. **Le démarrage refuse de servir**
 tant que l'installation est incomplète : secret encore par défaut, compte RH au
-mot de passe par défaut, ou aucun établissement déclaré (`config.verifier()`).
+mot de passe par défaut, aucun établissement déclaré, `mails.rh` /
+`mails.expediteur` vides, ou `url` (adresse publique, base des liens du mail
+hebdo) vide (`config.verifier()`). Sans destinataire RH, chaque
+demande partirait en `mail_echoue` dans le journal sans que personne ne le voie.
+
+`configurer.py` rend ce garde-fou lisible **avant** de lancer le serveur, et
+enchaîne `placeholders` puis `doctor` dès que la config passe :
+
+```bash
+CONFIG_DIR=/srv/acme/config python configurer.py             # bilan : chaque manque, et le fichier à ouvrir
+CONFIG_DIR=/srv/acme/config python configurer.py --assister  # pose les questions (mails, comptes, société), boucle jusqu'à OK
+CONFIG_DIR=/srv/acme/config python configurer.py compte marc # ajoute ou remplace un compte
+```
+
+L'assistant n'écrit que ce qui se dicte : adresses, comptes, société et
+établissements, secret. Rôles, balisage des modèles et grille restent à éditer
+à la main ; il montre où, puis revérifie.
+
+Un compte par personne qui valide : `installer.py` ne crée que `rh`, les autres
+s'ajoutent avec `python configurer.py compte <ident>` (mot de passe demandé, hash
+écrit dans le bloc `utilisateurs` de `instance.json`).
+
+Tous les comptes ont les mêmes droits ; le journal de chaque dossier porte qui a
+fait quoi.
 Un secret par défaut rend les liens du lot comptable forgeables, un mot de passe
 par défaut ouvre des pièces d'identité — c'est une frontière de confiance.
 
@@ -196,9 +219,25 @@ invalide ne prend pas : l'ancienne reste active et l'écran dit ce qui cloche.
                 "SiegeSocial": "...", "ConventionCollective": "..."},
    "etablissements": [
      {"nom": "Bastille", "siret": "111 222 333 00011", "contrat": "genere",
+      "manager_email": "bastille@acme.example",
       "mentions": {"AdresseEtablissement": "..."}}]}
 ]
 ```
+
+`manager_email` est l'adresse **fixe** du manager de l'établissement : le mail de
+rejet (lien de correction) y part, quel que soit l'email tapé dans le formulaire ;
+sans elle, il retombe sur l'email saisi.
+
+### Qui reçoit quoi
+
+Expéditeur unique : `mails.expediteur`.
+
+| Quand | Modèle | Destinataire |
+|---|---|---|
+| Soumission ou correction du formulaire | `nouvelle_soumission` | `mails.rh` |
+| Rejet par la RH | `rejet` | `manager_email` de l'établissement, repli email saisi |
+| Validation par la RH | `rappel_dpae` | `mails.dpae`, repli `mails.rh` |
+| Cron hebdomadaire (`recap.py`) | `recap_hebdo` | le cabinet de chaque société, `mails.rh` en copie |
 
 Le **multi-société** *à l'intérieur* d'un client reste possible :
 `config/societes.json` de Wingstop contient « Wingstop France » et « Wingstop Sud »,
@@ -227,6 +266,12 @@ Les deux voies mènent à `ContratPret`, puis à `ContratSigne`.
 
 ## La démo en 5 minutes
 
+`python demo.py` remet `data_demo/` à zéro, amorce trois dossiers à des étapes
+différentes (demande reçue, contrat prêt, remis au cabinet) sur la config
+Wingstop (`config_wingstop/`, hors dépôt) et sert sur `:5000` — identifiants
+`rh` / `wingstop-rh`. Le déroulé ci-dessous vaut aussi pour la fixture `config/`
+(`rh` / `fixture`).
+
 1. `http://localhost:5000` — le formulaire, **rendu depuis `config/formulaire.json`**.
    Remplir, joindre 3 fichiers PDF/JPG.
 2. `http://localhost:5000/login` — `rh` / `fixture`. Le suivi liste soumissions
@@ -234,14 +279,19 @@ Les deux voies mènent à `ContratPret`, puis à `ContratSigne`.
 3. Ouvrir la demande → **Rejeter** avec un motif → mail de KO avec **lien signé de
    correction** dans la console : l'ouvrir, corriger. L'ancien lien est mort.
 4. **Accepter** → dossier salarié (même ULID, changement de zone) ; la **fiche
-   salarié** est générée dans `contrat/`. Selon l'établissement : **Générer** ou
-   **Déposer** le contrat.
-5. **Déposer le contrat signé** → `ContratSigne`.
-6. **DPAE** : rappel puis dépôt de l'accusé (refusé sans pièce, refusé avant
-   signature). **Remettre au comptable** → mail au cabinet **de la société
-   concernée** avec un lien signé ; la page sans login offre « Tout télécharger
-   (.zip) » (pièces + contrat + contrat signé + fiche + accusé). **Renvoyer** →
-   l'ancien lien renvoie 410.
+   salarié** est générée dans `contrat/` et le **rappel DPAE** part aussitôt à
+   `mails.dpae` (repli `rh`) avec nom, poste, date de début, employeur et SIRET.
+   Selon l'établissement : **Générer** ou **Déposer** le contrat.
+5. **Déposer le contrat signé** → `ContratSigne`. La signature électronique
+   (Yousign) est optionnelle ; par défaut c'est un dépôt manuel du PDF signé.
+6. **DPAE** : dépôt de l'accusé (refusé sans pièce, refusé avant
+   signature). **Remettre au comptable** → le dossier est **dupliqué** dans
+   `data/compta/<Société>/<Prénom NOM - id>/` (pièces + contrat + contrat signé +
+   fiche + accusé), miroitable sur un Drive. Aucun mail à ce moment : le cabinet
+   **de la société concernée** reçoit le lien signé dans le mail hebdomadaire
+   (`recap.py`) ; la page sans login offre « Tout télécharger (.zip) ».
+   **Refaire la copie et le lien** → l'ancien lien renvoie 410, le dossier repart
+   dans le prochain mail hebdo.
 
 Les mails ne partent pas : `"mode": "console"` les écrit dans `data/mails/*.eml`.
 Passer à `"smtp"` pour de vrais envois ; la variable d'env `MAILS_MODE` surclasse
@@ -253,15 +303,20 @@ sont imposés ; sans identifiant, l'envoi part en clair (catcher local type Mail
 `config/instance.json` n'est pas modifié. MailHog s'installe via
 `scoop install mailhog` ou depuis les *releases* GitHub `mailhog/MailHog`.
 
-## Récap hebdomadaire des nouveaux salariés
+## Mail hebdomadaire au cabinet comptable
 
 ```bash
-python recap.py            # 7 derniers jours
+python recap.py            # dossiers remis ces 7 derniers jours
 python recap.py --jours 14
 ```
 
-Fenêtre dérivée du journal (entrée `vers == ATraiter`). Destinataires
-`config/instance.json → mails.recap` (repli sur `mails.rh`). Aucun scheduler dans
+**Un mail par cabinet** (`comptable_email` de la société, repli
+`mails.comptable_defaut`), la RH en copie (`mails.recap`, repli `mails.rh`) : les
+dossiers remis au comptable sur la fenêtre (journal `vers == RemisComptable`, ou
+un renvoi), chacun avec son **lien de lot signé** (30 jours). Un cabinet ne voit
+jamais les dossiers d'une autre société ; aucun mail à un cabinet sans dossier.
+Les liens sont fabriqués hors requête : `instance.json → url` (adresse publique
+de l'app) est obligatoire, le démarrage le refuse vide. Aucun scheduler dans
 l'app — à mettre en cron / Tâche planifiée côté client, par ex. :
 
 ```cron
@@ -338,9 +393,11 @@ data/
 `DONNEES` est surchargeable par variable d'environnement (c'est ce dont les
 tests se servent). `dossier.json` porte un **journal append-only** qui fait foi
 sur l'état ; un fichier présent est une preuve corroborante, jamais décisive.
-Écritures temp-puis-rename avec verrou par id. 9 états :
-`Soumise → Rejetee / ATraiter → ContratPret → ContratSigne → RappelDpae →
-DpaeFaite → RemisComptable`, plus `Abandonnee`. Les transitions permises sont
+Écritures temp-puis-rename avec verrou par id. 8 états :
+`Soumise → Rejetee / ATraiter → ContratPret → ContratSigne →
+DpaeFaite → RemisComptable`, plus `Abandonnee`. Le rappel DPAE n'est pas un
+état : c'est un effet de la validation, tracé dans le journal seulement s'il
+échoue (`mail_echoue`). Les transitions permises sont
 dans `store.TRANSITIONS` — un `POST` hors séquence est refusé côté serveur, pas
 seulement caché dans le template.
 
@@ -356,13 +413,15 @@ seulement caché dans le template.
 | `signature.py` | e-sign Yousign, optionnel, désactivé par défaut |
 | `installer.py` | crée l'instance d'un nouveau client depuis `config.exemple/` |
 | `placeholders.py` | fiche des `{{Jetons}}` à remettre au client, dérivée de sa config |
-| `recap.py` | récap hebdomadaire des nouveaux salariés (CLI, à mettre en cron) |
+| `recap.py` | mail hebdomadaire au cabinet : dossiers remis + liens de lot (CLI, à mettre en cron) |
 | `doctor.py` | couverture de la config, vérifiée en produisant les contrats |
+| `configurer.py` | bilan de config lisible, assistant interactif, ajout de comptes |
 | `tests/test_parcours.py` | les deux couloirs, signature, fiche, récap, refus attendus |
 | `tests/test_signature.py` | `signature.py` contre un transport factice |
 | `tests/test_clients.py` | plusieurs clients factices, une instance chacun, étanches |
 | `tests/test_produit.py` | balisage client refusé si mal écrit, fiche dérivée, config versionnée, rechargement à chaud |
 | `tests/test_mails.py` | mode console, override `MAILS_MODE`, STARTTLS+login imposés dès qu'un identifiant SMTP est présent |
+| `tests/test_configurer.py` | bilan sous cp1252 (sous-processus, pipe), assistant scripté, comptes |
 
 ## Ce que le squelette ne fait pas encore
 

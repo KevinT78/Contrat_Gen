@@ -7,3 +7,9 @@ config/PLACEHOLDERS.md
 .scratch/
 _wingstop_reel/
 config_wingstop/
+data_demo/
+# notes de travail internes, non versionnees
+AUDIT-DIAGRAMME.md
+NOTES-infra.md
+SCENARIOS.md
+VERIFICATION-DEPLOIEMENT.md

@@ -12,6 +12,7 @@ Sans `utilisateur` configure, l'envoi SMTP part en clair sans login : c'est
 le cas d'un catcher local (MailHog). Des qu'un identifiant est present, TLS
 verifie + login sont imposes.
 """
+import itertools
 import os
 import smtplib
 import ssl
@@ -19,6 +20,8 @@ from email.message import EmailMessage
 
 import config
 import store
+
+_SERIE = itertools.count()
 
 
 class _Tolerant(dict):
@@ -33,12 +36,13 @@ def rendre(modele, vals):
     return objet.removeprefix("Objet:").strip().format_map(vals), corps.strip().format_map(vals)
 
 
-def envoyer(modele, a, **vals):
+def envoyer(modele, a, cc=(), **vals):
     """-> (True, None) ou (False, raison). Un echec n'annule jamais une transition."""
     conf = config.instance()["mails"]
     destinataires = [d for d in (a if isinstance(a, list) else [a]) if d]
     if not destinataires:
         return False, "aucun destinataire configure"
+    copie = [d for d in cc if d and d not in destinataires]
 
     # MAILS_MODE surclasse le fichier : le .bat MailHog met "smtp" sans toucher a
     # instance.json, qui reste sur "console" pour la suite de tests.
@@ -48,14 +52,21 @@ def envoyer(modele, a, **vals):
         msg = EmailMessage()
         msg["From"] = conf["expediteur"]
         msg["To"] = ", ".join(destinataires)
+        if copie:
+            msg["Cc"] = ", ".join(copie)
         msg["Subject"] = objet
         msg.set_content(corps)
 
         if mode == "console":
             d = config.DONNEES / "mails"
             d.mkdir(parents=True, exist_ok=True)
-            (d / f"{store.maintenant().replace(':', '-')}-{modele}.eml").write_bytes(bytes(msg))
-            print(f"\n[MAIL {modele}] -> {msg['To']}\nObjet: {objet}\n{corps}\n", flush=True)
+            # Le compteur separe deux mails de la meme seconde (un par cabinet
+            # dans recap.py) : le second ecrasait le premier.
+            nom = f"{store.maintenant().replace(':', '-')}-{next(_SERIE):03d}-{modele}.eml"
+            (d / nom).write_bytes(bytes(msg))
+            print(f"\n[MAIL {modele}] -> {msg['To']}"
+                  + (f" (cc {msg['Cc']})" if copie else "")
+                  + f"\nObjet: {objet}\n{corps}\n", flush=True)
             return True, None
 
         with smtplib.SMTP(conf["hote"], conf["port"], timeout=20) as s:

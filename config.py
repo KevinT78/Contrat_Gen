@@ -93,6 +93,17 @@ def comptable(cle):
     return s.get("comptable_email") or instance()["mails"]["comptable_defaut"]
 
 
+def manager(cle):
+    """Adresse fixe du manager de l'etablissement (societes.json), ou ""."""
+    _, e = etablissement(cle)
+    return e.get("manager_email", "")
+
+
+def url_publique():
+    """Base des liens fabriques hors requete (recap.py) : instance.json -> url."""
+    return (instance().get("url") or "").rstrip("/")
+
+
 def mode_contrat(cle):
     """Couloir du schema, en donnee : 'genere' (Dark Kitchen) ou 'depose'
     (Restaurant, contrat fait a la main sur myrhis). Absent = 'genere'."""
@@ -134,8 +145,22 @@ def derives():
 
 def saisie_rh():
     """Placeholders qu'aucune question du formulaire ne fournit : la RH les
-    saisit a la generation du contrat."""
-    return instance().get("saisie_rh", [])
+    saisit a la generation du contrat. Noms seuls ; voir saisie_rh_champs."""
+    return [c["placeholder"] for c in saisie_rh_champs()]
+
+
+def saisie_rh_champs():
+    """Chaque entree de saisie_rh est soit "Placeholder", soit
+    {"placeholder", "libelle", "aide"} -> toujours rendue sous la forme dict,
+    libelle par defaut = nom du placeholder."""
+    out = []
+    for c in instance().get("saisie_rh", []):
+        if isinstance(c, str):
+            c = {"placeholder": c}
+        out.append({"placeholder": c["placeholder"],
+                    "libelle": c.get("libelle") or c["placeholder"],
+                    "aide": c.get("aide", "")})
+    return out
 
 
 def critiques():
@@ -319,6 +344,23 @@ def _verifier_installation():
                                 "config/instance.json (bloc utilisateurs)"]
     if not etablissements():
         manques["établissements"] = ["aucun établissement dans config/societes.json"]
+    # Sans destinataire RH, chaque soumission part en `mail_echoue` dans le
+    # journal et personne ne le voit : deux instances de test ont servi comme
+    # ca, verifier() disant OK. Un mail sans expediteur est refuse par un
+    # relais SMTP reel, autant le dire avant le passage en mode smtp.
+    m = instance().get("mails") or {}
+    if not [d for d in (m.get("rh") or []) if d]:
+        manques["mails"] = ["« rh » vide : aucune adresse ne recevrait les demandes "
+                            "à valider — renseignez mails.rh dans instance.json"]
+    if not (m.get("expediteur") or "").strip():
+        manques.setdefault("mails", []).append(
+            "« expediteur » vide : renseignez l'adresse d'envoi dans mails")
+    # Le mail hebdo au cabinet est fabrique hors requete (cron) : sans base
+    # d'URL il partirait avec des liens vides, et personne ne lit la sortie
+    # d'un cron -- meme trou que mails.rh, refuse au meme endroit.
+    if not url_publique():
+        manques["url"] = ["vide : l'adresse publique de l'app (ex. https://embauche.acme.fr), "
+                          "base des liens du mail hebdomadaire au cabinet"]
     return manques
 
 

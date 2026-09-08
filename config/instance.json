@@ -1,6 +1,7 @@
 {
   "client": "Démo — fixture de test (ne pas déployer)",
   "secret": "fixture-de-test-publique-non-secrete-ne-jamais-deployer",
+  "url": "http://localhost",
 
   "signature": {"mode": "manuel"},
 
@@ -14,7 +15,6 @@
     "mot_de_passe": "",
     "expediteur": "rh@example.com",
     "rh": ["rh@example.com"],
-    "superviseur": "superviseur@example.com",
     "dpae": null,
     "recap": null,
     "comptable_defaut": "cabinet@example.com"

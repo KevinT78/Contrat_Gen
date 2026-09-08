@@ -15,6 +15,10 @@ from pathlib import Path
 
 from docx import Document
 from htmldocx import HtmlToDocx
+# htmldocx passe le HTML entier a BeautifulSoup, qui croit y voir un nom de
+# fichier des qu'il est court : avertissement sans objet, il pollue la console.
+import warnings
+warnings.filterwarnings("ignore", message=".*looks more like a filename.*")
 from num2words import num2words
 
 MOIS_FR = ["janvier", "février", "mars", "avril", "mai", "juin", "juillet",

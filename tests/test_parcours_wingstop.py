@@ -100,10 +100,15 @@ def parcours_manager(c):
     assert "Correction envoyée" in r.text
     assert c.get(lien).status_code == 410
 
-    # validation -> dossier ; pas de fiche salarié (non déclarée pour Wingstop)
+    # validation -> dossier + fiche salarié .docx (déclarée dans instance.json)
+    # + rappel DPAE (effet de la validation) avec poste, SIRET, lien
     c.post(f"/dossier/{uid}/valider")
     item = store.lire(uid)
     assert item["_zone"] == "documents" and store.etat(item) == "ATraiter"
+    assert "fiche-salarie.docx" in store.fichiers(item, "contrat"), "fiche salarié absente"
+    rappel = dernier_mail("rappel_dpae")
+    for attendu in ("NKEMBA Awa", "Manager", "943 142 067 00050", "/dossier/"):
+        assert attendu in rappel, f"« {attendu} » absent du rappel DPAE :\n{rappel}"
 
     # l'écran dossier expose les champs de saisie RH
     page = c.get(f"/dossier/{uid}").text
@@ -131,7 +136,6 @@ def parcours_manager(c):
     c.post(f"/dossier/{uid}/contrat-signe", data={"signe": piece()},
            content_type="multipart/form-data")
     assert store.etat(store.lire(uid)) == "ContratSigne"
-    c.post(f"/dossier/{uid}/rappel-dpae")
     c.post(f"/dossier/{uid}/dpae-faite", data={"accuse": piece()},
            content_type="multipart/form-data")
     assert store.etat(store.lire(uid)) == "DpaeFaite"
@@ -139,9 +143,8 @@ def parcours_manager(c):
     item = store.lire(uid)
     assert store.etat(item) == "RemisComptable"
 
-    mail = dernier_mail("avis_comptable")
-    assert "compta@wingflavors.example" in mail
-    lot = re.search(r"http://localhost/lot/[\w.=-]+", mail).group(0)
+    assert (config.DONNEES / "compta").is_dir(), "pas de copie compta à la remise"
+    lot = "/lot/" + store.signer("lot_comptable", uid, item.get("lien_comptable_epoch", 0))
     z = zipfile.ZipFile(BytesIO(app.test_client().get(lot + "/zip").data))
     assert "contrat/contrat.docx" in z.namelist(), z.namelist()
     assert "contrat/contrat-signe.pdf" in z.namelist()

@@ -23,8 +23,8 @@ from docx import Document
 
 sys.stdout.reconfigure(encoding="utf-8")
 RACINE = Path(__file__).resolve().parent.parent
-CODE = ["app.py", "config.py", "contrat.py", "mails.py", "signature.py",
-        "store.py", "installer.py", "recap.py", "placeholders.py", "doctor.py"]
+CODE = ["app.py", "config.py", "contrat.py", "mails.py", "signature.py", "configurer.py",
+        "store.py", "installer.py", "recap.py", "placeholders.py", "doctor.py", "demo.py"]
 
 MENTIONS = ["RaisonSociale", "FormeCapital", "RCS", "SiegeSocial", "ConventionCollective"]
 
@@ -174,6 +174,9 @@ def installer_copie(base, client):
     inst["templates"] = {p: "contrat.docx" for p in client.get(
         "postes", ("Équipier polyvalent", "Assistant manager", "Manager"))}
     inst["fiche_salarie"] = "fiche_salarie.docx"
+    inst["url"] = "http://localhost"
+    inst["mails"].update(expediteur=f"rh@{client['slug']}.example",
+                         rh=[f"rh@{client['slug']}.example"])
     (copie / "config" / "instance.json").write_text(
         json.dumps(inst, ensure_ascii=False, indent=2), encoding="utf-8")
     modele_docx(copie / "config" / "contrats" / "contrat.docx", [

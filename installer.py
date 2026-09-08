@@ -59,6 +59,10 @@ Instance « {nom} » créée dans {cible}
   5. déposer les .docx reçus dans {config}/contrats/, puis les déclarer
      dans "templates" (poste -> fichier)
 
+À tout moment :
+  CONFIG_DIR={config} python configurer.py             <- bilan : ce qui manque, et où
+  CONFIG_DIR={config} python configurer.py --assister  <- guidé, question par question
+
 Puis :
   CONFIG_DIR={config} DONNEES={cible}/data python app.py
 """)
