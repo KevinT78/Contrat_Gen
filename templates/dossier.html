@@ -48,14 +48,17 @@
     <p class="titre-carte">Rejeter et demander une correction</p>
     <form method="post" action="{{ url_for('rejeter', uid=item.id) }}">
       <div class="grille-champs">
-        <div class="champ"><label for="motif">Motif du rejet</label>
+        <div class="champ"><label for="motif">Motif du rejet *</label>
           <select name="motif" id="motif">
             {% for m in motifs %}<option>{{ m }}</option>{% endfor %}</select></div>
-        <div class="champ"><label for="commentaire">Commentaire (obligatoire)</label>
+        <div class="champ"><label for="commentaire">Commentaire *</label>
           <input name="commentaire" id="commentaire"
                  placeholder="Ce que le candidat doit corriger"></div>
       </div>
-      <button class="danger">Rejeter</button>
+      <div class="actions">
+        <button class="danger">Rejeter</button>
+        <span class="indice" style="margin:0">Les champs marqués * sont obligatoires.</span>
+      </div>
     </form>
 
   {% elif etat == 'Rejetee' %}
