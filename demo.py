@@ -46,7 +46,7 @@ def piece():
 
 def saisie(**over):
     c = {
-        "etablissement": "Wing Kitchen / Boulogne (DK)", "poste": "Equipier Polyvalent",
+        "etablissement": "Wing Kitchen Boulogne / Boulogne (DK)", "poste": "Equipier Polyvalent",
         "civilite": "Madame", "nom_prenom": "BENALI Sarah", "date_naissance": "2001-02-11",
         "telephone": "0612345678", "email": "sarah.benali@example.com",
         "adresse": "4 rue Gallieni, 92100 Boulogne-Billancourt",
@@ -71,10 +71,6 @@ def soumettre(c, s):
     return max(i["id"] for i in store.tout())
 
 
-PLANNING = {"Semaine1": "35", "Semaine2": "35", "Semaine3": "35", "Semaine4": "35",
-            "ReposConsecutifs": "OUI", "ReposFractionnes": "NON"}
-
-
 def amorcer():
     c = serveur.app.test_client()
     c.post("/login", data={"identifiant": "rh", "mot_de_passe": "wingstop-rh"})
@@ -82,15 +78,14 @@ def amorcer():
     # 1. remis au comptable : équipier partiel étranger, tout le parcours
     uid = soumettre(c, saisie(
         civilite="Monsieur", nom_prenom="DUPONT Jean", date_naissance="1999-07-23",
-        email="jean.dupont@example.com", etablissement="Wing Kitchen / Montreuil (DK)",
+        email="jean.dupont@example.com", etablissement="Wing Kitchens / Montreuil (DK)",
         date_embauche="2026-09-28", date_debut="2026-09-28",
         temps_partiel="OUI", temps_travail="24H",
         nationalite="Autres", nationalite_etrangere="Ivoirienne",
         type_autorisation="Carte de séjour", date_fin_validite="2027-08-31",
         lundi="11h-15h / 18h-23h", jeudi="11h-15h / 18h-23h", samedi="12h-23h"))
     c.post(f"/dossier/{uid}/valider")
-    c.post(f"/dossier/{uid}/contrat", data={**PLANNING, "Semaine1": "24", "Semaine2": "20",
-                                            "Semaine3": "28", "Semaine4": "24"})
+    c.post(f"/dossier/{uid}/contrat")
     c.post(f"/dossier/{uid}/contrat-signe", data={"signe": piece()},
            content_type="multipart/form-data")
     c.post(f"/dossier/{uid}/dpae-faite", data={"accuse": piece()},
@@ -101,10 +96,10 @@ def amorcer():
     # 2. contrat prêt : manager, attend le contrat signé
     uid = soumettre(c, saisie(
         poste="Manager", nom_prenom="NKEMBA Awa", date_naissance="1996-03-07",
-        email="awa.nkemba@example.com", etablissement="Wing Kitchen / La Défense (DK)",
+        email="awa.nkemba@example.com", etablissement="Wing Kitchens / La Défense (DK)",
         date_embauche="2026-10-01", date_debut="2026-10-01", heure_demarrage="9h30"))
     c.post(f"/dossier/{uid}/valider")
-    c.post(f"/dossier/{uid}/contrat", data=PLANNING)
+    c.post(f"/dossier/{uid}/contrat")
     assert store.etat(store.lire(uid)) == "ContratPret"
 
     # 3. demande reçue : à valider en live (parcours « contrat généré »)
@@ -116,7 +111,7 @@ def amorcer():
     #    jouer en live : l'écran propose « Déposer le contrat », pas « Générer ».
     uid = soumettre(c, saisie(
         civilite="Monsieur", nom_prenom="SOARES Rui", date_naissance="1998-05-14",
-        email="rui.soares@example.com", etablissement="Wing Kitchen / POP-UP",
+        email="rui.soares@example.com", etablissement="Wing Kitchens / POP-UP",
         date_embauche="2026-10-19", date_debut="2026-10-19"))
     c.post(f"/dossier/{uid}/valider")
     assert store.etat(store.lire(uid)) == "ATraiter"
@@ -130,13 +125,13 @@ Suivi vide : à toi de jouer, du formulaire public à la remise au cabinet.
   3. « Accepter — ouvrir le dossier »
        -> fiche salarié .docx dans « Documents produits » + mail « rappel DPAE »
           dans data_demo/mails/
-  4. « Générer le contrat » -> planning 35/35/35/35, repos OUI/NON -> ouvre contrat.docx
+  4. « Générer le contrat » -> aucun champ à saisir -> ouvre contrat.docx
   5. « Déposer le contrat signé » -> un des PDF
   6. « DPAE créée et stockée » -> dépose l'accusé (un des PDF)  <- la DPAE dans le dossier
   7. « Remettre au cabinet comptable » -> copie data_demo/compta/ + lien de lot
 
 Fiche candidat (parcours « contrat généré ») :
-  Établissement ......... Wing Kitchen / Boulogne (DK)
+  Établissement ......... Wing Kitchen Boulogne / Boulogne (DK)
   Poste ................ Equipier Polyvalent
   Civilité / NOM Prénom  Madame / BENALI Sarah
   Naissance ............ 11/02/2001
@@ -149,7 +144,7 @@ Fiche candidat (parcours « contrat généré ») :
   Pièces jointes ..... {dossier}
        (carte_vitale.pdf, rib.pdf, cni_recto.pdf + cni_verso.pdf, justif_domicile.pdf)
 
-Variante « contrat déposé » : même fiche, Établissement = Wing Kitchen / POP-UP
+Variante « contrat déposé » : même fiche, Établissement = Wing Kitchens / POP-UP
   -> l'écran RH propose « Déposer le contrat » (pas « Générer ») ; l'étape 4
      devient un simple upload du PDF fait à la main, la suite est identique.
 """

@@ -3,7 +3,7 @@
     python tests/test_parcours_wingstop.py
 
 Formulaire réel (30 questions, NOM+Prénom en un champ, e-mail, dates) -> suivi
--> validation -> saisie RH du planning -> contrat généré (templates .html,
+-> validation -> contrat généré sans saisie RH (templates .html,
 rendu .docx) -> signé -> DPAE -> remise au comptable. Prouve que l'app tourne
 sur une config où les ids de champs ne matchent plus ceux codés en dur
 (indirection de rôle) et où les modèles de contrat sont en HTML.
@@ -41,7 +41,7 @@ def piece():
 
 def saisie(poste="Manager", **over):
     c = {
-        "etablissement": "Wing Kitchen / Boulogne (DK)",
+        "etablissement": "Wing Kitchen Boulogne / Boulogne (DK)",
         "poste": poste, "civilite": "Madame",
         "nom_prenom": "NKEMBA Awa", "date_naissance": "1996-03-07",
         "telephone": "0612345678", "email": "manager.boulogne@example.com",
@@ -110,14 +110,13 @@ def parcours_manager(c):
     for attendu in ("NKEMBA Awa", "Manager", "943 142 067 00050", "/dossier/"):
         assert attendu in rappel, f"« {attendu} » absent du rappel DPAE :\n{rappel}"
 
-    # l'écran dossier expose les champs de saisie RH
+    # plus aucune saisie RH : l'écran ne montre que le bouton « Générer »
     page = c.get(f"/dossier/{uid}").text
-    assert 'name="ReposConsecutifs"' in page, "champ de saisie RH absent de l'écran"
+    assert 'name="ReposConsecutifs"' not in page, "champ de saisie RH encore présent"
+    assert "Générer le contrat" in page
 
-    # génération : la RH renseigne le planning ; le salaire vient de la grille
-    c.post(f"/dossier/{uid}/contrat",
-           data={"Semaine1": "35", "Semaine2": "35", "Semaine3": "35", "Semaine4": "35",
-                 "ReposConsecutifs": "Oui", "ReposFractionnes": "Non"})
+    # génération : rien à saisir, tout vient du formulaire / de la grille
+    c.post(f"/dossier/{uid}/contrat")
     item = store.lire(uid)
     assert store.etat(item) == "ContratPret", item["journal"][-1]
     assert item["journal"][-1]["modele"] == "Manager.html"
@@ -129,8 +128,6 @@ def parcours_manager(c):
                     "2 500 (deux mille cinq cents) euros bruts",
                     "Wing Kitchen Boulogne"):
         assert attendu in txt, f"« {attendu} » absent du contrat"
-    # la saisie RH est persistée dans le dossier
-    assert store.lire(uid)["champs"]["ReposConsecutifs"] == "Oui"
 
     # signature manuelle -> DPAE -> remise
     c.post(f"/dossier/{uid}/contrat-signe", data={"signe": piece()},
@@ -161,9 +158,7 @@ def parcours_equipier_partiel_etranger(c):
         type_autorisation="Carte de séjour", date_fin_validite="2027-08-31",
         lundi="9h-15h", mardi="9h-15h", jeudi="9h-15h", vendredi="9h-15h"))
     c.post(f"/dossier/{uid}/valider")
-    c.post(f"/dossier/{uid}/contrat",
-           data={"Semaine1": "24", "Semaine2": "24", "Semaine3": "24", "Semaine4": "24",
-                 "ReposConsecutifs": "Oui", "ReposFractionnes": "Non"})
+    c.post(f"/dossier/{uid}/contrat")
     item = store.lire(uid)
     assert store.etat(item) == "ContratPret", item["journal"][-1]
     assert item["journal"][-1]["modele"] == "Equipier_Partiel.html", item["journal"][-1]
@@ -176,6 +171,12 @@ def parcours_equipier_partiel_etranger(c):
                     "valable jusqu'au 31 août 2027",
                     "9h-15h"):                                    # cellule du tableau planning
         assert attendu in txt, f"« {attendu} » absent du contrat partiel"
+    # tableau ARTICLE 10 : 4 semaines reprises des 24H du formulaire, sans saisie RH
+    assert "24H\n24H\n24H\n24H" in txt, "planning hebdo non repris des heures du formulaire"
+    # les 2 lignes de repos restent au contrat mais à compléter à la main (comme le
+    # modèle de référence) : le formulaire d'embauche ne les collecte pas
+    assert "2 jours de repos consécutifs par semaine" in txt, "ligne repos absente du contrat"
+    assert "repos_consecutifs" not in store.lire(uid)["champs"], "repos ne doit plus venir du formulaire"
     return uid
 
 

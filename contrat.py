@@ -169,6 +169,7 @@ def lettres_fr(v):
 FORMATEURS = {
     "lettres": lettres_fr,
     "mensualise": lambda v: montant_fr(round(_nombre(v) * 52 / 12, 2)),  # h/sem -> h/mois
+    "nombre": lambda v: str(_nombre(v)) if str(v).strip() else "",  # « 24H » -> « 24 »
     "majuscules": lambda v: str(v).upper(),
     "date_longue": lambda v: date_fr(str(v)),
 }

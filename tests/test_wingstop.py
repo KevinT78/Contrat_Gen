@@ -11,7 +11,8 @@ sans toucher ni aux {{Placeholders}} des modèles ni aux champs du formulaire :
   - grille de salaires par poste            (config_wingstop/grille.json)
   - formateur mensualisation                (15H -> 65 h/mois)
   - règles dérivées                         (bloc titre de séjour conditionnel)
-  - saisie RH                               (planning du temps partiel)
+  - planning hebdo repris des heures        (24H -> 4 semaines à 24H)
+  - repos du temps partiel                  (2 questions du formulaire, requis_si)
   - sélection de template par règle         (temps partiel bascule le modèle,
                                              comparaison casse/accents-insensible)
   - garde-fou valeur critique vide          (contrat troué -> refus)
@@ -35,15 +36,9 @@ import contrat         # noqa: E402
 CONTRATS = config.CLIENT / "contrats"
 TMP = Path(tempfile.mkdtemp(prefix="wingstop-"))
 
-# Ce que la RH saisit à la génération : le planning du temps partiel (le
-# salaire, lui, vient désormais de la grille).
-RH = {"Semaine1": "35", "Semaine2": "35", "Semaine3": "35", "Semaine4": "35",
-      "ReposConsecutifs": "Oui", "ReposFractionnes": "Non"}
-
-
 def champs(**over):
     c = {
-        "etablissement": "Wing Kitchen / Boulogne (DK)",
+        "etablissement": "Wing Kitchen Boulogne / Boulogne (DK)",
         "poste": "Equipier Polyvalent", "civilite": "Monsieur",
         "nom_prenom": "DUPONT Jean", "date_naissance": "1997-06-12",
         "telephone": "0600000000", "email": "jean@example.com",
@@ -64,7 +59,7 @@ def rendre(ch, nom):
     # Ce test asserte sur la PROSE remplie (substitution, roles, grille, derives,
     # bascule de template) -- pas sur le .docx final, couvert par
     # test_parcours_wingstop. On lit donc le HTML rempli via contrat.remplir.
-    vals = contrat.valeurs(ch, config.mentions(ch["etablissement"]), extra=RH)
+    vals = contrat.valeurs(ch, config.mentions(ch["etablissement"]))
     modele = config.modele_pour(ch)
     assert modele, f"aucun modèle pour poste={ch['poste']} partiel={ch['temps_partiel']}"
     return modele, contrat.remplir(CONTRATS / modele, vals)
@@ -108,7 +103,10 @@ def test_temps_partiel_bascule_le_template_et_mensualise():
     assert "{{" not in txt, "contrat partiel troué"
     assert "65 heures par mois" in txt, "mensualisation 15H -> 65 h absente"
     assert "800,15 (huit cents euros et quinze centimes)" in txt, "salaire barème 15H absent"
-    assert "<td>Oui</td>" in txt and "<td>Non</td>" in txt, "saisie RH repos absente"
+    # les 2 lignes de repos restent au contrat, cellule vide à compléter à la main
+    assert "2 jours de repos consécutifs par semaine</td><td></td>" in txt, "ligne repos absente/non vide"
+    # le tableau des semaines est désormais rempli depuis les heures du formulaire
+    assert "<td>15H</td><td>15H</td><td>15H</td><td>15H</td>" in txt, "planning hebdo non repris"
 
 
 def test_salarie_etranger_ajoute_le_bloc_titre_de_sejour():
@@ -121,11 +119,35 @@ def test_salarie_etranger_ajoute_le_bloc_titre_de_sejour():
     assert "de nationalité Marocaine" in txt, "nationalité étrangère non reportée"
 
 
+def test_deux_entites_et_equipier_route_par_etablissement():
+    """Boulogne et les autres DK relèvent de deux sociétés distinctes ; l'équipier
+    temps plein a un modèle propre à Boulogne (essai 1 mois), les autres prennent
+    la version WingKitchens (essai 2 mois). Aucun des deux n'a de non-concurrence."""
+    bl = champs(etablissement="Wing Kitchen Boulogne / Boulogne (DK)", poste="Equipier Polyvalent")
+    wk = champs(etablissement="Wing Kitchens / La Défense (DK)", poste="Equipier Polyvalent")
+
+    m_bl, t_bl = rendre(bl, "eq_boulogne.html")
+    m_wk, t_wk = rendre(wk, "eq_wk.html")
+    assert m_bl == "Equipier_Polyvalent.html", m_bl
+    assert m_wk == "Equipier_Polyvalent_WK.html", m_wk
+
+    assert "d'une durée d'un mois" in t_bl and "Amar ZEGROUR" in t_bl
+    assert "Boulogne-Billancourt (92100)" in t_bl and "943 142 067" in t_bl
+    assert "d'une durée de deux mois" in t_wk and "Nordine BOUJNANE" in t_wk
+    assert "Clichy (92110)" in t_wk and "931 681 704" in t_wk
+    assert "Parvis de la Défense" in t_wk, "adresse d'établissement non reportée"
+    for t in (t_bl, t_wk):
+        assert "NON-CONCURRENCE" not in t and "DEBAUCHAGE" not in t, "équipier : clause en trop"
+
+    # les postes cadres gardent la non-concurrence, dans les deux entités
+    _, t_mgr = rendre(champs(etablissement="Wing Kitchens / La Défense (DK)", poste="Manager"), "mgr.html")
+    assert "NON-CONCURRENCE" in t_mgr and "Wing Kitchens" in t_mgr
+
+
 def test_valeur_critique_vide_refuse_le_contrat():
     """NomPrenom vide -> le contrat aurait « Monsieur , né(e)… » sans aucun {{}}
     à détecter. La garde doit lever avant écriture."""
-    vals = contrat.valeurs(champs(nom_prenom=""), config.mentions(champs()["etablissement"]),
-                           extra=RH)
+    vals = contrat.valeurs(champs(nom_prenom=""), config.mentions(champs()["etablissement"]))
     try:
         contrat.remplir(CONTRATS / "Equipier_Polyvalent.html", vals)
         assert False, "contrat rempli malgré NomPrenom vide"
@@ -140,6 +162,7 @@ def main():
     test_prenom_nom_reordonne_pour_la_prose()
     test_temps_partiel_bascule_le_template_et_mensualise()
     test_salarie_etranger_ajoute_le_bloc_titre_de_sejour()
+    test_deux_entites_et_equipier_route_par_etablissement()
     test_valeur_critique_vide_refuse_le_contrat()
     print(f"Wingstop OK — grille de salaires + 4 templates réels, 0 placeholder orphelin\n{TMP}")
 

@@ -78,6 +78,7 @@
       le fichier ici pour poursuivre le parcours.</p>
     {% else %}
     <form method="post" action="{{ url_for('generer_contrat', uid=item.id) }}">
+      {% if saisie_rh %}
       <div class="grille-champs">
         {% for s in saisie_rh %}
           <div class="champ"><label for="rh-{{ s.placeholder }}">{{ s.libelle }}
@@ -86,10 +87,11 @@
                    value="{{ item.champs.get(s.placeholder, '') }}"></div>
         {% endfor %}
       </div>
+      {% endif %}
       <button>Générer le contrat</button>
     </form>
-    <p class="indice">Le contrat est produit depuis le modèle de l'établissement,
-      avec les informations saisies ci-dessous.</p>
+    <p class="indice">Le contrat est produit depuis le modèle de l'établissement{% if saisie_rh %},
+      avec les informations saisies ci-dessous{% endif %}.</p>
     {% endif %}
 
   {% elif etat == 'ContratPret' %}
