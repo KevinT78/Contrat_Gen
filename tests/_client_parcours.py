@@ -22,7 +22,7 @@ import doctor          # noqa: E402
 import store           # noqa: E402
 from app import app    # noqa: E402
 
-for zone in ("soumissions", "documents"):
+for zone in ("soumissions",):
     (config.DONNEES / zone).mkdir(parents=True, exist_ok=True)
 
 
@@ -51,7 +51,10 @@ def couloir(c, etab, mode, poste, attendus):
 
     c.post(f"/dossier/{uid}/valider")
     item = store.lire(uid)
-    assert store.etat(item) == "ATraiter", store.etat(item)
+    # Contrat généré dès la validation (couloir « genere ») ; le couloir
+    # « depose » reste à ATraiter en attendant le dépôt du PDF myrhis.
+    assert store.etat(item) == ("ContratPret" if mode == "genere" else "ATraiter"), \
+        store.etat(item)
 
     # Les ECRANS aussi doivent lire par role : chez un client qui renomme ses
     # champs, « item.champs.poste » en dur sortait une colonne VIDE, en silence.
@@ -63,15 +66,12 @@ def couloir(c, etab, mode, poste, attendus):
         assert poste in txt, f"« {poste} » absent de {page} — id lu en dur ?"
         assert etab in txt, f"« {etab} » absent de {page} — id lu en dur ?"
     if config.instance().get("fiche_salarie"):
-        assert "fiche-salarie.docx" in store.fichiers(item, "contrat"), "fiche absente"
+        assert "fiche-salarie.docx" in store.fichiers(item, "pieces"), "fiche absente"
 
     if mode == "genere":
-        c.post(f"/dossier/{uid}/contrat")
-        item = store.lire(uid)
-        assert store.etat(item) == "ContratPret", item["journal"][-1]
         from docx import Document
         import contrat as moteur
-        doc = Document(str(Path(item["_dir"]) / "contrat" / "contrat.docx"))
+        doc = Document(str(store.chemin(item["id"], "contrat", "contrat.docx")))
         texte = "\n".join(p.text for p in moteur.paragraphes(doc))
         assert "{{" not in texte, "contrat troué"
         for a in attendus:

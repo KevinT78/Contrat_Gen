@@ -21,7 +21,7 @@ from werkzeug.datastructures import FileStorage   # noqa: E402
 import config          # noqa: E402
 import store           # noqa: E402
 
-for zone in ("soumissions", "documents"):
+for zone in ("soumissions",):
     (config.DONNEES / zone).mkdir(parents=True, exist_ok=True)
 
 PDF = b"%PDF-1.4\n1 0 obj<</Type/Catalog>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF"

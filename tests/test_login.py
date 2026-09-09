@@ -26,7 +26,7 @@ import app as module   # noqa: E402
 from app import app    # noqa: E402
 
 app.config["PROPAGATE_EXCEPTIONS"] = True
-for zone in ("soumissions", "documents"):
+for zone in ("soumissions",):
     (config.DONNEES / zone).mkdir(parents=True, exist_ok=True)
 
 MDP = "fixture"

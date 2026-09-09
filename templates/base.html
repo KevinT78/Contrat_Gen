@@ -132,20 +132,35 @@
   .badge.fini { color:var(--fini) } .badge.fini::before { background:var(--fini) }
   .badge.nu::before { display:none }
 
-  /* --- fil d'etapes : rail + graduations --- */
-  .etapes { display:flex; list-style:none; margin:0 0 40px; padding:0 }
-  .etapes li { flex:1; position:relative; padding:20px 16px 0 0; font-size:10.5px;
+  /* --- fil d'etapes : points relies par un trait ; le segment courant (du point
+     atteint vers le suivant) defile, avec « etape en cours » centre dessous --- */
+  .etapes { display:flex; list-style:none; margin:0 0 44px; padding:0 }
+  .etapes li { flex:1; position:relative; padding:24px 16px 0 0; font-size:10.5px;
                font-weight:500; text-transform:uppercase; letter-spacing:.1em;
                color:var(--gris-clair) }
-  .etapes li::before { content:""; position:absolute; top:0; left:0; right:0; height:1px;
+  /* le trait de CE li = le segment qui va de son point au point suivant */
+  .etapes li::before { content:""; position:absolute; top:0; left:0; right:0; height:2px;
                        background:var(--bord) }
-  .etapes li::after { content:""; position:absolute; top:-2.5px; left:0; width:6px; height:6px;
+  .etapes li::after { content:""; position:absolute; top:-3px; left:0; width:8px; height:8px;
                       border-radius:50%; background:var(--bord-fort) }
   .etapes li.faite { color:var(--gris) }
   .etapes li.faite::before { background:var(--accent); opacity:.55 }
   .etapes li.faite::after { background:var(--accent); opacity:.55 }
-  .etapes li.ici { color:var(--accent); font-weight:600 }
+  .etapes li.faite .jalon::before { content:"\2713"; margin-right:.5em; color:var(--accent);
+             font-weight:700 }
+  .etapes li.ici { color:var(--accent); font-weight:700 }
   .etapes li.ici::after { background:var(--accent); box-shadow:0 0 0 4px var(--accent-clair) }
+  .etapes li.ici::before {
+             background:var(--bord);
+             background-image:linear-gradient(90deg, var(--accent) 0 45%, transparent 45%);
+             background-size:12px 100%; background-repeat:repeat-x;
+             animation:frise-avance .65s linear infinite }
+  .etapes li.ici:last-child::before {          /* dernier etat : rien a parcourir */
+             background:var(--accent); background-image:none; opacity:.55; animation:none }
+  @keyframes frise-avance { to { background-position:12px 0 } }
+  .etapes li .jalon-etat { position:absolute; top:8px; left:0; right:0; text-align:center;
+             font-size:8.5px; font-weight:600; letter-spacing:.14em; color:var(--accent);
+             line-height:1 }
 
   /* --- formulaires --- */
   label { display:block; margin:0 0 7px; font-size:11px; font-weight:600; letter-spacing:.08em;
@@ -171,13 +186,29 @@
   select { appearance:none; padding-right:24px; background-repeat:no-repeat;
            background-position:right 2px center;
            background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='11' height='11' viewBox='0 0 12 12'><path d='M2 4.5 6 8.5 10 4.5' fill='none' stroke='%2366645b' stroke-width='1.2' stroke-linecap='round' stroke-linejoin='round'/></svg>") }
-  input[type=file] { padding:9px 0; font-size:13px; color:var(--gris) }
-  input[type=file]::file-selector-button { margin-right:14px; padding:6px 14px; cursor:pointer;
-           font-family:var(--corps); font-size:11px; font-weight:600; letter-spacing:.08em;
-           text-transform:uppercase; color:var(--texte); background:transparent;
-           border:1px solid var(--bord-fort); border-radius:var(--r);
-           transition:color var(--pas), border-color var(--pas) }
-  input[type=file]::file-selector-button:hover { border-color:var(--accent); color:var(--accent) }
+  /* champ fichier francise (le bouton natif est en anglais et non stylable
+     partout) : l'input reel est masque, un bouton + un libelle le remplacent */
+  .fichier { position:relative; display:inline-flex; align-items:center; flex-wrap:wrap;
+             gap:8px 14px; padding:9px 0; font-size:13px; color:var(--gris) }
+  .fichier input[type=file] { position:absolute; width:1px; height:1px; padding:0;
+             opacity:0; overflow:hidden; pointer-events:none }
+  .fichier .parcourir { padding:6px 14px; cursor:pointer; font-family:var(--corps);
+             font-size:11px; font-weight:600; letter-spacing:.08em; text-transform:uppercase;
+             color:var(--texte); background:transparent; border:1px solid var(--bord-fort);
+             border-radius:var(--r); transition:color var(--pas), border-color var(--pas) }
+  .fichier .parcourir:hover { border-color:var(--accent); color:var(--accent) }
+  .fichier + .aide { display:block; margin-top:2px }
+  ul.chips { list-style:none; display:flex; flex-wrap:wrap; gap:8px;
+             margin:8px 0 0; padding:0 }
+  ul.chips:empty { display:none }
+  ul.chips li { display:inline-flex; align-items:center; gap:8px; padding:4px 6px 4px 12px;
+             font-size:12.5px; color:var(--accent); background:var(--accent-clair);
+             border-radius:var(--r) }
+  ul.chips li::before { content:"\2713"; font-weight:700 }
+  ul.chips .x { min-width:0; padding:0 6px; margin:0; border:0; background:transparent;
+             color:var(--accent); font-size:15px; line-height:1; cursor:pointer;
+             text-transform:none; letter-spacing:0 }
+  ul.chips .x:hover { background:transparent; color:var(--alerte) }
 
   /* --- boutons --- */
   button, .bouton { display:inline-flex; align-items:center; justify-content:center; gap:10px;
@@ -244,7 +275,11 @@
                   margin-right:10px }
   .journal b { color:var(--texte); font-weight:600 }
 
-  @media (prefers-reduced-motion: reduce) { * { transition:none !important } }
+  @media (prefers-reduced-motion: reduce) {
+    * { transition:none !important }
+    .etapes li.ici::before { animation:none;
+             background:var(--accent); background-image:none; opacity:.55 }
+  }
 </style>
 </head>
 <body>
@@ -265,5 +300,28 @@
   {% endfor %}
   {% block corps %}{% endblock %}
 </main>
+<script>
+  /* francise chaque <input type=file> : bouton « Parcourir » + nom du/des fichier(s) */
+  for (const inp of document.querySelectorAll('input[type=file]')) {
+    const vide = 'Aucun fichier sélectionné';
+    const enrobe = document.createElement('span');
+    enrobe.className = 'fichier';
+    const bouton = document.createElement('button');
+    bouton.type = 'button';
+    bouton.className = 'parcourir';
+    bouton.textContent = 'Parcourir…';
+    const etat = document.createElement('span');
+    etat.textContent = vide;
+    inp.parentNode.insertBefore(enrobe, inp);
+    enrobe.append(bouton, inp, etat);
+    bouton.addEventListener('click', () => inp.click());
+    inp.addEventListener('change', () => {
+      const n = inp.files.length;
+      etat.textContent = n === 0 ? vide
+        : n === 1 ? inp.files[0].name
+        : n + ' fichiers sélectionnés';
+    });
+  }
+</script>
 </body>
 </html>

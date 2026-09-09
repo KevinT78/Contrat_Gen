@@ -29,7 +29,7 @@ import config          # noqa: E402
 import store           # noqa: E402
 from app import app    # noqa: E402
 
-for zone in ("soumissions", "documents"):
+for zone in ("soumissions",):
     (config.DONNEES / zone).mkdir(parents=True, exist_ok=True)
 
 PDF = (b"%PDF-1.4\n1 0 obj<</Type/Catalog>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF", "p.pdf")
@@ -70,7 +70,7 @@ def contrat_texte(item):
     """Le texte du contrat.docx produit (corps + cellules de tableau)."""
     from docx import Document
     import contrat as moteur
-    doc = Document(str(Path(item["_dir"]) / "contrat" / "contrat.docx"))
+    doc = Document(str(store.chemin(item["id"], "contrat", "contrat.docx")))
     return "\n".join(p.text for p in moteur.paragraphes(doc))
 
 
@@ -101,24 +101,16 @@ def parcours_manager(c):
     assert c.get(lien).status_code == 410
 
     # validation -> dossier + fiche salarié .docx (déclarée dans instance.json)
-    # + rappel DPAE (effet de la validation) avec poste, SIRET, lien
+    # + rappel DPAE (effet de la validation) + contrat produit dans la foulée
+    # (aucune saisie RH sur cette config -> plus d'étape « Générer » séparée)
     c.post(f"/dossier/{uid}/valider")
     item = store.lire(uid)
-    assert item["_zone"] == "documents" and store.etat(item) == "ATraiter"
-    assert "fiche-salarie.docx" in store.fichiers(item, "contrat"), "fiche salarié absente"
+    assert item["_zone"] == "documents" and store.etat(item) == "ContratPret"
+    assert "fiche-salarie.docx" in store.fichiers(item, "pieces"), "fiche salarié absente"
     rappel = dernier_mail("rappel_dpae")
     for attendu in ("NKEMBA Awa", "Manager", "943 142 067 00050", "/dossier/"):
         assert attendu in rappel, f"« {attendu} » absent du rappel DPAE :\n{rappel}"
 
-    # plus aucune saisie RH : l'écran ne montre que le bouton « Générer »
-    page = c.get(f"/dossier/{uid}").text
-    assert 'name="ReposConsecutifs"' not in page, "champ de saisie RH encore présent"
-    assert "Générer le contrat" in page
-
-    # génération : rien à saisir, tout vient du formulaire / de la grille
-    c.post(f"/dossier/{uid}/contrat")
-    item = store.lire(uid)
-    assert store.etat(item) == "ContratPret", item["journal"][-1]
     assert item["journal"][-1]["modele"] == "Manager.html"
     produits = store.fichiers(item, "contrat")
     assert "contrat.docx" in produits, produits
@@ -158,7 +150,6 @@ def parcours_equipier_partiel_etranger(c):
         type_autorisation="Carte de séjour", date_fin_validite="2027-08-31",
         lundi="9h-15h", mardi="9h-15h", jeudi="9h-15h", vendredi="9h-15h"))
     c.post(f"/dossier/{uid}/valider")
-    c.post(f"/dossier/{uid}/contrat")
     item = store.lire(uid)
     assert store.etat(item) == "ContratPret", item["journal"][-1]
     assert item["journal"][-1]["modele"] == "Equipier_Partiel.html", item["journal"][-1]

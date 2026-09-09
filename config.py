@@ -93,6 +93,13 @@ def comptable(cle):
     return s.get("comptable_email") or instance()["mails"]["comptable_defaut"]
 
 
+def groupe(cle):
+    """Tete de l'arborescence des dossiers salaries : societes.json ->
+    etablissement.groupe, a defaut le nom de la societe."""
+    s, e = etablissement(cle)
+    return e.get("groupe") or s["nom"]
+
+
 def manager(cle):
     """Adresse fixe du manager de l'etablissement (societes.json), ou ""."""
     _, e = etablissement(cle)

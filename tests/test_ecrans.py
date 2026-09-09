@@ -22,18 +22,23 @@ import store           # noqa: E402
 from app import app    # noqa: E402
 
 app.config["PROPAGATE_EXCEPTIONS"] = True
-for zone in ("soumissions", "documents"):
+for zone in ("soumissions",):
     (config.DONNEES / zone).mkdir(parents=True, exist_ok=True)
 
 ETAB = config.etablissements()[0][0]
+# Un établissement « déposé » : la validation n'y génère pas le contrat, l'écran
+# ATraiter reste donc un vrai passage (les autres établissements sautent direct
+# à ContratPret depuis la validation).
+ETAB_DEPOSE = next(cle for cle, _ in config.etablissements()
+                   if config.mode_contrat(cle) == "depose")
 
 
 def piece():
     return (BytesIO(b"%PDF-1.4\n%%EOF"), "p.pdf")
 
 
-def saisie():
-    return {"etablissement": ETAB, "email_demandeur": "manager@example.com",
+def saisie(etab=ETAB):
+    return {"etablissement": etab, "email_demandeur": "manager@example.com",
             "nom_naissance": "Martin", "nom_usage": "", "prenom": "Camille",
             "date_naissance": "1998-04-11", "lieu_naissance": "Lille",
             "nationalite": "Française", "num_secu": "2 98 04 59 350 042 21",
@@ -49,8 +54,8 @@ def ecran(c, url, attendu=200):
     return r.text
 
 
-def soumettre(c):
-    c.post("/", data={**saisie(), "identite": piece(), "carte_vitale": piece(),
+def soumettre(c, etab=ETAB):
+    c.post("/", data={**saisie(etab), "identite": piece(), "carte_vitale": piece(),
                       "rib": piece()}, content_type="multipart/form-data")
     return max(i["id"] for i in store.tout())
 
@@ -88,11 +93,10 @@ def main():
                                             "commentaire": "RIB flou"})
     voir()                                                          # Rejetee
 
-    uid = soumettre(c)
+    uid = soumettre(c, ETAB_DEPOSE)
     voir()
     c.post(f"/dossier/{uid}/valider")
-    voir()                                                          # ATraiter
-    c.post(f"/dossier/{uid}/contrat")
+    voir()                                                          # ATraiter (étab. déposé)
     c.post(f"/dossier/{uid}/contrat-depose", data={"contrat": piece()}, **fichier)
     voir()                                                          # ContratPret
     c.post(f"/dossier/{uid}/contrat-signe", data={"signe": piece()}, **fichier)

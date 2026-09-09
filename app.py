@@ -294,31 +294,52 @@ def _saisie(item=None):
     return champs, erreurs
 
 
+# Le formulaire public est soumis en fetch() (cf. formulaire.html) : quand un
+# champ est invalide, la page N'EST PAS rechargée, les pièces déjà choisies
+# restent dans le navigateur de la personne — rien n'est écrit côté serveur tant
+# que la soumission n'aboutit pas. Ces réponses parlent alors JSON. Sans JS, le
+# POST classique fonctionne encore (les pièces sont reperdues à l'erreur).
+def _est_fetch():
+    return request.headers.get("X-Requested-With") == "contratgen-fetch"
+
+
+def _formulaire_ko(champs, erreurs, **gabarit):
+    if _est_fetch():
+        return {"ok": False, "erreurs": erreurs}, 422
+    return render_template("formulaire.html", champs=champs, erreurs=erreurs, **gabarit)
+
+
+def _formulaire_ok(titre, texte):
+    if _est_fetch():
+        return {"ok": True, "titre": titre, "texte": texte}
+    return render_template("message.html", titre=titre, texte=texte)
+
+
 @app.route("/", methods=["GET", "POST"])
 def formulaire():
     if request.method == "POST":
         if _pot_rempli() or not _soumission_autorisee(request.remote_addr):
-            return render_template("message.html", titre="Demande envoyée",
-                                   texte="Le service RH a été prévenu. Vous serez "
-                                         "recontacté si une pièce manque.")
+            return _formulaire_ok("Demande envoyée", "Votre demande est bien "
+                                  "enregistrée. Le service RH la traite et vous "
+                                  "recontacte si une pièce manque ou doit être "
+                                  "complétée.")
         champs, erreurs = _saisie()
         if erreurs:
-            return render_template("formulaire.html", champs=champs,
-                                   erreurs=erreurs, action=url_for("formulaire"))
+            return _formulaire_ko(champs, erreurs, action=url_for("formulaire"))
         try:                                      # reste : taille d'un fichier
             uid = store.creer_soumission(champs, request.files)
         except ValueError as e:
-            return render_template("formulaire.html", champs=champs,
-                                   erreurs=[str(e)], action=url_for("formulaire"))
+            return _formulaire_ko(champs, [str(e)], action=url_for("formulaire"))
         ok = _mail(uid, "nouvelle_soumission", config.instance()["mails"]["rh"],
                    nom=_nom(champs), id=uid,
                    lien=url_for("detail", uid=uid, _external=True))
-        return render_template("message.html", titre="Demande envoyée",
-                               texte=("Le service RH a été prévenu. Vous serez "
-                                      "recontacté si une pièce manque." if ok else
-                                      "Votre demande est bien enregistrée, mais "
-                                      "l'avis au service RH n'a pas pu partir : "
-                                      "prévenez-le si vous restez sans réponse."))
+        return _formulaire_ok("Demande envoyée",
+                              "Votre demande est bien enregistrée. Le service RH la "
+                              "traite et vous recontacte si une pièce manque ou doit "
+                              "être complétée." if ok else
+                              "Votre demande est bien enregistrée, mais l'avis au "
+                              "service RH n'a pas pu partir : prévenez-le si vous "
+                              "restez sans réponse.")
     return render_template("formulaire.html", champs={}, erreurs=[],
                            action=url_for("formulaire"))
 
@@ -334,27 +355,24 @@ def corriger(jeton):
     ko = item["journal"][-1]
     if request.method == "POST":
         if _pot_rempli() or not _soumission_autorisee(request.remote_addr):
-            return render_template("message.html", titre="Correction envoyée",
-                                   texte="Le service RH va réexaminer la demande.")
+            return _formulaire_ok("Correction envoyée",
+                                  "Le service RH va réexaminer la demande.")
         champs, erreurs = _saisie(item)
         if erreurs:
-            return render_template("formulaire.html", champs=champs, erreurs=erreurs,
-                                   ko=ko, action=request.path)
+            return _formulaire_ko(champs, erreurs, ko=ko, action=request.path)
         try:
             store.resoumettre(item["id"], champs, request.files)
         except ValueError as e:
-            return render_template("formulaire.html", champs=champs, erreurs=[str(e)],
-                                   ko=ko, action=request.path)
+            return _formulaire_ko(champs, [str(e)], ko=ko, action=request.path)
         ok = _mail(item["id"], "nouvelle_soumission",
                    config.instance()["mails"]["rh"], nom=_nom(champs),
                    id=item["id"],
                    lien=url_for("detail", uid=item["id"], _external=True))
-        return render_template("message.html", titre="Correction envoyée",
-                               texte=("Le service RH va réexaminer la demande."
-                                      if ok else
-                                      "Votre correction est bien enregistrée, mais "
-                                      "l'avis au service RH n'a pas pu partir : "
-                                      "prévenez-le si vous restez sans réponse."))
+        return _formulaire_ok("Correction envoyée",
+                              "Le service RH va réexaminer la demande." if ok else
+                              "Votre correction est bien enregistrée, mais l'avis au "
+                              "service RH n'a pas pu partir : prévenez-le si vous "
+                              "restez sans réponse.")
     return render_template("formulaire.html", champs=item["champs"], erreurs=[],
                            ko=ko, action=request.path)
 
@@ -437,7 +455,8 @@ def _transition(uid, vers, **extra):
 
 
 def _fiche_salarie(item):
-    """Génère la fiche salarié dans contrat/ si un template est déclaré.
+    """Génère la fiche salarié dans pieces/ (FICHE PERSONNELLE) si un template
+    est déclaré. Elle décrit le salarié, pas l'engagement contractuel.
     Le schéma la place à l'ouverture du dossier. Un échec n'annule pas la
     validation : on note et on continue."""
     modele = config.instance().get("fiche_salarie")
@@ -452,7 +471,7 @@ def _fiche_salarie(item):
         extra={"PiecesFournies": ", ".join(fournies) or "—",
                "PiecesManquantes": ", ".join(manquantes) or "aucune"})
     try:
-        store.poser_octets(item["id"], "contrat", "fiche-salarie.docx",
+        store.poser_octets(item["id"], "pieces", "fiche-salarie.docx",
                            contrat.generer(config.CLIENT / "contrats" / modele, vals))
         store.noter(item["id"], type="fiche_salarie", par="systeme")
     except (ValueError, OSError) as e:
@@ -470,10 +489,19 @@ def valider(uid):
         return redirect(url_for("detail", uid=uid))
     item = store.lire(uid)
     _fiche_salarie(item)
-    ok = _rappel_dpae(item)
-    flash("Soumission acceptée : dossier salarié ouvert, rappel DPAE envoyé." if ok
-          else "Soumission acceptée, mais le rappel DPAE n'est PAS parti — voir le journal.",
-          "ok" if ok else "erreur")
+    ok_dpae = _rappel_dpae(item)
+    bouts = ["Soumission acceptée : dossier salarié ouvert",
+             "rappel DPAE envoyé" if ok_dpae else "rappel DPAE NON parti (voir le journal)"]
+    ok = ok_dpae
+    # Contrat produit dès la validation — plus de bouton « Générer » à part.
+    # Sauf couloir « déposé » (contrat fait sur myrhis) ou config qui réclame
+    # une saisie RH avant génération : l'écran ATraiter garde alors son bouton.
+    if (config.mode_contrat(config.valeur(item["champs"], "etablissement")) == "genere"
+            and not config.saisie_rh()):
+        ok_c, msg = _produire_contrat(uid)
+        bouts.append("contrat généré" if ok_c else f"contrat NON généré ({msg})")
+        ok = ok and ok_c
+    flash(", ".join(bouts) + ".", "ok" if ok else "erreur")
     return redirect(url_for("detail", uid=uid))
 
 
@@ -522,51 +550,67 @@ def rejeter(uid):
     return redirect(url_for("detail", uid=uid))
 
 
-@app.post("/dossier/<uid>/contrat")
-@rh
-def generer_contrat(uid):
-    item = store.lire(uid) or abort(404)
+def _produire_contrat(uid, extra=None):
+    """Génère le contrat .docx depuis le modèle du poste et passe le dossier à
+    ContratPret. -> (True, None) ou (False, raison). Appelé à la validation
+    (auto) et par le bouton « Générer » (config à saisie RH, ou reprise après
+    un échec : modèle manquant, placeholder critique vide)."""
+    item = store.lire(uid)
     if config.mode_contrat(config.valeur(item["champs"], "etablissement")) != "genere":
-        flash("Cet établissement est en contrat déposé (myrhis) : "
-              "utilisez « Déposer le contrat ».", "erreur")
-        return redirect(url_for("detail", uid=uid))
+        return False, ("établissement en contrat déposé (myrhis) : "
+                       "utilisez « Déposer le contrat »")
     modele = config.modele_pour(item["champs"])
     if not modele:
-        flash(f"Aucun modèle de contrat configuré pour le poste "
-              f"« {config.valeur(item['champs'], 'poste')} ».", "erreur")
-        return redirect(url_for("detail", uid=uid))
-    # Placeholders qu'aucune question du formulaire ne fournit : saisis ici par
-    # la RH, fusionnes dans champs pour que la regeneration et le lot les voient.
-    extra = {k: (request.form.get(k) or "").strip() for k in config.saisie_rh()}
+        return False, (f"aucun modèle configuré pour le poste "
+                       f"« {config.valeur(item['champs'], 'poste')} »")
+    # Placeholders qu'aucune question du formulaire ne fournit : saisis par la RH,
+    # fusionnes dans champs pour que la regeneration et le lot les voient.
+    extra = {k: (v or "").strip() for k, v in (extra or {}).items()}
     if extra:
         item = store.completer_champs(uid, extra)
     vals = contrat.valeurs(item["champs"],
                            config.mentions(config.valeur(item["champs"], "etablissement")),
                            extra=extra)
+    # OSerror compris : la génération est un EFFET de la validation (comme
+    # _fiche_salarie, qui garde le même couple) -- un disque plein ne doit pas
+    # renvoyer un 500 alors que le dossier est déjà ouvert.
     try:
         octets = contrat.generer(config.CLIENT / "contrats" / modele, vals)
-    except ValueError as e:
-        flash(str(e), "erreur")
-        return redirect(url_for("detail", uid=uid))
-    store.poser_octets(uid, "contrat", "contrat.docx", octets)
+        store.poser_octets(uid, "contrat", "contrat.docx", octets)
+    except (ValueError, OSError) as e:
+        return False, str(e)
     _transition(uid, "ContratPret", modele=modele)
-    # Avertissement legal CDD : 2 jours ouvrables avant la date de debut.
-    type_c = config.valeur(item["champs"], "type_contrat")
-    if type_c == "CDD":
-        from datetime import date as _date
-        try:
-            debut = _date.fromisoformat(config.valeur(item["champs"], "date_debut"))
-            reste = _jours_ouvrables_entre(_date.today(), debut)
-            if reste < 0:
-                flash(f"Attention : la date de début est dépassée de {-reste} "
-                      f"jour(s) ouvrable(s).", "erreur")
-            elif reste <= 2:
-                flash(f"Attention : il reste {reste} jour(s) ouvrable(s) avant "
-                      f"la date de début — la remise au salarié doit intervenir "
-                      f"dans les 2 jours ouvrables.", "erreur")
-        except (ValueError, TypeError):
-            pass
-    flash("Contrat généré.", "ok")
+    _alerte_cdd(item)
+    return True, None
+
+
+def _alerte_cdd(item):
+    """Avertissement legal CDD : la remise doit intervenir dans les 2 jours
+    ouvrables suivant la date de debut."""
+    if config.valeur(item["champs"], "type_contrat") != "CDD":
+        return
+    try:
+        debut = date.fromisoformat(config.valeur(item["champs"], "date_debut"))
+    except (ValueError, TypeError):
+        return
+    reste = _jours_ouvrables_entre(date.today(), debut)
+    if reste < 0:
+        flash(f"Attention : la date de début est dépassée de {-reste} "
+              f"jour(s) ouvrable(s).", "erreur")
+    elif reste <= 2:
+        flash(f"Attention : il reste {reste} jour(s) ouvrable(s) avant la date "
+              f"de début — la remise au salarié doit intervenir dans les 2 jours "
+              f"ouvrables.", "erreur")
+
+
+@app.post("/dossier/<uid>/contrat")
+@rh
+def generer_contrat(uid):
+    store.lire(uid) or abort(404)
+    ok, msg = _produire_contrat(uid, {k: request.form.get(k)
+                                      for k in config.saisie_rh()})
+    flash("Contrat généré." if ok else f"Contrat non généré : {msg}.",
+          "ok" if ok else "erreur")
     return redirect(url_for("detail", uid=uid))
 
 
@@ -762,7 +806,7 @@ def lot_fichier(jeton, bucket, nom):
 
 def demarrer():
     """Verifie la config puis sert (waitress, ou Werkzeug si DEBUG)."""
-    for zone in ("soumissions", "documents"):
+    for zone in ("soumissions", store.DOSSIERS):
         (config.DONNEES / zone).mkdir(parents=True, exist_ok=True)
     # Refus dur : installation incomplete (secret/mdp par defaut, aucun
     # etablissement) ou template reclamant un champ inexistant -- tout se

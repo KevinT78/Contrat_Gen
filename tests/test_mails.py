@@ -151,7 +151,7 @@ import app as module                                               # noqa: E402
 from app import app                                                # noqa: E402
 
 app.config["PROPAGATE_EXCEPTIONS"] = True
-for _z in ("soumissions", "documents"):
+for _z in ("soumissions",):
     (config.DONNEES / _z).mkdir(parents=True, exist_ok=True)
 
 _MSG = re.compile(r'<p class="msg[^"]*">([^<]*)</p>')

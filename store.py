@@ -2,7 +2,13 @@
 
 Deux zones (ticket 07) :
   data/soumissions/<ulid>/soumission.json  + pieces/
-  data/documents/<ulid>/dossier.json       + pieces/ + contrat/
+  data/DOSSIERS SALARIES/<Groupe>/<Etablissement>/<Poste>/<NOM Prenom>/
+      dossier.json + FICHE PERSONNELLE/ + CONTRAT/ + _versions/
+
+Le dossier valide EST l'arborescence que la RH ouvre a la main hors de l'app.
+Les clefs de bucket internes (pieces / contrat / _versions) restent le
+vocabulaire du reste de l'app ; la traduction vers les libelles humains se fait
+dans chemin() seul.
 
 Le journal append-only de `<zone>.json` fait foi sur l'etat. La presence d'un
 fichier est une preuve corroborante, jamais decisive.
@@ -29,6 +35,7 @@ import shutil
 import threading
 import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import config
 
@@ -83,17 +90,46 @@ def _verrou(uid):
 
 # --- chemins -------------------------------------------------------------
 
+DOSSIERS = "DOSSIERS SALARIES"
+BUCKETS = {"pieces": "FICHE PERSONNELLE", "contrat": "CONTRAT"}  # _versions non traduit
+_ILLEGAL = re.compile(r'[<>:"/\\|?*\x00-\x1f]+')
+
+_carte = {}   # uid -> Path. cache process : l'app est mono-process par
+              # construction (cf. _verrou) ; index disque si ca change.
+
+
+def _scan():
+    """Le disque fait foi : le nom du dossier ne porte plus l'ULID, mais
+    dossier.json porte "id". Profondeur fixe, quelques dizaines de ms."""
+    carte = {f.parent.name: f.parent
+             for f in (config.DONNEES / "soumissions").glob("*/soumission.json")}
+    for f in (config.DONNEES / DOSSIERS).glob("*/*/*/*/dossier.json"):
+        carte[json.loads(f.read_text(encoding="utf-8"))["id"]] = f.parent
+    return carte
+
+
 def dossier_de(uid):
     """Le repertoire de l'unite, quelle que soit sa zone. None si inconnue."""
-    for zone in ("documents", "soumissions"):
-        d = config.DONNEES / zone / uid
-        if d.is_dir():
-            return d
-    return None
+    global _carte
+    d = _carte.get(uid)
+    if d and d.is_dir():      # is_dir, PAS le json : creer_soumission depose des
+        return d              # pieces avant d'ecrire soumission.json
+    _carte = _scan()          # miss, ou dossier deplace a la main par la RH
+    return _carte.get(uid)
+
+
+def _soumission(d):
+    return d.parent == config.DONNEES / "soumissions"
 
 
 def _fichier_json(d):
-    return d / ("dossier.json" if d.parent.name == "documents" else "soumission.json")
+    return d / ("soumission.json" if _soumission(d) else "dossier.json")
+
+
+def _rep(item):
+    """Le repertoire d'un item DEJA lu ; lire() l'a pose dans _dir. Le rebatir
+    par zone/uid n'est plus possible."""
+    return Path(item["_dir"])
 
 
 def chemin(uid, bucket, nom=None):
@@ -106,7 +142,8 @@ def chemin(uid, bucket, nom=None):
     d = dossier_de(uid)
     if not d:
         return None
-    return d / bucket / nom if nom else d / bucket
+    d = d / BUCKETS.get(bucket, bucket)
+    return d / nom if nom else d
 
 
 # --- lecture / ecriture --------------------------------------------------
@@ -117,7 +154,8 @@ def lire(uid):
         return None
     item = json.loads(_fichier_json(d).read_text(encoding="utf-8"))
     item["_dir"] = str(d)
-    item["_zone"] = d.parent.name
+    # etiquette logique desormais, plus un nom de repertoire.
+    item["_zone"] = "soumissions" if _soumission(d) else "documents"
     return item
 
 
@@ -136,11 +174,9 @@ def etat(item):
 
 def tout():
     """Collection complete, soumissions + dossiers, la plus recente d'abord."""
-    items = []
-    for zone in ("soumissions", "documents"):
-        for d in sorted((config.DONNEES / zone).glob("*/")):
-            if _fichier_json(d).exists():
-                items.append(lire(d.name))
+    global _carte
+    _carte = _scan()
+    items = [lire(uid) for uid in _carte]
     return sorted(items, key=lambda i: config.valeur(i["champs"], "date_debut") or "9999",
                   reverse=False)
 
@@ -173,7 +209,7 @@ def deposer(uid, bucket, role, fichier, extensions=EXTENSIONS, index=None):
     nom_role = SAIN.sub("-", role)
     if index is not None and index > 1:
         nom_role = f"{nom_role}_{index}"
-    cible = d / bucket / (nom_role + ext)
+    cible = chemin(uid, bucket, nom_role + ext)
     cible.parent.mkdir(parents=True, exist_ok=True)
     # Valider le fichier entrant AVANT de deplacer l'ancien : sinon un re-depot
     # refuse (trop lourd) laisse le dossier sans piece et l'ancienne copie
@@ -184,7 +220,7 @@ def deposer(uid, bucket, role, fichier, extensions=EXTENSIONS, index=None):
         tmp.unlink()
         raise ValueError(f"fichier trop lourd (max {TAILLE_MAX // 1024 // 1024} Mo)")
     if cible.exists():
-        vers = d / "_versions" / f"{cible.stem}-{int(time.time())}{ext}"
+        vers = chemin(uid, "_versions", f"{cible.stem}-{int(time.time())}{ext}")
         vers.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(cible), str(vers))
     os.replace(tmp, cible)
@@ -215,9 +251,6 @@ def ouvrir(uid, bucket, nom):
 def fichiers(item, bucket):
     d = chemin(item["id"], bucket)
     return sorted(f.name for f in d.glob("*") if f.is_file()) if d and d.is_dir() else []
-
-
-_ILLEGAL = re.compile(r'[<>:"/\\|?*\x00-\x1f]+')
 
 
 def copier_compta(item):
@@ -286,10 +319,37 @@ def _deposer_champ(uid, c, fichiers_recus):
             deposer(uid, "pieces", c["role"], f, index=rang)
 
 
+def _segment(brut, defaut):
+    """Un composant de chemin sur : illegaux Windows remplaces, points/espaces
+    de fin otes (NTFS les refuse), 60 car. max (MAX_PATH)."""
+    s = _ILLEGAL.sub("-", str(brut or "")).strip().rstrip(". ")[:60].strip()
+    return s or defaut
+
+
+def _dossier_cible(item):
+    """Calcule UNE FOIS, a la validation : renommer un etablissement en config
+    ne deplace donc jamais un dossier deja cree."""
+    ch = item["champs"]
+    cle = config.valeur(ch, "etablissement")
+    try:
+        groupe, etab = config.groupe(cle), config.etablissement(cle)[1]["nom"]
+    except KeyError:                       # etablissement retire de la config
+        groupe, etab = "DIVERS", cle
+    prenom, nom = config.identite(ch)
+    parent = (config.DONNEES / DOSSIERS / _segment(groupe, "DIVERS")
+              / _segment(etab, "SANS ETABLISSEMENT")
+              / _segment(config.valeur(ch, "poste"), "SANS POSTE"))
+    nom_d = _segment(" ".join(p for p in (nom.upper(), prenom) if p), item["id"])
+    cible = parent / nom_d
+    # Homonyme : sans ce suffixe, shutil.move fusionnerait deux salaries.
+    return cible if not cible.exists() else parent / f"{nom_d} ({item['id'][-4:]})"
+
+
 def creer_soumission(champs, fichiers_recus):
     uid = nouvel_id()
     d = config.DONNEES / "soumissions" / uid
     d.mkdir(parents=True)
+    _carte[uid] = d              # les pieces partent avant soumission.json
     item = {"schema_version": config.formulaire()["version"], "id": uid,
             "champs": champs, "link_epoch": 0,
             "journal": [{"de": None, "vers": "Soumise", "le": maintenant(),
@@ -308,7 +368,7 @@ def resoumettre(uid, champs, fichiers_recus):
     """Correction apres KO : la MEME soumission repasse a Soumise."""
     with _verrou(uid):
         item = lire(uid)
-        d = config.DONNEES / "soumissions" / uid
+        d = _rep(item)
         item["champs"] = champs
         for c in config.pieces():
             _deposer_champ(uid, c, fichiers_recus)
@@ -324,10 +384,11 @@ def valider(uid, par):
         item = lire(uid)
         if item["_zone"] != "soumissions":
             raise ValueError("deja un dossier salarie")
-        src = config.DONNEES / "soumissions" / uid
-        dst = config.DONNEES / "documents" / uid
+        src = _rep(item)
+        dst = _dossier_cible(item)
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(src), str(dst))
+        _carte[uid] = dst
         (dst / "soumission.json").unlink(missing_ok=True)
         item["lien_comptable_epoch"] = 0
         item["journal"].append({"de": "Soumise", "vers": "ATraiter",
@@ -338,7 +399,7 @@ def valider(uid, par):
 def rejeter(uid, motif, commentaire, par):
     with _verrou(uid):
         item = lire(uid)
-        d = config.DONNEES / item["_zone"] / uid
+        d = _rep(item)
         item["link_epoch"] = item.get("link_epoch", 0) + 1   # tue l'ancien lien
         item["journal"].append({"de": etat(item), "vers": "Rejetee",
                                 "le": maintenant(), "par": par,
@@ -352,7 +413,7 @@ def transition(uid, vers, par, **extra):
         de = etat(item)
         if vers not in TRANSITIONS.get(de, set()):
             raise ValueError(f"transition interdite : {de} -> {vers}")
-        d = config.DONNEES / item["_zone"] / uid
+        d = _rep(item)
         item["journal"].append({"de": de, "vers": vers,
                                 "le": maintenant(), "par": par, **extra})
         _ecrire(d, item)
@@ -364,7 +425,7 @@ def completer_champs(uid, nouveaux):
     generation du contrat) dans item['champs']. Idempotent, ne journalise pas."""
     with _verrou(uid):
         item = lire(uid)
-        d = config.DONNEES / item["_zone"] / uid
+        d = _rep(item)
         item["champs"] = {**item["champs"], **{k: v for k, v in nouveaux.items() if v != ""}}
         _ecrire(d, item)
         return item
@@ -374,7 +435,7 @@ def noter(uid, **entree):
     """Entree de journal sans changement d'etat (acces au lot, mail parti...)."""
     with _verrou(uid):
         item = lire(uid)
-        d = config.DONNEES / item["_zone"] / uid
+        d = _rep(item)
         item["journal"].append({"de": etat(item), "vers": etat(item),
                                 "le": maintenant(), **entree})
         _ecrire(d, item)
@@ -383,7 +444,7 @@ def noter(uid, **entree):
 def bump_epoch(uid, cle):
     with _verrou(uid):
         item = lire(uid)
-        d = config.DONNEES / item["_zone"] / uid
+        d = _rep(item)
         item[cle] = item.get(cle, 0) + 1
         _ecrire(d, item)
         return item[cle]

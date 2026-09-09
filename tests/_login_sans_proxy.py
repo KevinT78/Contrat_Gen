@@ -21,7 +21,7 @@ import config          # noqa: E402
 import app as module   # noqa: E402
 from app import app    # noqa: E402
 
-for zone in ("soumissions", "documents"):
+for zone in ("soumissions",):
     (config.DONNEES / zone).mkdir(parents=True, exist_ok=True)
 
 c = app.test_client()

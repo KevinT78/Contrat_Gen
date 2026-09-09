@@ -14,7 +14,7 @@
       {"nom": "Paris Opéra", "siret": "884 512 336 00019",
        "manager_email": "opera@example.com",
        "mentions": {"AdresseEtablissement": "8 boulevard des Capucines, 75009 Paris"}},
-      {"nom": "Lille Grand Place", "siret": "884 512 336 00027",
+      {"nom": "Lille Grand Place", "siret": "884 512 336 00027", "groupe": "DARK KITCHENS",
        "mentions": {"AdresseEtablissement": "3 place du Général de Gaulle, 59000 Lille"}}
     ]
   },
@@ -31,6 +31,7 @@
     },
     "etablissements": [
       {"nom": "Marseille Prado", "siret": "907 331 204 00013", "contrat": "depose",
+       "groupe": "RESTAURANTS",
        "mentions": {"AdresseEtablissement": "120 avenue du Prado, 13008 Marseille"}}
     ]
   }

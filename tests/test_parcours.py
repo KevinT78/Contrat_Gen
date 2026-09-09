@@ -26,7 +26,7 @@ import config          # noqa: E402
 import store           # noqa: E402
 from app import app    # noqa: E402
 
-for zone in ("soumissions", "documents"):
+for zone in ("soumissions",):
     (config.DONNEES / zone).mkdir(parents=True, exist_ok=True)
 
 PDF = (b"%PDF-1.4\n1 0 obj<</Type/Catalog>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF", "p.pdf")
@@ -69,9 +69,12 @@ def soumettre(c, saisie):
     return max(i["id"] for i in store.tout())      # ULID le plus récent
 
 
-def piece_refusee(c):
+def piece_refusee(_c):
     """Formulaire public : une pièce hors liste blanche (.docx) est un message,
-    pas un 500, et ne laisse aucune soumission à moitié née sur le disque."""
+    pas un 500, et ne laisse aucune soumission à moitié née sur le disque.
+    Client dédié : l'erreur met les bonnes pièces de côté (brouillon), rien ne
+    doit fuiter dans la session d'un appelant qui réutilise son client."""
+    c = app.test_client()
     avant = {d.name for d in (config.DONNEES / "soumissions").glob("*/")}
     r = c.post("/", data={**base_saisie("Wingstop France / Lille Grand Place"),
                           "identite": piece(), "carte_vitale": piece(),
@@ -102,12 +105,18 @@ def couloir_dark_kitchen(c):
     assert c.get(lien).status_code == 410, "lien de correction encore vivant"
     assert (Path(store.lire(uid)["_dir"]) / "_versions").is_dir(), "re-dépôt non archivé"
 
-    # validation -> dossier + fiche salarié dans contrat/
+    # validation -> dossier + fiche salarié + contrat généré dans la foulée
     c.post(f"/dossier/{uid}/valider")
     item = store.lire(uid)
-    assert item["_zone"] == "documents" and store.etat(item) == "ATraiter"
-    assert "fiche-salarie.docx" in store.fichiers(item, "contrat"), \
-        "fiche salarié absente de contrat/ après validation"
+    assert item["_zone"] == "documents" and store.etat(item) == "ContratPret"
+    assert Path(item["_dir"]).relative_to(config.DONNEES).as_posix() == \
+        "DOSSIERS SALARIES/DARK KITCHENS/Lille Grand Place/Manager/MARTIN Camille", item["_dir"]
+    assert store.chemin(uid, "pieces").name == "FICHE PERSONNELLE"
+    assert store.chemin(uid, "contrat").name == "CONTRAT"
+    store._carte.clear()                      # uid -> chemin par le seul disque
+    assert store.lire(uid)["_dir"] == item["_dir"], "scan de resolution KO"
+    assert "fiche-salarie.docx" in store.fichiers(item, "pieces"), \
+        "fiche salarié absente de FICHE PERSONNELLE/ après validation"
     assert any(e.get("type") == "fiche_salarie" for e in item["journal"])
     # le rappel DPAE est un EFFET de la validation (schéma, étape 6) : asserté
     # ici, au niveau de l'appelant, avec les informations DPAE et le SIRET
@@ -116,21 +125,19 @@ def couloir_dark_kitchen(c):
                     "Lille Grand Place", "http://localhost/dossier/"):
         assert attendu in rappel, f"« {attendu} » absent du rappel DPAE :\n{rappel}"
 
-    # refus : RemisComptable direct depuis ATraiter (garde de store.TRANSITIONS)
+    # refus : RemisComptable direct (garde de store.TRANSITIONS)
     try:
         store.transition(uid, "RemisComptable", "test")
-        assert False, "transition ATraiter -> RemisComptable acceptée"
+        assert False, "transition ContratPret -> RemisComptable acceptée"
     except ValueError:
         pass
 
-    # contrat généré
-    c.post(f"/dossier/{uid}/contrat")
-    item = store.lire(uid)
+    # contrat produit à la validation, sans étape « Générer » séparée
     assert store.etat(item) == "ContratPret", item["journal"][-1]
     assert item["journal"][-1]["modele"] == "CDI_Manager.docx"
     from docx import Document
     import contrat as moteur
-    doc = Document(str(Path(item["_dir"]) / "contrat" / "contrat.docx"))
+    doc = Document(str(store.chemin(item["id"], "contrat", "contrat.docx")))
     texte = "\n".join(p.text for p in moteur.paragraphes(doc))
     assert "{{" not in texte, "contrat troué"
     for attendu in ("Camille MARTIN", "1er octobre 2026", "2450",
@@ -164,7 +171,7 @@ def couloir_dark_kitchen(c):
     copie = config.DONNEES / "compta" / "Wingstop France" / f"Camille MARTIN - {uid}"
     assert sorted(p.relative_to(copie).as_posix() for p in copie.rglob("*") if p.is_file()) == [
         "contrat/accuse-dpae.pdf", "contrat/contrat-signe.pdf", "contrat/contrat.docx",
-        "contrat/fiche-salarie.docx", "pieces/carte-vitale.pdf",
+        "pieces/carte-vitale.pdf", "pieces/fiche-salarie.docx",
         "pieces/identite.pdf", "pieces/rib.pdf"], "copie compta incomplète"
     lot = "http://localhost/lot/" + store.signer("lot_comptable", uid,
                                                  item.get("lien_comptable_epoch", 0))
@@ -172,7 +179,7 @@ def couloir_dark_kitchen(c):
     z = zipfile.ZipFile(BytesIO(anonyme.get(lot + "/zip").data))
     assert sorted(z.namelist()) == [
         "contrat/accuse-dpae.pdf", "contrat/contrat-signe.pdf", "contrat/contrat.docx",
-        "contrat/fiche-salarie.docx", "pieces/carte-vitale.pdf",
+        "pieces/carte-vitale.pdf", "pieces/fiche-salarie.docx",
         "pieces/identite.pdf", "pieces/rib.pdf"], z.namelist()
 
     # Le lot est public (possession du lien = accès) et un contrat peut être un
@@ -230,7 +237,7 @@ def fiche_absente_si_non_declaree(c):
     try:
         uid = soumettre(c, base_saisie("Wingstop France / Paris Opéra"))
         c.post(f"/dossier/{uid}/valider")
-        assert "fiche-salarie.docx" not in store.fichiers(store.lire(uid), "contrat")
+        assert "fiche-salarie.docx" not in store.fichiers(store.lire(uid), "pieces")
     finally:
         if garde:
             config.instance()["fiche_salarie"] = garde

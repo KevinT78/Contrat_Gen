@@ -24,7 +24,10 @@
   <ul class="etapes">
     {% for e in flux %}
       <li class="{{ 'ici' if loop.index0 == ici else 'faite' if loop.index0 < ici }}">
-        {{ etapes[e] }}</li>
+        <span class="jalon">{{ etapes[e] }}</span>
+        {% if loop.index0 == ici %}
+          <span class="jalon-etat">{{ 'terminé' if loop.last else 'étape en cours' }}</span>
+        {% endif %}</li>
     {% endfor %}
   </ul>
 {% endif %}
@@ -37,8 +40,8 @@
         <button {{ 'disabled' if manquantes }}>Accepter — ouvrir le dossier</button></form>
     </div>
     {% if not manquantes %}
-      <p class="indice">L'acceptation ouvre le dossier du salarié et déclenche
-        la fiche salarié.</p>
+      <p class="indice">Accepter ouvrira le dossier du salarié et générera la
+        fiche salarié.</p>
     {% endif %}
     {% if manquantes %}
       <p class="indice manque">{{ manquantes|length }} pièce(s) manquante(s) :
@@ -93,8 +96,8 @@
       {% endif %}
       <button>Générer le contrat</button>
     </form>
-    <p class="indice">Le contrat est produit depuis le modèle de l'établissement{% if saisie_rh %},
-      avec les informations saisies ci-dessous{% endif %}.</p>
+    <p class="indice">Générer produira le contrat depuis le modèle de l'établissement{% if saisie_rh %},
+      avec les informations saisies ci-dessus{% endif %}.</p>
     {% endif %}
 
   {% elif etat == 'ContratPret' %}
@@ -115,17 +118,18 @@
         <input type="file" name="signe" id="signe" accept=".pdf,.docx"></div>
       <button {{ 'class=discret'|safe if signature_esign }}>Déposer le contrat signé</button>
     </form>
-    <p class="indice">Le dossier passe à l'étape DPAE une fois le contrat signé déposé.</p>
+    <p class="indice">Une fois le contrat signé déposé, le dossier passera à l'étape DPAE.</p>
 
   {% elif etat == 'ContratSigne' %}
     <p class="titre-carte">Déclaration préalable à l'embauche</p>
-    <p class="indice">Le rappel DPAE est parti à la validation de la demande.</p>
+    <p class="indice">Un rappel DPAE a été envoyé par mail lors de l'acceptation de la
+      demande. Faites la DPAE, puis déposez l'accusé ici pour passer à la transmission.</p>
     <form method="post" action="{{ url_for('dpae_faite', uid=item.id) }}"
           enctype="multipart/form-data" class="actions">
       <div class="champ" style="flex:1 1 320px">
         <label for="accuse">Accusé DPAE (PDF)</label>
         <input type="file" name="accuse" id="accuse" accept=".pdf,.jpg,.jpeg,.png"></div>
-      <button>DPAE créée et stockée</button>
+      <button>Enregistrer l'accusé DPAE</button>
     </form>
 
   {% elif etat == 'DpaeFaite' %}
@@ -134,8 +138,8 @@
       <form method="post" action="{{ url_for('remettre', uid=item.id) }}">
         <button>Remettre au cabinet comptable</button></form>
     </div>
-    <p class="indice">Le dossier est copié dans <code>data/compta/</code> ; le cabinet
-      reçoit son lien de téléchargement (valable 30 jours) dans le mail hebdomadaire.</p>
+    <p class="indice">Remettre copiera le dossier dans <code>data/compta/</code> ; le cabinet
+      recevra son lien de téléchargement (valable 30 jours) dans le prochain mail hebdomadaire.</p>
 
   {% elif etat == 'RemisComptable' %}
     <p class="titre-carte">Lien comptable</p>
@@ -143,8 +147,8 @@
       <form method="post" action="{{ url_for('renvoyer', uid=item.id) }}">
         <button class="discret">Refaire la copie et le lien</button></form>
     </div>
-    <p class="indice">Révoque le lien précédent ; le dossier repart dans le prochain
-      mail hebdomadaire.</p>
+    <p class="indice">Cela révoquera le lien précédent ; le dossier repartira dans le
+      prochain mail hebdomadaire.</p>
 
   {% else %}
     <p class="titre-carte">Dossier clos</p>

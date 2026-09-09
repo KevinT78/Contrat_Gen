@@ -30,7 +30,7 @@ os.environ.setdefault("PORT", "5000")
 sys.stdout.reconfigure(encoding="utf-8")
 
 shutil.rmtree(os.environ["DONNEES"], ignore_errors=True)
-for zone in ("soumissions", "documents", "mails"):
+for zone in ("soumissions", "mails"):
     (Path(os.environ["DONNEES"]) / zone).mkdir(parents=True)
 
 import config  # noqa: E402
