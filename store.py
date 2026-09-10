@@ -22,6 +22,10 @@ sans toucher app.py ni contrat.py :
     deposer(uid, bucket, role, f)   -- ecrire un upload (liste blanche + archivage)
     poser_octets(uid, bucket, nom, o) -- ecrire des octets qu'on produit
     fichiers(item, bucket)          -- lister
+La purge (_effacer_pieces) supprime les buckets via chemin(), efface les copies
+compta (data/compta/) et renomme le repertoire du dossier : un backend
+S3/SharePoint doit donc aussi porter une operation de SUPPRESSION, pas seulement
+lire/ecrire/lister.
 Le journal (dossier.json) et son deplacement soumissions->documents (valider())
 restent sur disque local quoi qu'il arrive -- c'est l'etat, pas des pieces.
 """
@@ -96,15 +100,23 @@ _ILLEGAL = re.compile(r'[<>:"/\\|?*\x00-\x1f]+')
 
 _carte = {}   # uid -> Path. cache process : l'app est mono-process par
               # construction (cf. _verrou) ; index disque si ca change.
+_scan_items = {}   # uid -> dossier.json deja parse par _scan(), consomme par
+                   # tout() dans la foulee. Pas un cache : rempli et lu dans le
+                   # meme appel, jamais invalide. Divise par deux l'I/O de
+                   # /suivi, qui reparse sinon chaque dossier.json (scan + lire).
 
 
 def _scan():
     """Le disque fait foi : le nom du dossier ne porte plus l'ULID, mais
     dossier.json porte "id". Profondeur fixe, quelques dizaines de ms."""
+    global _scan_items
+    _scan_items = {}
     carte = {f.parent.name: f.parent
              for f in (config.DONNEES / "soumissions").glob("*/soumission.json")}
     for f in (config.DONNEES / DOSSIERS).glob("*/*/*/*/dossier.json"):
-        carte[json.loads(f.read_text(encoding="utf-8"))["id"]] = f.parent
+        item = json.loads(f.read_text(encoding="utf-8"))
+        carte[item["id"]] = f.parent
+        _scan_items[item["id"]] = item
     return carte
 
 
@@ -176,7 +188,14 @@ def tout():
     """Collection complete, soumissions + dossiers, la plus recente d'abord."""
     global _carte
     _carte = _scan()
-    items = [lire(uid) for uid in _carte]
+    items = []
+    for uid, d in _carte.items():
+        item = _scan_items.get(uid)               # dossier.json deja parse au scan
+        if item is None:                          # soumission : json non lu au scan
+            item = json.loads(_fichier_json(d).read_text(encoding="utf-8"))
+        item["_dir"] = str(d)
+        item["_zone"] = "soumissions" if _soumission(d) else "documents"
+        items.append(item)
     return sorted(items, key=lambda i: config.valeur(i["champs"], "date_debut") or "9999",
                   reverse=False)
 
@@ -294,6 +313,12 @@ def manquantes(item):
     plafond, pas un minimum : un role avec au moins un fichier est satisfait.
     Compatible bool : [] == tout est la.
     """
+    # Un dossier purge n'a plus ses pieces (effacees expres) : sans ce garde,
+    # rmtree ferait repasser toutes les pieces requises en « manquantes » et
+    # /suivi afficherait un rouge permanent et faux. Couvre les quatre appelants
+    # (suivi, detail, _saisie, _fiche_salarie).
+    if item.get("purge"):
+        return []
     presents = {_extraire_role(f) for f in fichiers(item, "pieces")}
     return [{"champ": c} for c in config.pieces()
             if c.get("requis") and SAIN.sub("-", c["role"]) not in presents]
@@ -448,6 +473,138 @@ def bump_epoch(uid, cle):
         item[cle] = item.get(cle, 0) + 1
         _ecrire(d, item)
         return item[cle]
+
+
+# --- conservation / purge ----------------------------------------------
+#
+# La purge EFFACE les pieces et garde une trace dans le journal. Elle vit dans
+# une requete de l'app (bouton RH), jamais dans un cron : un second process
+# ecrivain casserait l'invariant mono-process (cf. _verrou). purger.py ne fait
+# que LIRE et lister.
+
+_CHAMPS_GARDES = ("etablissement", "poste", "date_debut")   # roles que /suivi lit
+_JOURNAL_GARDE = ("le", "de", "vers", "par", "type")
+
+
+def _entree_etat_courant(item):
+    """Date de la derniere entree qui a fait ENTRER dans l'etat courant.
+
+    PAS journal[-1]["le"] : le journal porte aussi acces_lot, mail_echoue,
+    renvoi_comptable -- un dossier remis il y a 3 ans dont le cabinet a ouvert
+    le lien il y a 2 ans ne serait jamais purge. L'entree de purge elle-meme
+    (de == vers) est ignoree par le meme critere."""
+    courant = etat(item)
+    for e in reversed(item["journal"]):
+        if e.get("vers") == courant and e.get("de") != e.get("vers"):
+            return e["le"]
+    return item["journal"][0]["le"]
+
+
+def _eligibilite(item, conf):
+    """(jours_ecoules, duree) si `item` est eligible a la purge MAINTENANT,
+    sinon None. Eligible = pas deja purge, etat courant dans conf["apres"], et
+    entre dans cet etat depuis au moins `duree` jours (`jours_candidature` si
+    l'etat est « Soumise », `jours` sinon).
+
+    Un dossier deja purge (cle `purge`) est exclu -- jamais par la date :
+    l'entree de purge repousserait l'echeance et un dossier purge a moitie ne
+    serait plus jamais reexamine.
+
+    Partage entre eligibles() et purger() : ce dernier revérifie pour de vrai,
+    la liste affichee a l'ecran de confirmation a pu vieillir entre le GET et
+    le POST (un renvoi / abandon a pu bouger la date d'entree dans l'etat)."""
+    if item.get("purge") or etat(item) not in (conf.get("apres") or []):
+        return None
+    duree = (conf.get("jours_candidature", conf["jours"])
+             if etat(item) == "Soumise" else conf["jours"])
+    ecoule = (datetime.now(timezone.utc)
+              - datetime.fromisoformat(_entree_etat_courant(item))).days
+    return (ecoule, duree) if ecoule >= duree else None
+
+
+def eligibles(items=None):
+    """[(item, jours_ecoules, duree)] des dossiers purgables. `items` :
+    collection deja scannee (/suivi la passe pour ne pas rescanner)."""
+    conf = config.conservation()
+    if not conf.get("apres"):
+        return []
+    out = []
+    for item in (tout() if items is None else items):
+        if e := _eligibilite(item, conf):
+            out.append((item, e[0], e[1]))
+    return out
+
+
+def _journal_nettoye(journal):
+    """Squelette de chaque entree : jette `commentaire` (texte libre saisi par
+    la RH), `ip` des acces_lot, `procedure` Yousign."""
+    return [{k: e[k] for k in _JOURNAL_GARDE if k in e} for e in journal]
+
+
+def _effacer_pieces(uid, item, d):
+    """Effacements idempotents : chacun encaisse son OSError sans arreter les
+    suivants. Le renommage du repertoire vient EN DERNIER -- c'est l'operation
+    la plus susceptible d'echouer (Explorateur ouvert, OneDrive en upload ->
+    WinError 32) ; un echec ne laisse alors que le nom, rejouable."""
+    sur_soumission = _soumission(d)
+    for nom in ("dossier.tmp", "soumission.tmp"):
+        try:
+            (d / nom).unlink()
+        except OSError:
+            pass
+    for bucket in ("pieces", "contrat", "_versions"):
+        cible = chemin(uid, bucket)            # traduction des libelles via le seam
+        if cible:
+            shutil.rmtree(cible, ignore_errors=True)
+    # Zone documents seulement : TOUTES les copies compta (un renommage de
+    # societe entre remettre et renvoyer en cree deux). compta/ n'est pas un
+    # bucket de dossier -- meme chemin construit en dur que copier_compta().
+    if not sur_soumission:
+        for copie in (config.DONNEES / "compta").glob(f"*/* - {uid}"):
+            shutil.rmtree(copie, ignore_errors=True)
+    # Zone soumissions : le repertoire est nomme par l'ULID (aucune PII) et
+    # _soumission() teste le parent -- ne rien renommer ni supprimer.
+    if sur_soumission or d.name == f"purge-{uid}":
+        return
+    # Le nom du repertoire EST une donnee personnelle (« NOM Prenom »).
+    try:
+        cible = d.parent / f"purge-{uid}"
+        d.rename(cible)
+        _carte[uid] = cible
+    except OSError:
+        pass
+
+
+def purger(uid):
+    """Efface les pieces d'un dossier eligible, garde le journal. Rejouable :
+    un second passage ne leve pas et ne change rien.
+
+    Marqueur `purge` ecrit AVANT tout effacement -- c'est le SEUL point de
+    reprise : s'il est deja la, on reprend directement aux effacements. Sinon
+    on REVÉRIFIE l'eligibilite (l'ecran de confirmation a pu vieillir) et on
+    sort sans rien toucher si le dossier n'y est plus."""
+    with _verrou(uid):
+        item = lire(uid)
+        if not item:
+            return
+        d = _rep(item)
+        if not item.get("purge"):
+            elig = _eligibilite(item, config.conservation())
+            if not elig:
+                return
+            courant = etat(item)
+            item["champs"] = {config.role(r): config.valeur(item["champs"], r)
+                              for r in _CHAMPS_GARDES
+                              if config.valeur(item["champs"], r)}
+            item["journal"] = _journal_nettoye(item["journal"]) + [
+                {"de": courant, "vers": courant, "le": maintenant(),
+                 "par": "systeme", "type": "purge"}]
+            # sinon un jeton de moins de 30 j reste valide sur un dossier vide.
+            item["link_epoch"] = item.get("link_epoch", 0) + 1
+            item["lien_comptable_epoch"] = item.get("lien_comptable_epoch", 0) + 1
+            item["purge"] = {"le": maintenant(), "jours": elig[1]}
+            _ecrire(d, item)
+        _effacer_pieces(uid, item, d)
 
 
 # --- liens signes (ticket 08/09) -----------------------------------------

@@ -8,6 +8,9 @@ config/PLACEHOLDERS.md
 _wingstop_reel/
 config_wingstop/
 data_demo/
+# guides de deploiement, non versionnes
+docs/GUIDE-VPS.md
+docs/GUIDE-STOCKAGE-SHAREPOINT.md
 # notes de travail internes, non versionnees
 AUDIT-DIAGRAMME.md
 NOTES-infra.md

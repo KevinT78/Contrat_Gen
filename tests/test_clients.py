@@ -24,7 +24,8 @@ from docx import Document
 sys.stdout.reconfigure(encoding="utf-8")
 RACINE = Path(__file__).resolve().parent.parent
 CODE = ["app.py", "config.py", "contrat.py", "mails.py", "signature.py", "configurer.py",
-        "store.py", "installer.py", "recap.py", "placeholders.py", "doctor.py", "demo.py"]
+        "store.py", "installer.py", "recap.py", "purger.py", "placeholders.py",
+        "doctor.py", "demo.py"]
 
 MENTIONS = ["RaisonSociale", "FormeCapital", "RCS", "SiegeSocial", "ConventionCollective"]
 
@@ -111,6 +112,10 @@ CLIENTS = [
         # « poste » etaient lus en dur -> KeyError en pleine action RH.
         "slug": "btp",
         "nom": "Toitures du Nord",
+        # Le client installe sur un DRIVE : `installer.py` recoit un 3e argument,
+        # instance.json porte stockage.mode = dossier, et son parcours tourne SANS
+        # DONNEES= dans l'environnement -- sinon le test ne prouverait rien.
+        "drive": True,
         "formulaire": FORMULAIRE_RENOMME,
         "postes": ["Couvreur", "Chef d'équipe"],
         # Poste a APOSTROPHE, joue expres : Jinja l'echappe en « d&#39; », et
@@ -157,7 +162,12 @@ def installer_copie(base, client):
     copie = base / client["slug"]
     poser_code(copie)
 
-    out = subprocess.run([sys.executable, "installer.py", client["nom"], "."],
+    args = [client["nom"], "."]
+    if client.get("drive"):
+        (base / "drives").mkdir(exist_ok=True)
+        client["drive_chemin"] = base / "drives" / client["slug"]
+        args.append(str(client["drive_chemin"]))
+    out = subprocess.run([sys.executable, "installer.py", *args],
                          cwd=copie, capture_output=True, text=True, encoding="utf-8")
     assert out.returncode == 0, out.stderr
     mdp = re.search(r"rh / (\S+)", out.stdout)
@@ -177,6 +187,11 @@ def installer_copie(base, client):
     inst["url"] = "http://localhost"
     inst["mails"].update(expediteur=f"rh@{client['slug']}.example",
                          rh=[f"rh@{client['slug']}.example"])
+    attendu = ({"mode": "dossier", "chemin": str(client["drive_chemin"])}
+               if client.get("drive") else {"mode": "local"})
+    assert inst["stockage"] == attendu, f"installer.py : {inst.get('stockage')}"
+    assert (copie / "data").is_dir() != bool(client.get("drive")), \
+        "en mode dossier, l'instance ne doit pas porter de data/"
     (copie / "config" / "instance.json").write_text(
         json.dumps(inst, ensure_ascii=False, indent=2), encoding="utf-8")
     modele_docx(copie / "config" / "contrats" / "contrat.docx", [
@@ -232,14 +247,34 @@ def main():
                 "etab_depose": client["etab_depose"],
             }, ensure_ascii=False), encoding="utf-8")
 
-            env = {**os.environ, "DONNEES": str(copie / "data"),
-                   "PYTHONIOENCODING": "utf-8"}
+            # Le client « drive » tourne SANS DONNEES= : c'est instance.json qui
+            # doit envoyer ses ecritures sur le dossier synchronise.
+            env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
+            if client.get("drive"):
+                env.pop("DONNEES", None)
+            else:
+                env["DONNEES"] = str(copie / "data")
             r = subprocess.run([sys.executable, driver, str(copie), str(spec)],
                                capture_output=True, text=True, encoding="utf-8", env=env)
             assert r.returncode == 0, f"[{client['nom']}]\n{r.stdout}\n{r.stderr}"
             ok = [l for l in r.stdout.splitlines() if l.startswith("PARCOURS OK")]
             assert ok, r.stdout
             _, nom, secret8, donnees = ok[0].split("\t")
+            if drive := client.get("drive_chemin"):
+                assert Path(donnees) == drive, f"écrit dans {donnees}, pas {drive}"
+                assert (drive / "soumissions").is_dir(), "rien écrit sur le drive"
+                assert not (copie / "data").exists(), \
+                    f"{copie}/data existe : le parcours a écrit dans l'instance"
+                # Même refus que sur config/ : deux instances sur le même dossier
+                # drive fusionneraient leurs dossiers salariés, et store._verrou
+                # ne protège qu'à l'intérieur d'un process.
+                seconde = base / (client["slug"] + "-bis")
+                poser_code(seconde)
+                r2 = subprocess.run(
+                    [sys.executable, "installer.py", client["nom"], ".", str(drive)],
+                    cwd=seconde, capture_output=True, text=True, encoding="utf-8")
+                assert r2.returncode != 0, \
+                    "installer une 2e instance sur un dossier drive occupé doit être refusé"
             print(f"  ✓ {nom:22} secret {secret8}…  {donnees}")
             vus.append((nom, secret8, donnees))
 

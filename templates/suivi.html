@@ -13,12 +13,25 @@
       {% else %}{{ items|length }} affichée{{ 's' if items|length > 1 }}{% endif %}
       <span class="filet"></span>triées par date de début</p>
   </div>
-  <form method="post" action="{{ url_for('recharger') }}">
-    <button class="discret" type="submit"
-            title="Relire config/ après une modification (établissement, salaires, clause)">
-      Recharger la configuration</button>
-  </form>
+  <div class="actions">
+    {% if purge_active %}
+      <a class="bouton discret" href="{{ url_for('purger_apercu') }}"
+         title="Effacer les pièces des dossiers ayant dépassé leur durée de conservation">
+        Purger les dossiers terminés</a>
+    {% endif %}
+    <form method="post" action="{{ url_for('recharger') }}">
+      <button class="discret" type="submit"
+              title="Relire config/ après une modification (établissement, salaires, clause)">
+        Recharger la configuration</button>
+    </form>
+  </div>
 </div>
+
+{% if a_purger %}
+  <p class="indice manque">{{ a_purger }} dossier(s) ont dépassé leur durée de
+    conservation — leurs pièces peuvent être effacées.
+    <a href="{{ url_for('purger_apercu') }}">Voir la purge</a>.</p>
+{% endif %}
 
 <form method="get" action="{{ url_for('suivi') }}" class="barre-filtres">
   <div class="champ">

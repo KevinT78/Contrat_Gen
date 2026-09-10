@@ -12,7 +12,6 @@ from pathlib import Path
 
 RACINE = Path(__file__).parent
 CLIENT = Path(os.environ.get("CONFIG_DIR", RACINE / "config"))
-DONNEES = Path(os.environ.get("DONNEES", RACINE / "data"))
 
 SECRET_A_INSTALLER = "REMPLACER-A-L-INSTALLATION"
 MDP_PAR_DEFAUT = "demo"          # l'ancien mot de passe de démo — refusé au démarrage
@@ -50,6 +49,55 @@ def societes():
 def comptes():
     """Les comptes de connexion : le bloc `utilisateurs` de instance.json."""
     return instance().get("utilisateurs", {})
+
+
+def stockage():
+    """Le bloc `stockage` d'instance.json : ou vivent les donnees.
+
+    Lecture GARDEE : config est importe par des outils qui tournent sans
+    instance complete (doctor, tests, installer d'a cote). Une instance
+    installee avant ce bloc n'en a pas -- absent vaut « local »."""
+    try:
+        s = instance().get("stockage")
+    except (OSError, ValueError, KeyError):
+        return {}
+    return s if isinstance(s, dict) else {}
+
+
+def conservation():
+    """Le bloc `conservation` d'instance.json : au bout de combien de jours dans
+    un etat terminal les pieces d'un dossier sont effacees (le journal, lui,
+    reste). Lecture GARDEE comme stockage(). Bloc absent = aucune purge,
+    retro-compatible."""
+    try:
+        c = instance().get("conservation")
+    except (OSError, ValueError, KeyError):
+        return {}
+    return c if isinstance(c, dict) else {}
+
+
+def _donnees():
+    """LE seul endroit qui decide ou vit data/. Priorite :
+
+      1. env DONNEES        -- la ligne de lancement l'emporte toujours (compat :
+                               les tests et les instances lancees a la main)
+      2. stockage.chemin    -- mode « dossier », replique par le client de sync
+      3. a cote de config/  -- l'instance porte ses donnees (CONFIG_DIR pose)
+      4. RACINE / data      -- le depot lui-meme (dev, demo)
+    """
+    if env := os.environ.get("DONNEES"):
+        return Path(env)
+    s = stockage()
+    if s.get("mode") == "dossier" and isinstance(s.get("chemin"), str) and s["chemin"].strip():
+        return Path(s["chemin"].strip())
+    if os.environ.get("CONFIG_DIR"):
+        return CLIENT.parent / "data"
+    return RACINE / "data"
+
+
+# Fige au demarrage : deplacer les donnees d'une instance qui tourne n'est pas
+# un rechargement a chaud, c'est un redemarrage (et un deplacement de fichiers).
+DONNEES = _donnees()
 
 
 def recharger():
@@ -113,8 +161,13 @@ def url_publique():
 
 def mode_contrat(cle):
     """Couloir du schema, en donnee : 'genere' (Dark Kitchen) ou 'depose'
-    (Restaurant, contrat fait a la main sur myrhis). Absent = 'genere'."""
-    _, e = etablissement(cle)
+    (Restaurant, contrat fait a la main sur myrhis). Absent = 'genere' -- y
+    compris quand l'etablissement lui-meme a disparu de la config (dossier
+    vieux ou purge) : un ecran dossier ne doit pas 500 pour ca."""
+    try:
+        _, e = etablissement(cle)
+    except KeyError:
+        return "genere"
     return e.get("contrat", "genere")
 
 
@@ -333,6 +386,75 @@ def _verifier_version():
     return {}
 
 
+def _verifier_stockage():
+    """Ou vivent les donnees, verifie comme le reste de la config.
+
+    En mode « dossier », l'ECRITURE est testee pour de vrai : un dossier de
+    synchronisation pas encore replique, deplace, ou monte en lecture seule doit
+    etre refuse au demarrage -- pas decouvert a la premiere soumission d'un vrai
+    salarie, quand la piece d'identite est deja partie dans le vide.
+
+    Bloc absent = local : les instances installees avant ce bloc demarrent."""
+    s = instance().get("stockage")
+    if s is None:
+        return {}
+    if not isinstance(s, dict):
+        return {"stockage": ["attend un objet, ex. {\"mode\": \"local\"}"]}
+    mode = s.get("mode", "local")
+    if mode == "local":
+        return {}
+    if mode != "dossier":
+        return {"stockage": [f"mode « {mode} » inconnu — au choix : "
+                             "« local » (data/ dans l'instance) ou « dossier » "
+                             "(dossier répliqué par un client de synchronisation)"]}
+    chemin = s.get("chemin")
+    if not isinstance(chemin, str) or not chemin.strip():
+        return {"stockage": ["mode « dossier » sans « chemin » : indiquez la racine "
+                             "du dossier répliqué par le client de synchronisation"]}
+    racine = Path(chemin.strip())
+    if not racine.is_dir():
+        return {"stockage": [f"« {chemin} » n'est pas un dossier — le client de "
+                             "synchronisation est-il installé et le dossier répliqué ?"]}
+    sonde = racine / f".contratgen-ecriture-{os.getpid()}"
+    try:
+        sonde.write_bytes(b"")
+        sonde.unlink()
+    except OSError as e:
+        return {"stockage": [f"« {chemin} » n'est pas accessible en écriture : {e}"]}
+    return {}
+
+
+def _verifier_conservation():
+    """Conservation des donnees : au bout de combien de jours un dossier termine
+    voit ses pieces effacees. Patron de _verifier_stockage -- la FORME avant les
+    valeurs, sinon c'est le garde-fou qui plante sur une config malformee.
+
+    Bloc absent = aucune purge : les instances installees avant ce bloc
+    demarrent sans rien changer."""
+    c = instance().get("conservation")
+    if c is None:
+        return {}
+    if not isinstance(c, dict):
+        return {"conservation": ["attend un objet, ex. {\"jours\": 1095, "
+                                 "\"jours_candidature\": 730, \"apres\": "
+                                 "[\"RemisComptable\", \"Rejetee\", \"Abandonnee\"]}"]}
+    import store          # store importe config : import local, cycle sinon
+    raisons = []
+    for cle in ("jours", "jours_candidature"):
+        v = c.get(cle)
+        # isinstance(True, int) est vrai -- refuser bool explicitement.
+        if not isinstance(v, int) or isinstance(v, bool) or v <= 0:
+            raisons.append(f"« {cle} » attend un entier > 0 (reçu : {v!r})")
+    apres = c.get("apres")
+    if (not isinstance(apres, list) or not apres
+            or not all(isinstance(e, str) for e in apres)):
+        raisons.append("« apres » attend une liste non vide d'états")
+    elif inconnus := [e for e in apres if e not in store.ETATS]:
+        raisons.append("« apres » : état(s) inconnu(s) " + ", ".join(inconnus)
+                       + " — au choix : " + ", ".join(store.ETATS))
+    return {"conservation": raisons} if raisons else {}
+
+
 def _verifier_installation():
     from werkzeug.security import check_password_hash
     manques = {}
@@ -535,7 +657,8 @@ def verifier():
     """Garde-fou de demarrage. Renvoie {} si tout va bien, sinon un dict
     {sujet: [raisons]} et l'instance ne sert pas."""
     manques = {}
-    for check in (_verifier_version, _verifier_comptes, _verifier_installation,
+    for check in (_verifier_version, _verifier_comptes, _verifier_stockage,
+                  _verifier_conservation, _verifier_installation,
                   _verifier_derives, _verifier_roles, _verifier_placeholders,
                   _verifier_postes, _verifier_grille):
         manques.update(check())

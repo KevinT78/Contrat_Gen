@@ -33,9 +33,11 @@ FICHIERS = {"secret": "instance.json", "compte RH": "instance.json",
             "comptes": "instance.json", "mails": "instance.json",
             "config_version": "instance.json", "derives →": "instance.json",
             "poste «": "instance.json", "url": "instance.json",
+            "stockage": "instance.json", "conservation": "instance.json",
             "établissements": "societes.json",
             "roles": "formulaire.json", "grille": "grille.json"}
-REPARABLES = ("secret", "url", "mails", "comptes", "compte RH", "établissements")
+REPARABLES = ("secret", "stockage", "conservation", "url", "mails", "comptes",
+              "compte RH", "établissements")
 
 
 def fichier(sujet):
@@ -118,6 +120,34 @@ def _reparer_url(_raisons):
         _ecrire("instance.json", lambda d: {**d, "url": url})
 
 
+def _reparer_stockage(_raisons):
+    rep = _demander("Où vivent les données ? [1] dans l'instance  "
+                    "[2] dossier synchronisé (OneDrive, SharePoint, Google Drive)")
+    if rep == "1":
+        _ecrire("instance.json", lambda d: {**d, "stockage": {"mode": "local"}})
+    elif rep == "2" and (chemin := _demander(
+            "Chemin du dossier répliqué par le client de synchronisation")):
+        _ecrire("instance.json",
+                lambda d: {**d, "stockage": {"mode": "dossier", "chemin": chemin}})
+
+
+def _reparer_conservation(_raisons):
+    rep = _demander("Effacer les pièces des dossiers terminés au bout de combien "
+                    "de jours ? (ex. 1095 = 3 ans ; vide = ne pas configurer)")
+    if not rep:
+        return
+    try:
+        jours = int(rep)
+        cand = int(_demander("Et les candidatures jamais validées ? (ex. 730)") or rep)
+    except ValueError:
+        print("  Nombre invalide — rien n'est écrit.")
+        return
+    _ecrire("instance.json", lambda d: {**d, "conservation": {
+        "jours": jours, "jours_candidature": cand,
+        "apres": ["RemisComptable", "Rejetee", "Abandonnee"]}})
+    print("  conservation écrite (états : RemisComptable, Rejetee, Abandonnee).")
+
+
 def _reparer_mails(raisons):
     m = dict(config.instance().get("mails") or {})
     if any("rh" in r for r in raisons):
@@ -167,7 +197,9 @@ def _reparer_etablissements(_raisons):
         _ecrire("societes.json", lambda d: (d or []) + [soc])
 
 
-REPARATIONS = {"secret": _reparer_secret, "url": _reparer_url, "mails": _reparer_mails,
+REPARATIONS = {"secret": _reparer_secret, "stockage": _reparer_stockage,
+               "conservation": _reparer_conservation,
+               "url": _reparer_url, "mails": _reparer_mails,
                "comptes": _reparer_comptes, "compte RH": _reparer_compte_rh,
                "établissements": _reparer_etablissements}
 

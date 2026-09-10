@@ -5,6 +5,7 @@
   "url": "",
 
   "signature": {"mode": "manuel"},
+  "stockage": {"mode": "local"},
 
   "mails": {
     "mode": "console",

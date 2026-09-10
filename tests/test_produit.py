@@ -15,6 +15,7 @@ Trois décisions, trois vérifications :
 """
 import json
 import os
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -341,6 +342,139 @@ def test_rechargement_met_a_jour_ce_qui_est_fige_a_limport():
         "clé de session restée sur l'ancien secret : les liens signés divergent"
     assert config.instance()["motifs_ko"] == ["Motif tout neuf"], \
         "motifs de KO figés à l'import"
+
+
+def test_demarrer_ne_cree_pas_le_dossier_de_stockage_quil_verifie():
+    """Le garde-fou constate, il ne répare pas.
+
+    `demarrer()` crée `soumissions/` et `DOSSIERS/` sous config.DONNEES. Tant
+    que ce mkdir(parents=True) précédait `verifier()`, il créait LUI-MÊME le
+    chemin du drive annoncé dans instance.json : _verifier_stockage trouvait
+    alors un dossier bien présent et accessible, l'app démarrait, et les pièces
+    d'identité partaient dans un dossier local qui ressemble à un dossier
+    synchronisé. Le contrôle porte sur ce qui est observable : refus de servir
+    ET dossier toujours absent."""
+    ecrire()
+    absent = BASE / "drive-jamais-replique"
+    assert not absent.exists()
+    (CONF / "instance.json").write_text(
+        json.dumps({**INSTANCE, "stockage": {"mode": "dossier", "chemin": str(absent)}}),
+        encoding="utf-8")
+    env = {k: v for k, v in os.environ.items() if k != "DONNEES"}
+    env["PYTHONIOENCODING"] = "utf-8"
+    try:
+        # timeout obligatoire : quand la régression est là, demarrer() ne sort
+        # pas — il SERT. Sans lui, ce test pendrait au lieu de virer au rouge.
+        r = subprocess.run(
+            [sys.executable, "-c", "import app; app.demarrer()"],
+            cwd=str(Path(__file__).resolve().parent.parent),
+            capture_output=True, text=True, encoding="utf-8", env=env, timeout=60)
+    except subprocess.TimeoutExpired:
+        raise AssertionError("l'app s'est mise à servir alors que le dossier de "
+                             "stockage n'existe pas")
+    assert r.returncode != 0, f"l'app a démarré sur un drive absent :\n{r.stdout}"
+    assert "stockage" in r.stdout + r.stderr, r.stdout + r.stderr
+    assert not absent.exists(), "demarrer() a créé le dossier qu'il devait refuser"
+    config._CACHE.clear()
+
+
+def test_rechargement_dit_que_le_stockage_ne_bouge_pas_a_chaud():
+    """config.DONNEES est figé à l'import : changer `stockage` puis recharger
+    ne déplace ni le chemin ni les fichiers. Faire semblant serait pire que ne
+    rien faire — le handler doit le dire."""
+    ecrire()
+    import app as application
+    application.app.secret_key = config.instance()["secret"]
+    client = application.app.test_client()
+    with client.session_transaction() as s:
+        s["utilisateur"] = "rh"
+
+    ailleurs = BASE / "drive-bis"
+    ailleurs.mkdir(exist_ok=True)
+    (CONF / "instance.json").write_text(
+        json.dumps({**INSTANCE, "stockage": {"mode": "dossier", "chemin": str(ailleurs)}}),
+        encoding="utf-8")
+    donnees = os.environ.pop("DONNEES")        # sinon l'env l'emporte, rien ne bouge
+    try:
+        page = client.post("/recharger", follow_redirects=True)
+    finally:
+        os.environ["DONNEES"] = donnees
+    assert page.status_code == 200
+    assert "redémarrez" in page.get_data(as_text=True), \
+        "stockage changé à chaud sans un mot : les données vont ailleurs que promis"
+    ecrire()
+    config.recharger()
+
+
+def test_verifier_conservation_refuse_les_formes_invalides():
+    """La FORME avant les valeurs : une config `conservation` malformée doit
+    sortir un KO propre qui nomme le sujet, jamais faire planter le garde-fou.
+    Bloc absent = pas de purge (rétro-compatible)."""
+    ecrire()
+    assert "conservation" not in config.verifier(), "bloc absent doit passer"
+
+    for bloc in ({"jours": True, "jours_candidature": 730, "apres": ["Rejetee"]},
+                 {"jours": 0, "jours_candidature": 730, "apres": ["Rejetee"]},
+                 {"jours": "1095", "jours_candidature": 730, "apres": ["Rejetee"]},
+                 {"jours": 1095, "jours_candidature": 730, "apres": []},
+                 {"jours": 1095, "jours_candidature": 730, "apres": ["Inexistant"]},
+                 {"jours": 1095, "apres": ["Rejetee"]},          # jours_candidature manquant
+                 "pas-un-objet"):
+        ecrire(instance={**INSTANCE, "conservation": bloc})
+        manques = config.verifier()               # ne doit pas lever
+        assert "conservation" in manques, f"{bloc!r} passe le garde-fou"
+
+    # le cas valide passe
+    ecrire(instance={**INSTANCE, "conservation": {
+        "jours": 1095, "jours_candidature": 730,
+        "apres": ["RemisComptable", "Rejetee", "Abandonnee"]}})
+    assert "conservation" not in config.verifier(), config.verifier()
+
+
+def test_second_serveur_sur_le_meme_stockage_refuse():
+    """store._verrou est intra-process : deux serveurs sur le même stockage
+    perdent des entrées de journal en silence. Le fichier .serveur-actif.json
+    refuse le second démarrage tant qu'il est frais."""
+    ecrire()
+    config.DONNEES.mkdir(parents=True, exist_ok=True)
+    import app as application
+    import json as _j
+    import time as _t
+    f = application._fichier_verrou()
+    f.unlink(missing_ok=True)
+
+    application._verrou_serveur(("machine-A", 111))
+    assert f.exists()
+    try:
+        application._verrou_serveur(("machine-B", 222))
+        raise AssertionError("un second serveur a démarré sur le même stockage")
+    except SystemExit as e:
+        assert "machine-A" in str(e) and "111" in str(e), str(e)
+    application._verrou_serveur(("machine-A", 111))          # même couple : refresh, OK
+
+    # contrôle négatif 1 : verrou d'une AUTRE machine, périmé au-delà du TTL
+    f.write_text(_j.dumps({"hote": "machine-A", "pid": 111,
+                           "le": _t.time() - application._VERROU_TTL - 10}), encoding="utf-8")
+    application._verrou_serveur(("machine-B", 222))          # périmé -> pas de refus
+    assert _j.loads(f.read_text())["hote"] == "machine-B", "le verrou périmé n'a pas été repris"
+
+    # contrôle négatif 2 : verrou de CETTE machine dont le pid est mort -> repris
+    # aussitôt (pas d'attente du TTL). 2**31-1 : pid qui n'existe pas.
+    import socket as _s
+    f.write_text(_j.dumps({"hote": _s.gethostname(), "pid": 2**31 - 1,
+                           "le": _t.time()}), encoding="utf-8")
+    application._verrou_serveur()                            # pid mort -> pas de refus
+    assert _j.loads(f.read_text())["pid"] == os.getpid(), "verrou d'un pid mort non repris"
+
+    # et le contrôle positif : pid VIVANT (le nôtre) sur cette machine -> refus
+    f.write_text(_j.dumps({"hote": _s.gethostname(), "pid": os.getpid() ,
+                           "le": _t.time()}), encoding="utf-8")
+    try:
+        application._verrou_serveur((_s.gethostname(), os.getpid() + 1))
+        raise AssertionError("verrou tenu par un pid vivant : le refus doit tomber")
+    except SystemExit:
+        pass
+    f.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":

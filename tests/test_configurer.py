@@ -106,6 +106,48 @@ def test_compte_ajoute_un_utilisateur():
     assert users["rh"] == INSTANCE["utilisateurs"]["rh"], "compte rh écrasé"
 
 
+def test_bilan_refuse_un_chemin_de_drive_absent():
+    """Le mode « dossier » est vérifié au démarrage, pas à la 1re soumission :
+    un dossier de sync pas encore répliqué doit sortir un KO qui nomme
+    instance.json et dit pourquoi."""
+    ecrire({**INSTANCE, "stockage": {"mode": "dossier",
+                                     "chemin": str(BASE / "drive-absent")}})
+    code, sortie = lancer()
+    assert code == 1 and "! stockage  [config/instance.json]" in sortie, sortie
+    assert "drive-absent" in sortie and "n'est pas un dossier" in sortie, sortie
+
+    # Les formes que la validation doit REFUSER, pas seulement le cas valide.
+    for bloc, attendu in (({"mode": "cloud"}, "inconnu"),
+                          ({"mode": "dossier"}, "sans « chemin »"),
+                          ({"mode": "dossier", "chemin": "  "}, "sans « chemin »"),
+                          ("local", "attend un objet")):
+        ecrire({**INSTANCE, "stockage": bloc})
+        code, sortie = lancer()
+        assert code == 1 and attendu in sortie, f"{bloc} : {sortie}"
+
+    # Et le cas valide passe : dossier existant et accessible en écriture.
+    drive = BASE / "drive"
+    drive.mkdir(exist_ok=True)
+    ecrire({**INSTANCE, "stockage": {"mode": "dossier", "chemin": str(drive)}})
+    code, sortie = lancer()
+    assert code == 0, sortie
+    assert not list(drive.iterdir()), "la sonde d'écriture a laissé un fichier"
+
+
+def test_assistant_pose_le_bloc_stockage():
+    drive = BASE / "drive-assistant"
+    drive.mkdir(exist_ok=True)
+    ecrire({**INSTANCE, "stockage": {"mode": "dossier", "chemin": str(BASE / "nulle-part")}})
+    code, sortie = lancer("--assister", entree=f"2\n{drive}\n")
+    assert code == 0, sortie
+    assert instance()["stockage"] == {"mode": "dossier", "chemin": str(drive)}
+
+    ecrire({**INSTANCE, "stockage": {"mode": "dossier", "chemin": str(BASE / "nulle-part")}})
+    code, sortie = lancer("--assister", entree="1\n")
+    assert code == 0, sortie
+    assert instance()["stockage"] == {"mode": "local"}
+
+
 def test_assistant_cree_la_premiere_societe():
     ecrire(societes=[])
     reponses = ["Toitures du Nord", "494 118 220", "cab@tdn.example", "TDN SAS",

@@ -19,7 +19,7 @@
   {% endif %}
   <span class="filet"></span><code>{{ item.id }}</code></p>
 
-{% if etat not in ('Rejetee', 'Abandonnee') %}
+{% if etat not in ('Rejetee', 'Abandonnee') and not item.purge %}
   {% set ici = flux.index(etat) %}
   <ul class="etapes">
     {% for e in flux %}
@@ -33,7 +33,13 @@
 {% endif %}
 
 <div class="carte">
-  {% if etat == 'Soumise' %}
+  {% if item.purge %}
+    <p class="titre-carte">Dossier purgé</p>
+    <p style="margin:0" class="vide">Pièces effacées le
+      {{ date_fr(item.purge.le[:10]) }} (conservation {{ item.purge.jours }} jours).
+      Le journal ci-dessous est conservé ; aucune action n'est possible.</p>
+
+  {% elif etat == 'Soumise' %}
     <p class="titre-carte">Décision</p>
     <div class="actions">
       <form method="post" action="{{ url_for('valider', uid=item.id) }}">
@@ -156,7 +162,7 @@
   {% endif %}
 </div>
 
-{% if etat not in ('Soumise', 'Rejetee', 'Abandonnee') %}
+{% if etat not in ('Soumise', 'Rejetee', 'Abandonnee') and not item.purge %}
 <div class="pied-actions">
   <form method="post" action="{{ url_for('abandonner', uid=item.id) }}">
     <button class="danger">Abandonner le dossier</button></form>

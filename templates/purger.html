@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block titre %}Purge des dossiers terminés{% endblock %}
+{% block corps %}
+<a class="retour" href="{{ url_for('suivi') }}">← Toutes les demandes</a>
+<h1>Purge des dossiers terminés</h1>
+
+{% if not conf %}
+  <div class="carte">
+    <p style="margin:0" class="vide">Aucune règle de conservation n'est configurée
+      (bloc <code>conservation</code> dans <code>instance.json</code>). Rien à purger.</p>
+  </div>
+{% else %}
+  <p class="sous">Conservation : {{ conf.jours }} jours après un état terminal
+    ({{ conf.apres | join(', ') }}) · candidatures jamais validées
+    {{ conf.jours_candidature or conf.jours }} jours.</p>
+
+  {% if not lignes %}
+    <div class="carte">
+      <p style="margin:0" class="vide">Aucun dossier n'a dépassé sa durée de conservation.</p>
+    </div>
+  {% else %}
+    <div class="carte">
+      <p class="titre-carte">{{ lignes|length }} dossier(s) à purger</p>
+      <p class="indice manque">Les pièces (CNI, RIB, contrats, copies comptables)
+        seront <b>effacées définitivement</b>. Le journal du dossier est conservé,
+        le répertoire est renommé <code>purge-&lt;id&gt;</code>. Action irréversible.</p>
+      <div class="tableau">
+      <table>
+        <thead><tr><th>Salarié</th><th>Établissement</th><th>État</th>
+                   <th>Ancienneté</th></tr></thead>
+        <tbody>
+        {% for l in lignes %}
+          <tr><td>{{ l.nom }}</td><td class="secondaire">{{ l.etablissement }}</td>
+              <td>{{ l.etat }}</td>
+              <td class="manque">{{ l.ecoule }} j / {{ l.duree }} j</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      </div>
+      <form method="post" action="{{ url_for('purger') }}" class="actions">
+        <button class="danger">Purger ces {{ lignes|length }} dossier(s)</button>
+      </form>
+    </div>
+  {% endif %}
+{% endif %}
+{% endblock %}

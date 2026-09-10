@@ -30,13 +30,65 @@ une instance ne se copie jamais depuis celle d'un autre.
 
 ```bash
 python installer.py "ACME Restauration" /srv/acme
-CONFIG_DIR=/srv/acme/config DONNEES=/srv/acme/data python app.py
+CONFIG_DIR=/srv/acme/config python app.py
 ```
 
 `installer.py` **copie** `config.exemple/` vers `/srv/acme/config/` et génère le
 secret HMAC et le mot de passe RH. Aucune valeur d'un autre client ne peut
 survivre par oubli — c'est structurel, pas une liste de champs à nettoyer. Une
 réinstallation par-dessus un `config/` existant est **refusée**.
+
+### Où vivent les données : local ou dossier synchronisé
+
+L'installateur prend un **3e argument optionnel** : le chemin d'un dossier
+répliqué par le client de synchronisation d'un drive d'entreprise (OneDrive,
+SharePoint, Google Drive) **déjà installé sur ce serveur**.
+
+```bash
+python installer.py "ACME" /srv/acme                                   # data/ dans l'instance
+python installer.py "ACME" /srv/acme "C:/Users/rh/OneDrive - ACME/Embauches"   # sur le drive
+```
+
+Le choix est écrit dans `config/instance.json` (`"stockage": {"mode": "local"}`
+ou `{"mode": "dossier", "chemin": "…"}`) et **vérifié au démarrage** : mode
+connu, dossier existant, et écriture réellement testée — un dossier de sync pas
+encore répliqué ou monté en lecture seule est refusé tout de suite, pas découvert
+à la première soumission d'un vrai salarié. Un bloc absent vaut `local` : les
+instances installées avant ce bloc démarrent sans rien changer. Pour le poser ou
+le corriger après coup : `configurer.py --assister`. `DONNEES=` sur la ligne de
+lancement reste **prioritaire** sur le bloc. Ce n'est pas rechargeable à chaud :
+changer `stockage` puis *Recharger la configuration* affiche un avertissement —
+les écritures continuent d'aller à l'ancien endroit jusqu'au redémarrage (et il
+faut déplacer les fichiers). L'installateur **refuse** un dossier drive non vide,
+comme il refuse d'écraser un `config/` existant.
+
+En mode `dossier`, l'app écrit sur un système de fichiers local comme avant : elle
+ne fait **aucun appel réseau** et ne connaît aucun fournisseur — c'est le client
+de sync qui réplique. Quatre choses à savoir (détail et raisonnement dans
+[docs/ADR-stockage.md](docs/ADR-stockage.md)) :
+
+- **Une seule machine écrit.** `store._verrou` n'exclut qu'à l'intérieur d'un
+  process : deux serveurs pointés sur le même dossier drive perdraient des
+  entrées de journal. Ce n'est pas un stockage partagé, c'est un disque distant.
+- **Verrouillage pendant l'upload.** Le client de sync peut tenir un fichier le
+  temps de le téléverser ; sous Windows, `os.replace` / `shutil.move` peuvent
+  alors lever `PermissionError`. Non observé en conditions réelles à ce jour —
+  aucune parade n'est codée tant que ce n'est pas mesuré.
+- **Fichiers à la demande** (OneDrive) : un fichier non téléchargé se lit quand
+  même, mais lentement — à surveiller sur `/suivi`, qui rescanne tous les
+  `dossier.json`.
+- **La sauvegarde change de forme** : le drive porte l'historique de `data/`,
+  `tar` reste la sauvegarde de `config/` (qui, lui, ne quitte jamais le serveur).
+- **La purge locale ne descend pas dans le drive** : effacer les pièces d'un
+  dossier terminé (bloc `conservation`, ci-dessous) ne vide **ni la corbeille ni
+  l'historique de versions** du service de synchronisation — la version complète
+  de `dossier.json`, NIR et adresse compris, y reste récupérable. Après une
+  purge en mode `dossier`, vider la corbeille et l'historique de versions à la
+  main côté service. `python purger.py` le rappelle.
+
+Le mode « API cloud directe » (Graph, Google Drive API, OAuth) n'est **pas**
+codé : il exigerait de rejouer le seam d'I/O de `store.py` et surtout de décider
+où vit le journal `dossier.json`. Voir l'ADR.
 
 Il faut ensuite remplir `config/` puis démarrer. **Le démarrage refuse de servir**
 tant que l'installation est incomplète : secret encore par défaut, compte RH au
@@ -129,7 +181,7 @@ ne vit dans le dépôt :
 |---|---|---|
 | le code (`*.py`, `templates/`) | le produit | **remplacé** |
 | `$CONFIG_DIR` (défaut `config/`) | le client | **jamais touché** — l'app n'écrit jamais sa config |
-| `$DONNEES` (défaut `data/`) | le client | **jamais touché** |
+| `$DONNEES` (`data/`, ou le dossier drive) | le client | **jamais touché** |
 
 Donc : remplacer le code, relancer. Au démarrage, `config.verifier()` refuse de
 servir si la nouvelle version réclame quelque chose que la config n'a pas — un
@@ -142,7 +194,9 @@ Une config peut aussi être rechargée sans redémarrer, depuis l'écran de suiv
 (bouton *Recharger la configuration*) : une config invalide ne prend pas et
 l'ancienne reste active.
 
-**Sauvegarder.** `$DONNEES` **est** la base : soumissions, dossiers, pièces
+**Sauvegarder.** (En mode `dossier`, c'est le drive qui porte l'historique de
+`$DONNEES` ; ce qui suit ne concerne alors plus que `config/`.)
+`$DONNEES` **est** la base : soumissions, dossiers, pièces
 d'identité, RIB, contrats générés et signés. `$CONFIG_DIR` contient le secret et
 le compte RH. Les deux, rien d'autre :
 
@@ -390,8 +444,9 @@ data/
   mails/                                                       # mode console
 ```
 
-`DONNEES` est surchargeable par variable d'environnement (c'est ce dont les
-tests se servent). `dossier.json` porte un **journal append-only** qui fait foi
+Où vit `data/` se décide à l'installation (`stockage` dans `instance.json`,
+voir plus haut) ; `DONNEES` reste surchargeable par variable d'environnement et
+l'emporte sur le bloc (c'est ce dont les tests se servent). `dossier.json` porte un **journal append-only** qui fait foi
 sur l'état ; un fichier présent est une preuve corroborante, jamais décisive.
 Écritures temp-puis-rename avec verrou par id. 8 états :
 `Soumise → Rejetee / ATraiter → ContratPret → ContratSigne →
@@ -400,6 +455,35 @@ DpaeFaite → RemisComptable`, plus `Abandonnee`. Le rappel DPAE n'est pas un
 échoue (`mail_echoue`). Les transitions permises sont
 dans `store.TRANSITIONS` — un `POST` hors séquence est refusé côté serveur, pas
 seulement caché dans le template.
+
+**Refus de démarrer à deux.** En production (waitress), `demarrer()` pose
+`<data>/.serveur-actif.json` (`{hote, pid, le}`, rafraîchi toutes les 60 s par
+un thread démon) et refuse le démarrage si un autre serveur le tient —
+`store._verrou` est intra-process, deux serveurs sur le même stockage perdent
+des entrées de journal en silence. Un verrou dont le process est mort **sur la
+même machine** est repris aussitôt (sonde de vivacité) ; venu d'une autre
+machine, il expire au bout de 5 minutes. Pour forcer, supprimer le fichier. Le
+mode `DEBUG` (dev local) ne pose pas de verrou.
+
+**Conservation et purge.** Bloc optionnel `conservation` d'`instance.json` :
+
+```json
+"conservation": {"jours": 1095, "jours_candidature": 730,
+                 "apres": ["RemisComptable", "Rejetee", "Abandonnee"]}
+```
+
+Un dossier dont l'état courant est dans `apres` depuis plus de `jours` (ou
+`jours_candidature` si l'état est `Soumise`) devient éligible à la purge :
+`/suivi` l'affiche, le bouton *Purger les dossiers terminés* (RH) efface les
+pièces (CNI, RIB, contrats, copies comptables), réduit `dossier.json` à
+établissement / poste / date de début, nettoie le journal (commentaires libres,
+IP, procédures Yousign jetés), garde une entrée `purge` et renomme le répertoire
+`purge-<id>`. **Aucun octet supprimé sans trace : le journal reste.** Bloc
+absent = aucune purge (rétro-compatible). La purge s'exécute dans une requête,
+jamais dans un cron (invariant mono-process). `python purger.py` est le pendant
+**lecture seule** : liste les éligibles (code de sortie non nul s'il en reste),
+les `dossier.json` orphelins hors profondeur de `store._scan()`, et
+l'avertissement drive.
 
 ## Fichiers
 
@@ -414,12 +498,14 @@ seulement caché dans le template.
 | `installer.py` | crée l'instance d'un nouveau client depuis `config.exemple/` |
 | `placeholders.py` | fiche des `{{Jetons}}` à remettre au client, dérivée de sa config |
 | `recap.py` | mail hebdomadaire au cabinet : dossiers remis + liens de lot (CLI, à mettre en cron) |
+| `purger.py` | pendant lecture seule de la purge : éligibles, orphelins, avertissement drive (CLI) |
 | `doctor.py` | couverture de la config, vérifiée en produisant les contrats |
 | `configurer.py` | bilan de config lisible, assistant interactif, ajout de comptes |
 | `tests/test_parcours.py` | les deux couloirs, signature, fiche, récap, refus attendus |
 | `tests/test_signature.py` | `signature.py` contre un transport factice |
 | `tests/test_clients.py` | plusieurs clients factices, une instance chacun, étanches |
-| `tests/test_produit.py` | balisage client refusé si mal écrit, fiche dérivée, config versionnée, rechargement à chaud |
+| `tests/test_produit.py` | balisage client refusé si mal écrit, fiche dérivée, config versionnée, rechargement à chaud, `conservation` malformée refusée, refus de démarrer à deux |
+| `tests/test_purge.py` | parcours complet → purge → nom/NIR/adresse absents partout, rejouable, jeton de lot révoqué |
 | `tests/test_mails.py` | mode console, override `MAILS_MODE`, STARTTLS+login imposés dès qu'un identifiant SMTP est présent |
 | `tests/test_configurer.py` | bilan sous cp1252 (sous-processus, pipe), assistant scripté, comptes |
 
@@ -427,12 +513,14 @@ seulement caché dans le template.
 
 - **Direction visuelle** : CSS sobre au fil de l'eau, pas de `DESIGN.md`, pas de
   passe UI.
-- **Purge RGPD à deux étages** (ticket 01) : buckets en place, commande non écrite.
 - **Comptes RH réels** (ticket 08) : pas d'écran admin, pas de reset self-service,
   pas de verrou anti-brute-force.
 - **Relance automatique** à J+3 sur la validation.
 - **Anti-robot du formulaire public** (Altcha, honeypot, rate-limit).
-- **Scan de démarrage** signalant les écarts disque / `dossier.json`.
+- **Purge côté service de synchronisation** : la purge locale ne vide ni la
+  corbeille ni l'historique de versions du drive (à faire à la main).
+- **Verrou fichier multi-process réel** (`portalocker`) : `.serveur-actif.json`
+  prévient l'erreur de déploiement, il n'arbitre pas une course.
 - **Échéance légale de remise d'un CDD** (2 jours ouvrables) : le type de contrat
   est de la pure config (une règle `templates` peut porter sur n'importe quel
   champ du formulaire), mais aucun délai n'est suivi — seule la date de début

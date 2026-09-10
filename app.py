@@ -5,8 +5,11 @@ Aucune action au GET : chaque decision passe par un ecran de confirmation
 puis un POST (ticket 08).
 """
 import io
+import json
 import mimetypes
 import os
+import socket
+import threading
 import time
 import zipfile
 from collections import defaultdict
@@ -246,6 +249,13 @@ def recharger():
     # le nouveau et les cookies sur l'ancien -- liens du lot casses en silence.
     # Un secret reellement change deconnecte tout le monde, c'est voulu.
     app.secret_key = config.instance()["secret"]
+    # Meme piege que le secret, autre issue : config.DONNEES est fige a l'import
+    # et deplacer les donnees n'est pas un rechargement (il faut aussi deplacer
+    # les fichiers). On refuse de faire semblant : on le dit.
+    if config._donnees() != config.DONNEES:
+        flash(f"Le stockage a changé ({config._donnees()}), mais les données "
+              f"continuent d'aller dans {config.DONNEES} : redémarrez l'app "
+              f"après avoir déplacé les fichiers.", "erreur")
     flash("Configuration rechargée.", "ok")
     return redirect(url_for("suivi"))
 
@@ -390,6 +400,8 @@ def suivi():
                 and (not etat_f or store.etat(i) == etat_f)]
     return render_template("suivi.html", items=visibles, etat=store.etat,
                            inactifs=store.INACTIFS, total=len(items),
+                           purge_active=bool(config.conservation()),
+                           a_purger=len(store.eligibles(items)),
                            etab=etab, etat_f=etat_f, libelles=LIBELLES_ETAT,
                            etats=store.ETATS, manquantes=store.manquantes,
                            aujourdhui=date.today().isoformat(),
@@ -762,6 +774,44 @@ def abandonner(uid):
     return redirect(url_for("detail", uid=uid))
 
 
+# --- purge (conservation) ----------------------------------------------
+
+def _apercu_purge():
+    """Ce qui partirait : une ligne lisible par dossier eligible."""
+    lignes = []
+    for item, ecoule, duree in store.eligibles():
+        prenom, nom = config.identite(item["champs"])
+        lignes.append({"id": item["id"],
+                       "nom": " ".join(p for p in (prenom, nom.upper()) if p) or item["id"],
+                       "etablissement": config.valeur(item["champs"], "etablissement"),
+                       "etat": LIBELLES_ETAT.get(store.etat(item), store.etat(item)),
+                       "ecoule": ecoule, "duree": duree})
+    return lignes
+
+
+@app.get("/purger")
+@rh
+def purger_apercu():
+    """Aucune action au GET : l'ecran liste ce qui va partir, le POST l'efface."""
+    conf = config.conservation()
+    return render_template("purger.html", lignes=_apercu_purge(), conf=conf)
+
+
+@app.post("/purger")
+@rh
+def purger():
+    faits = 0
+    for item, _ecoule, _duree in store.eligibles():
+        try:
+            store.purger(item["id"])          # revérifie l'éligibilité lui-même
+            faits += 1
+        except OSError as e:
+            flash(f"{item['id']} : purge incomplète — {e}", "erreur")
+    flash(f"{faits} dossier(s) purgé(s) : pièces effacées, journal conservé."
+          if faits else "Aucun dossier à purger.", "ok" if faits else "erreur")
+    return redirect(url_for("suivi"))
+
+
 # --- lot comptable (sans login, possession du lien = acces) --------------
 
 @app.get("/lot/<jeton>")
@@ -804,10 +854,87 @@ def lot_fichier(jeton, bucket, nom):
     return _servir(store.ouvrir(item["id"], bucket, nom), nom, bucket)
 
 
+# --- verrou multi-machine ----------------------------------------------
+# store._verrou n'exclut qu'a l'interieur d'un process : deux serveurs pointes
+# sur le meme stockage (trivial avec un dossier synchronise) perdent des
+# entrees de journal EN SILENCE. Trois champs et un horodatage previennent
+# l'erreur de deploiement -- pas portalocker : on ne cherche pas a arbitrer une
+# course, juste a refuser un second demarrage.
+_VERROU_TTL = 300          # s : verrou d'une AUTRE machine, non sondable -> perime
+                           # au-dela. Sur la meme machine, la mort du pid tranche.
+
+
+def _fichier_verrou():
+    return config.DONNEES / ".serveur-actif.json"
+
+
+def _ecrire_verrou(moi):
+    f = _fichier_verrou()
+    tmp = f.with_suffix(".tmp")
+    tmp.write_text(json.dumps({"hote": moi[0], "pid": moi[1], "le": time.time()}),
+                   encoding="utf-8")
+    os.replace(tmp, f)
+
+
+def _pid_vivant(pid):
+    """True si le process tourne encore. os.kill(pid, 0) TUE le process sous
+    Windows (TerminateProcess) -- y passer par OpenProcess."""
+    if not isinstance(pid, int):
+        return False
+    if os.name == "nt":
+        import ctypes
+        h = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)  # QUERY_LIMITED_INFO
+        if h:
+            ctypes.windll.kernel32.CloseHandle(h)
+            return True
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True          # existe, mais pas a nous
+    return True
+
+
+def _verrou_serveur(moi=None):
+    """Refuse de demarrer si un AUTRE serveur tient le verrou. « Autre » =
+    couple (hote, pid) different ET (meme machine : pid encore vivant ; autre
+    machine : verrou de moins de _VERROU_TTL). Un crash sur la meme machine est
+    donc repris aussitot ; depuis une autre machine, au bout de 5 min. Puis
+    rafraichit le fichier toutes les 60 s (thread demon)."""
+    moi = moi or (socket.gethostname(), os.getpid())
+    f = _fichier_verrou()
+    if f.exists():
+        try:
+            tenu = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            tenu = {}
+        autre = (tenu.get("hote"), tenu.get("pid")) != tuple(moi)
+        age = time.time() - tenu.get("le", 0)
+        meme_machine = tenu.get("hote") == moi[0]
+        tient_encore = (_pid_vivant(tenu.get("pid")) if meme_machine
+                        else age < _VERROU_TTL)
+        if autre and tient_encore:
+            raise SystemExit(
+                f"Un serveur sert déjà ce stockage : {tenu.get('hote')} "
+                f"(pid {tenu.get('pid')}), verrou rafraîchi il y a {int(age)} s. "
+                f"Deux serveurs sur le même dossier perdent des entrées de journal "
+                f"en silence. Si l'autre a planté, supprimez {f}.")
+    _ecrire_verrou(moi)
+
+    def _boucle():
+        while True:
+            time.sleep(60)
+            try:
+                _ecrire_verrou(moi)
+            except OSError:
+                pass
+    threading.Thread(target=_boucle, daemon=True).start()
+
+
 def demarrer():
     """Verifie la config puis sert (waitress, ou Werkzeug si DEBUG)."""
-    for zone in ("soumissions", store.DOSSIERS):
-        (config.DONNEES / zone).mkdir(parents=True, exist_ok=True)
     # Refus dur : installation incomplete (secret/mdp par defaut, aucun
     # etablissement) ou template reclamant un champ inexistant -- tout se
     # decouvre ici, jamais a la generation du contrat d'un vrai salarie.
@@ -816,13 +943,32 @@ def demarrer():
             print(f"!! {sujet} : {', '.join(quoi)}")
         raise SystemExit("Configuration incomplète — le serveur ne sert pas. "
                          "Voir ci-dessus ; au besoin : python installer.py \"<Client>\"")
-    print(f"{config.instance()['client']} — données : {config.DONNEES}", flush=True)
+    # « dossier synchronise » seulement si c'est vraiment ce qui sert : DONNEES=
+    # sur la ligne de lancement l'emporte sur le bloc stockage, et une ligne de
+    # demarrage qui annonce un drive alors qu'on ecrit ailleurs serait pire que
+    # pas de mention du tout.
+    depuis_config = (config.stockage().get("mode") == "dossier"
+                     and config.DONNEES == Path(config.stockage()["chemin"].strip()))
+    ou = " (dossier synchronisé)" if depuis_config else ""
+    print(f"{config.instance()['client']} — données : {config.DONNEES}{ou}", flush=True)
+    # APRES verifier(), jamais avant : `parents=True` creerait lui-meme le chemin
+    # du drive, et _verifier_stockage trouverait alors un dossier bien present --
+    # l'app servirait en ecrivant des pieces d'identite dans un dossier local qui
+    # ressemble a un dossier synchronise. Le garde-fou constate, il ne repare pas.
+    for zone in ("soumissions", store.DOSSIERS):
+        (config.DONNEES / zone).mkdir(parents=True, exist_ok=True)
     port = int(os.environ.get("PORT", 5000))
     if os.environ.get("DEBUG"):
         # Developpement local seulement : serveur Werkzeug + debugger interactif.
-        # OFF par defaut, l'app sert des pieces d'identite.
+        # OFF par defaut, l'app sert des pieces d'identite. Pas de verrou serveur
+        # ici : le reloader Werkzeug refork `python app.py`, l'enfant rejouerait
+        # demarrer() et buterait sur le verrou du parent -- et un dev local n'a
+        # de toute facon pas de stockage partage a proteger.
         app.run(debug=True, port=port)
     else:
+        # Apres la creation des zones (memes raisons d'ordre) : refuse un second
+        # serveur sur le meme stockage, rafraichit ensuite le verrou en fond.
+        _verrou_serveur()
         # Production : waitress. Choisi plutot que gunicorn parce qu'il tourne
         # aussi sous Windows (gunicorn depend de fcntl, absent la) et surtout
         # parce qu'il est MONO-PROCESS multi-thread par construction : la
