@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block titre %}Salariés{% endblock %}
+{% block classe_main %}large{% endblock %}
+{% block corps %}
+<div class="entete">
+  <div>
+    <h1>Salariés</h1>
+    <p class="sous">
+      <span class="badge">{{ total }} salarié{{ 's' if total > 1 }} au total</span>
+      <span class="filet"></span>procédure terminée (remis au comptable)
+    </p>
+  </div>
+</div>
+
+<form method="get" action="{{ url_for('salaries') }}" class="barre-filtres">
+  <div class="champ">
+    <label for="f-etab">Établissement</label>
+    <select id="f-etab" name="etablissement">
+      <option value="">Tous</option>
+      {% for cle, lib in etablissements %}
+        <option value="{{ cle }}" {{ 'selected' if cle == etab }}>{{ lib }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="fin">
+    <button type="submit">Filtrer</button>
+    {% if etab %}
+      <a class="bouton discret" href="{{ url_for('salaries') }}">Tout afficher</a>
+    {% endif %}
+  </div>
+</form>
+
+{% for nom_etab, salaries in groupes %}
+  <h2>{{ nom_etab }} <span class="secondaire">— {{ salaries|length }}</span></h2>
+  <div class="tableau">
+  <table>
+    <thead>
+      <tr><th>Salarié</th><th>Poste</th><th>Contrat</th><th>Début</th>
+          <th>Ancienneté</th><th>Cabinet</th><th>Remis le</th></tr>
+    </thead>
+    <tbody>
+    {% for i in salaries %}
+      {% set dd = valeur(i.champs, 'date_debut') %}
+      {% set j = depuis(dd) if dd and dd <= aujourdhui else None %}
+      <tr>
+        <td><a class="nom" href="{{ url_for('detail', uid=i.id) }}">
+          {{ nom_de(i.champs) or i.id }}</a></td>
+        <td class="secondaire">{{ valeur(i.champs, 'poste') }}</td>
+        <td class="secondaire">{{ valeur(i.champs, 'type_contrat') or '—' }}</td>
+        <td>{{ date_fr(dd) or '—' }}</td>
+        <td class="secondaire">
+          {% if j is none %}à venir
+          {% elif j >= 60 %}{{ j // 30 }} mois
+          {% else %}{{ j }} j{% endif %}</td>
+        <td class="secondaire">{{ cabinet(valeur(i.champs, 'etablissement')) or '—' }}</td>
+        <td class="secondaire">{{ date_fr(remis_le(i)) }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+{% else %}
+  <p class="vide">{% if etab %}Aucun salarié pour cet établissement.
+  {% else %}Aucun salarié : aucune procédure n'est encore allée jusqu'à la remise
+  au comptable.{% endif %}</p>
+{% endfor %}
+{% endblock %}

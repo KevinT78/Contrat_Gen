@@ -66,12 +66,13 @@ def couloir(c, etab, mode, poste, attendus):
         assert poste in txt, f"« {poste} » absent de {page} — id lu en dur ?"
         assert etab in txt, f"« {etab} » absent de {page} — id lu en dur ?"
     if config.instance().get("fiche_salarie"):
-        assert "fiche-salarie.docx" in store.fichiers(item, "pieces"), "fiche absente"
+        assert store.fichiers_role(item, "pieces", "fiche-salarie"), "fiche absente"
 
     if mode == "genere":
         from docx import Document
         import contrat as moteur
-        doc = Document(str(store.chemin(item["id"], "contrat", "contrat.docx")))
+        nom_ct = store.fichiers_role(item, "contrat", "contrat")[0]
+        doc = Document(str(store.chemin(item["id"], "contrat", nom_ct)))
         texte = "\n".join(p.text for p in moteur.paragraphes(doc))
         assert "{{" not in texte, "contrat troué"
         for a in attendus:
@@ -95,7 +96,8 @@ def couloir(c, etab, mode, poste, attendus):
 
     jeton = store.signer("lot_comptable", uid, item.get("lien_comptable_epoch", 0))
     z = zipfile.ZipFile(io.BytesIO(app.test_client().get(f"/lot/{jeton}/zip").data))
-    assert "contrat/contrat-signe.pdf" in z.namelist(), z.namelist()
+    assert f"CONTRAT/{store.nom_export(item, 'contrat', 'contrat-signe.pdf')}" \
+        in z.namelist(), z.namelist()
     lot = html.unescape(app.test_client().get(f"/lot/{jeton}").text)
     assert poste in lot and etab in lot, "page du lot comptable : champ lu en dur"
     return uid

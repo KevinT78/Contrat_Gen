@@ -115,8 +115,9 @@ def couloir_dark_kitchen(c):
     assert store.chemin(uid, "contrat").name == "CONTRAT"
     store._carte.clear()                      # uid -> chemin par le seul disque
     assert store.lire(uid)["_dir"] == item["_dir"], "scan de resolution KO"
-    assert "fiche-salarie.docx" in store.fichiers(item, "pieces"), \
-        "fiche salarié absente de FICHE PERSONNELLE/ après validation"
+    # dossier validé : noms lisibles « <Libellé> - NOM Prénom.ext »
+    assert store.fichiers_role(item, "pieces", "fiche-salarie") == \
+        ["Fiche salarié - MARTIN Camille.docx"], store.fichiers(item, "pieces")
     assert any(e.get("type") == "fiche_salarie" for e in item["journal"])
     # le rappel DPAE est un EFFET de la validation (schéma, étape 6) : asserté
     # ici, au niveau de l'appelant, avec les informations DPAE et le SIRET
@@ -137,7 +138,9 @@ def couloir_dark_kitchen(c):
     assert item["journal"][-1]["modele"] == "CDI_Manager.docx"
     from docx import Document
     import contrat as moteur
-    doc = Document(str(store.chemin(item["id"], "contrat", "contrat.docx")))
+    nom_ct = store.fichiers_role(item, "contrat", "contrat")[0]
+    assert nom_ct == "Contrat - MARTIN Camille.docx", nom_ct
+    doc = Document(str(store.chemin(item["id"], "contrat", nom_ct)))
     texte = "\n".join(p.text for p in moteur.paragraphes(doc))
     assert "{{" not in texte, "contrat troué"
     for attendu in ("Camille MARTIN", "1er octobre 2026", "2450",
@@ -168,27 +171,35 @@ def couloir_dark_kitchen(c):
     assert store.etat(item) == "RemisComptable"
     assert not list((config.DONNEES / "mails").glob("*-avis_comptable.eml")), \
         "un mail par dossier est encore parti à la remise"
-    copie = config.DONNEES / "compta" / "Wingstop France" / f"Camille MARTIN - {uid}"
-    assert sorted(p.relative_to(copie).as_posix() for p in copie.rglob("*") if p.is_file()) == [
-        "contrat/accuse-dpae.pdf", "contrat/contrat-signe.pdf", "contrat/contrat.docx",
-        "pieces/carte-vitale.pdf", "pieces/fiche-salarie.docx",
-        "pieces/identite.pdf", "pieces/rib.pdf"], "copie compta incomplète"
+    # Arbo COMPTA : profonde (GROUPE/ETABLISSEMENT/POSTE/NOM PRENOM - id) et en
+    # capitales sans accents ; chaque fichier renommé « <libellé> - Nom - date ».
+    copie = (config.DONNEES / "COMPTA" / "DARK KITCHENS" / "LILLE GRAND PLACE"
+             / "MANAGER" / f"MARTIN CAMILLE - {uid}")
+    assert copie.is_dir(), f"arbo compta absente : {copie}"
+    attendu = sorted(f"{store.BUCKETS_COMPTA[b]}/{store.nom_export(item, b, n)}"
+                     for b in ("pieces", "contrat") for n in store.fichiers(item, b))
+    presents = sorted(p.relative_to(copie).as_posix()
+                      for p in copie.rglob("*") if p.is_file())
+    assert presents == attendu, (presents, attendu)
+    assert all(re.search(r" - MARTIN Camille - \d{4}-\d{2}-\d{2}\.\w+$", n)
+               for n in presents), presents
+    assert {"FICHE PERSONNELLE", "CONTRAT"} == {n.split("/")[0] for n in presents}
     lot = "http://localhost/lot/" + store.signer("lot_comptable", uid,
                                                  item.get("lien_comptable_epoch", 0))
     anonyme = app.test_client()
     z = zipfile.ZipFile(BytesIO(anonyme.get(lot + "/zip").data))
-    assert sorted(z.namelist()) == [
-        "contrat/accuse-dpae.pdf", "contrat/contrat-signe.pdf", "contrat/contrat.docx",
-        "pieces/carte-vitale.pdf", "pieces/fiche-salarie.docx",
-        "pieces/identite.pdf", "pieces/rib.pdf"], z.namelist()
+    assert sorted(z.namelist()) == attendu, z.namelist()
 
     # Le lot est public (possession du lien = accès) et un contrat peut être un
     # .html rempli de valeurs venues du formulaire public, sans échappement :
     # servi inline ce serait du script sur l'origine de l'app.
-    r = anonyme.get(f"{lot}/fichier/contrat/contrat.docx")
+    from urllib.parse import quote
+    nom_ct = store.fichiers_role(item, "contrat", "contrat")[0]
+    nom_id = store.fichiers_role(item, "pieces", "identite")[0]
+    r = anonyme.get(f"{lot}/fichier/contrat/{quote(nom_ct)}")
     assert "attachment" in r.headers.get("Content-Disposition", ""), r.headers
     assert r.headers.get("X-Content-Type-Options") == "nosniff", r.headers
-    apercu = anonyme.get(f"{lot}/fichier/pieces/identite.pdf")
+    apercu = anonyme.get(f"{lot}/fichier/pieces/{quote(nom_id)}")
     assert "attachment" not in apercu.headers.get("Content-Disposition", ""), \
         "les pièces restent en aperçu"
 
@@ -215,7 +226,8 @@ def couloir_restaurant(c):
            content_type="multipart/form-data")
     item = store.lire(uid)
     assert store.etat(item) == "ContratPret", item["journal"][-1]
-    assert "contrat.pdf" in store.fichiers(item, "contrat")
+    assert store.fichiers_role(item, "contrat", "contrat") == \
+        ["Contrat - MARTIN Camille.pdf"], store.fichiers(item, "contrat")
 
     # signature manuelle puis DPAE directe (sans rappel)
     c.post(f"/dossier/{uid}/contrat-signe", data={"signe": piece()},
@@ -227,7 +239,7 @@ def couloir_restaurant(c):
     c.post(f"/dossier/{uid}/remettre")
     item = store.lire(uid)
     assert store.etat(item) == "RemisComptable"
-    assert (config.DONNEES / "compta" / "Wingstop Sud").is_dir()
+    assert (config.DONNEES / "COMPTA" / "RESTAURANTS" / "MARSEILLE PRADO").is_dir()
     return uid
 
 
@@ -237,7 +249,7 @@ def fiche_absente_si_non_declaree(c):
     try:
         uid = soumettre(c, base_saisie("Wingstop France / Paris Opéra"))
         c.post(f"/dossier/{uid}/valider")
-        assert "fiche-salarie.docx" not in store.fichiers(store.lire(uid), "pieces")
+        assert not store.fichiers_role(store.lire(uid), "pieces", "fiche-salarie")
     finally:
         if garde:
             config.instance()["fiche_salarie"] = garde

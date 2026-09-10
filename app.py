@@ -395,18 +395,45 @@ def suivi():
     items = store.tout()
     etab = request.args.get("etablissement") or ""
     etat_f = request.args.get("etat") or ""
-    visibles = [i for i in items
+    # RemisComptable = procedure terminee -> vue /salaries, plus /suivi.
+    en_cours = [i for i in items if store.etat(i) != "RemisComptable"]
+    visibles = [i for i in en_cours
                 if (not etab or config.valeur(i["champs"], "etablissement") == etab)
                 and (not etat_f or store.etat(i) == etat_f)]
     return render_template("suivi.html", items=visibles, etat=store.etat,
-                           inactifs=store.INACTIFS, total=len(items),
+                           inactifs=store.INACTIFS, total=len(en_cours),
                            purge_active=bool(config.conservation()),
                            a_purger=len(store.eligibles(items)),
                            etab=etab, etat_f=etat_f, libelles=LIBELLES_ETAT,
-                           etats=store.ETATS, manquantes=store.manquantes,
+                           etats=[e for e in store.ETATS if e != "RemisComptable"],
+                           manquantes=store.manquantes,
                            aujourdhui=date.today().isoformat(),
                            a_traiter=sum(store.etat(i) in ("Soumise", "ATraiter")
-                                         for i in items))
+                                         for i in en_cours))
+
+
+@app.get("/salaries")
+@rh
+def salaries():
+    """Les salaries dont la procedure est allee au bout (RemisComptable),
+    groupes par etablissement. Complement de /suivi (demandes en cours)."""
+    tous = [i for i in store.tout() if store.etat(i) == "RemisComptable"]
+    etab = request.args.get("etablissement") or ""
+    visibles = [i for i in tous
+                if not etab or config.valeur(i["champs"], "etablissement") == etab]
+    groupes = {}
+    for i in visibles:
+        groupes.setdefault(config.valeur(i["champs"], "etablissement") or "—", []).append(i)
+
+    def cabinet(cle):
+        try:
+            return config.comptable(cle)
+        except KeyError:                    # etablissement retire de la config
+            return ""
+    return render_template("salaries.html", groupes=sorted(groupes.items()),
+                           total=len(tous), etab=etab,
+                           remis_le=store.date_remise, cabinet=cabinet,
+                           aujourdhui=date.today().isoformat())
 
 
 @app.get("/dossier/<uid>")
@@ -483,7 +510,8 @@ def _fiche_salarie(item):
         extra={"PiecesFournies": ", ".join(fournies) or "—",
                "PiecesManquantes": ", ".join(manquantes) or "aucune"})
     try:
-        store.poser_octets(item["id"], "pieces", "fiche-salarie.docx",
+        store.poser_octets(item["id"], "pieces",
+                           store.nom_piece(item, "fiche-salarie", ".docx"),
                            contrat.generer(config.CLIENT / "contrats" / modele, vals))
         store.noter(item["id"], type="fiche_salarie", par="systeme")
     except (ValueError, OSError) as e:
@@ -588,7 +616,7 @@ def _produire_contrat(uid, extra=None):
     # renvoyer un 500 alors que le dossier est déjà ouvert.
     try:
         octets = contrat.generer(config.CLIENT / "contrats" / modele, vals)
-        store.poser_octets(uid, "contrat", "contrat.docx", octets)
+        store.poser_octets(uid, "contrat", store.nom_piece(item, "contrat", ".docx"), octets)
     except (ValueError, OSError) as e:
         return False, str(e)
     _transition(uid, "ContratPret", modele=modele)
@@ -673,7 +701,7 @@ def contrat_signe(uid):
 def signature_envoyer(uid):
     item = store.lire(uid) or abort(404)
     contrats = store.fichiers(item, "contrat")
-    src = next((c for c in contrats if c.startswith("contrat.")), None)
+    src = next((c for c in contrats if store._extraire_role(c) == "contrat"), None)
     octets = store.ouvrir(item["id"], "contrat", src) if src else None
     if octets is None:
         flash("Aucun contrat à envoyer.", "erreur")
@@ -710,7 +738,8 @@ def signature_verifier(uid):
     if not pdf:
         flash("La signature n'est pas encore terminée.", "ok")
         return redirect(url_for("detail", uid=uid))
-    store.poser_octets(item["id"], "contrat", "contrat-signe.pdf", pdf)
+    store.poser_octets(item["id"], "contrat",
+                       store.nom_piece(item, "contrat-signe", ".pdf"), pdf)
     _transition(uid, "ContratSigne", procedure=pid)
     flash("Contrat signé récupéré.", "ok")
     return redirect(url_for("detail", uid=uid))
@@ -756,8 +785,9 @@ def remettre(uid):
 @rh
 def renvoyer(uid):
     store.bump_epoch(uid, "lien_comptable_epoch")             # tue l'ancien lien
-    store.copier_compta(store.lire(uid))
+    # noter AVANT la copie : nom_export lit la date du dernier renvoi dans le journal.
     store.noter(uid, type="renvoi_comptable", par=session["utilisateur"])
+    store.copier_compta(store.lire(uid))
     flash("Copie refaite, l'ancien lien est révoqué ; le dossier repartira dans "
           "le prochain mail hebdomadaire.", "ok")
     return redirect(url_for("detail", uid=uid))
@@ -824,7 +854,8 @@ def lot(jeton):
     store.noter(item["id"], type="acces_lot", par=None, ip=request.remote_addr)
     return render_template("lot.html", item=item, jeton=jeton,
                            pieces=store.fichiers(item, "pieces"),
-                           produits=store.fichiers(item, "contrat"))
+                           produits=store.fichiers(item, "contrat"),
+                           nom_export=store.nom_export)
 
 
 @app.get("/lot/<jeton>/zip")
@@ -840,7 +871,8 @@ def lot_zip(jeton):
     with zipfile.ZipFile(tampon, "w", zipfile.ZIP_DEFLATED) as z:
         for bucket in ("pieces", "contrat"):        # jamais _versions
             for nom in store.fichiers(item, bucket):
-                z.writestr(f"{bucket}/{nom}", store.ouvrir(item["id"], bucket, nom))
+                z.writestr(f"{store.BUCKETS_COMPTA[bucket]}/{store.nom_export(item, bucket, nom)}",
+                           store.ouvrir(item["id"], bucket, nom))
     tampon.seek(0)
     return send_file(tampon, mimetype="application/zip", as_attachment=True,
                      download_name=f"lot-{item['id']}.zip")
@@ -851,7 +883,8 @@ def lot_fichier(jeton, bucket, nom):
     item = store.verifier_lien(jeton, "lot_comptable") or abort(410)
     if bucket not in ("pieces", "contrat"):
         abort(404)
-    return _servir(store.ouvrir(item["id"], bucket, nom), nom, bucket)
+    return _servir(store.ouvrir(item["id"], bucket, nom),
+                   store.nom_export(item, bucket, nom), bucket)
 
 
 # --- verrou multi-machine ----------------------------------------------

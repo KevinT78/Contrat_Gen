@@ -23,7 +23,7 @@ sans toucher app.py ni contrat.py :
     poser_octets(uid, bucket, nom, o) -- ecrire des octets qu'on produit
     fichiers(item, bucket)          -- lister
 La purge (_effacer_pieces) supprime les buckets via chemin(), efface les copies
-compta (data/compta/) et renomme le repertoire du dossier : un backend
+compta (data/COMPTA/) et renomme le repertoire du dossier : un backend
 S3/SharePoint doit donc aussi porter une operation de SUPPRESSION, pas seulement
 lire/ecrire/lister.
 Le journal (dossier.json) et son deplacement soumissions->documents (valider())
@@ -95,8 +95,12 @@ def _verrou(uid):
 # --- chemins -------------------------------------------------------------
 
 DOSSIERS = "DOSSIERS SALARIES"
+COMPTA = "COMPTA"
 BUCKETS = {"pieces": "FICHE PERSONNELLE", "contrat": "CONTRAT"}  # _versions non traduit
+BUCKETS_COMPTA = BUCKETS                       # meme vocabulaire humain cote compta
 _ILLEGAL = re.compile(r'[<>:"/\\|?*\x00-\x1f]+')
+_ACCENTS = str.maketrans("àâäéèêëîïôöùûüçÀÂÄÉÈÊËÎÏÔÖÙÛÜÇ",
+                         "aaaeeeeiioouuucAAAEEEEIIOOUUUC")
 
 _carte = {}   # uid -> Path. cache process : l'app est mono-process par
               # construction (cf. _verrou) ; index disque si ca change.
@@ -215,8 +219,11 @@ def deposer(uid, bucket, role, fichier, extensions=EXTENSIONS, index=None):
     protege le formulaire public.
 
     `index` (optionnel) : rang 1..N pour les champs multi-fichiers. Le 1er
-    fichier garde le nom `{role}.{ext}` (retro-compatible mono-fichier), les
-    suivants deviennent `{role}_2.{ext}`, `{role}_3.{ext}`...
+    fichier garde le nom nu, les suivants prennent un suffixe `_2`, `_3`...
+
+    Nom du fichier : technique (`{role}.{ext}`) tant que le dossier est en
+    soumission ; lisible (`<Libellé> - NOM Prénom.ext`, cf. nom_piece) une fois
+    validé -- c'est le dossier que la RH ouvre a la main.
     """
     d = dossier_de(uid)
     if not d:
@@ -225,10 +232,23 @@ def deposer(uid, bucket, role, fichier, extensions=EXTENSIONS, index=None):
     if ext not in extensions:
         raise ValueError(f"format refuse ({ext or 'sans extension'}) : "
                          + ", ".join(sorted(extensions)))
-    nom_role = SAIN.sub("-", role)
-    if index is not None and index > 1:
-        nom_role = f"{nom_role}_{index}"
-    cible = chemin(uid, bucket, nom_role + ext)
+    if _soumission(d):
+        nom_role = SAIN.sub("-", role)
+        if index is not None and index > 1:
+            nom_role = f"{nom_role}_{index}"
+        cible = chemin(uid, bucket, nom_role + ext)
+    else:
+        item = json.loads(_fichier_json(d).read_text(encoding="utf-8"))
+        cible = chemin(uid, bucket, nom_piece(item, SAIN.sub("-", role), ext, index))
+        # Dossier valide d'avant le renommage : le fichier de meme role est encore
+        # au nom court. cible.exists() (plus bas) ne le verrait pas -> il
+        # cohabiterait avec le nom lisible. On l'archive ici, comme un re-depot.
+        for vieux in fichiers_role(item, bucket, role):
+            if vieux != cible.name:
+                p = chemin(uid, bucket, vieux)
+                arch = chemin(uid, "_versions", f"{p.stem}-{int(time.time())}{p.suffix}")
+                arch.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(p), str(arch))
     cible.parent.mkdir(parents=True, exist_ok=True)
     # Valider le fichier entrant AVANT de deplacer l'ancien : sinon un re-depot
     # refuse (trop lourd) laisse le dossier sans piece et l'ancienne copie
@@ -272,32 +292,92 @@ def fichiers(item, bucket):
     return sorted(f.name for f in d.glob("*") if f.is_file()) if d and d.is_dir() else []
 
 
+# Libelle lisible d'un role de piece. CONTRAINTE : chaque valeur doit se
+# re-sluguer vers sa cle -- SAIN.sub("-", sans_accent(v)).strip("-").lower() == k
+# --, sinon _extraire_role() ne retrouve plus le role depuis un nom lisible.
+# D'ou "Identite" et pas "Piece d'identite".
+LIBELLES_PIECE = {"contrat": "Contrat", "contrat-signe": "Contrat signé",
+                  "accuse-dpae": "Accusé DPAE", "fiche-salarie": "Fiche salarié",
+                  "identite": "Identité", "carte-vitale": "Carte vitale",
+                  "rib": "RIB"}
+
+
+def date_remise(item):
+    """Jour (AAAA-MM-JJ) de la derniere remise/renvoi au comptable ; repli aujourd'hui.
+    Fige la date des noms de fichiers : un cabinet qui telecharge le lot une
+    semaine plus tard garde la date de la remise, pas celle du clic."""
+    jours = [e["le"][:10] for e in item["journal"]
+             if e.get("vers") == "RemisComptable" or e.get("type") == "renvoi_comptable"]
+    return jours[-1] if jours else datetime.now(timezone.utc).date().isoformat()
+
+
+def _qui(item):
+    prenom, nom_s = config.identite(item["champs"])
+    return " ".join(p for p in (nom_s.upper(), prenom) if p) or "SANS NOM"
+
+
+def _tete(nom):
+    """Le mot de tete d'un nom de piece : avant l'extension ET avant ' - '.
+    'identite_2.pdf' -> 'identite_2' ; 'Identité_2 - MARTIN Camille.pdf' -> 'Identité_2'"""
+    return nom.rsplit(".", 1)[0].split(" - ", 1)[0]
+
+
+def _index_nom(nom):
+    """Rang multi-fichiers ('identite_2.pdf' / 'Identité_2 - X.pdf') -> 2, sinon None."""
+    m = re.search(r"_(\d+)$", _tete(nom))
+    return int(m.group(1)) if m else None
+
+
+def nom_piece(item, role, ext, index=None):
+    """Nom lisible d'une piece DANS LE DOSSIER VALIDE : '<Libellé> - NOM Prénom.ext'.
+    Sans date (choix : la RH ouvre ce dossier a la main, la date encombre).
+    `ext` avec le point. cf. nom_export pour la variante compta (datee, MAJ)."""
+    libelle = LIBELLES_PIECE.get(role, role)
+    suff = f"_{index}" if index and index > 1 else ""
+    return f"{libelle}{suff} - {_qui(item)}{ext}"
+
+
+def nom_export(item, bucket, nom):
+    """Nom lisible d'une piece pour la compta et le lot :
+    '<libelle> - NOM Prenom - AAAA-MM-JJ.ext'. bucket ignore (role deja dans nom)."""
+    ext = os.path.splitext(nom)[1]
+    role = _extraire_role(nom)                      # tous regimes de nom
+    libelle = LIBELLES_PIECE.get(role, role.replace("-", " "))
+    idx = _index_nom(nom)
+    suff = f"_{idx}" if idx and idx > 1 else ""
+    return f"{libelle}{suff} - {_qui(item)} - {date_remise(item)}{ext}"
+
+
 def copier_compta(item):
-    """Duplique pieces/ et contrat/ dans data/compta/<Societe>/<Prenom NOM - id>/,
-    le dossier que le cabinet recupere (miroite sur un Drive au besoin).
-    Rejouable : un renvoi ecrase la copie precedente. -> le repertoire."""
-    societe, _ = config.etablissement(config.valeur(item["champs"], "etablissement"))
-    prenom, nom = config.identite(item["champs"])
-    libelle = " ".join(p for p in (prenom, nom.upper()) if p) or "sans nom"
-    dest = (config.DONNEES / "compta" / _ILLEGAL.sub("-", societe["nom"])
-            / f"{_ILLEGAL.sub('-', libelle)} - {item['id']}")
+    """Duplique les pieces dans data/COMPTA/<GROUPE>/<ETABLISSEMENT>/<POSTE>/
+    <NOM PRENOM - id>/{FICHE PERSONNELLE,CONTRAT}/, le dossier que le cabinet
+    recupere (miroite sur un Drive au besoin). Segments en capitales sans accents,
+    fichiers renommes (cf. nom_export). Rejouable : un renvoi ecrase la copie
+    precedente. -> le repertoire."""
+    groupe, etab, poste, qui = _hierarchie(item)
+    dest = (config.DONNEES / COMPTA
+            / _segment_maj(groupe, "DIVERS")
+            / _segment_maj(etab, "SANS ETABLISSEMENT")
+            / _segment_maj(poste, "SANS POSTE")
+            / f'{_segment_maj(qui, item["id"])} - {item["id"]}')
     for bucket in ("pieces", "contrat"):           # jamais _versions
-        (dest / bucket).mkdir(parents=True, exist_ok=True)
+        sous = dest / BUCKETS_COMPTA[bucket]
+        sous.mkdir(parents=True, exist_ok=True)
         for nom_f in fichiers(item, bucket):
-            (dest / bucket / nom_f).write_bytes(ouvrir(item["id"], bucket, nom_f))
+            (sous / nom_export(item, bucket, nom_f)).write_bytes(
+                ouvrir(item["id"], bucket, nom_f))
     return dest
 
 
 def _extraire_role(nom_fichier):
-    """Extrait le role d'un nom de fichier (sans extension, sans index).
-
-    'identite.pdf' -> 'identite'
-    'identite_1.pdf' -> 'identite'
-    'carte-vitale.jpg' -> 'carte-vitale'
-    """
-    base = nom_fichier.rsplit(".", 1)[0]
-    match = re.match(r"^(.+?)_\d+$", base)
-    return match.group(1) if match else base
+    """Role d'un nom de piece, quel que soit le regime :
+       'identite.pdf', 'carte-vitale_2.jpg'        -> nom technique (soumission, vieux dossiers)
+       'Identité - MARTIN Camille.pdf'             -> nom lisible (dossier valide, cf. nom_piece)
+       'Carte vitale_2 - MARTIN Camille.jpg'       -> lisible + multi-fichiers
+    Le mot de tete est re-slugue : c'est pourquoi les valeurs de LIBELLES_PIECE
+    doivent round-tripper (cf. la contrainte au-dessus du dict)."""
+    tete = re.sub(r"_\d+$", "", _tete(nom_fichier))
+    return SAIN.sub("-", tete.translate(_ACCENTS)).strip("-").lower()
 
 
 def fichiers_role(item, bucket, role):
@@ -351,9 +431,14 @@ def _segment(brut, defaut):
     return s or defaut
 
 
-def _dossier_cible(item):
-    """Calcule UNE FOIS, a la validation : renommer un etablissement en config
-    ne deplace donc jamais un dossier deja cree."""
+def _segment_maj(brut, defaut):
+    """Comme _segment, mais capitales sans accents -- l'arbo COMPTA seulement."""
+    return _segment(str(brut or "").translate(_ACCENTS).upper(), defaut)
+
+
+def _hierarchie(item):
+    """(groupe, etablissement, poste, "NOM Prenom") brut, non segmente.
+    Commun a _dossier_cible (DOSSIERS SALARIES) et copier_compta (COMPTA)."""
     ch = item["champs"]
     cle = config.valeur(ch, "etablissement")
     try:
@@ -361,10 +446,18 @@ def _dossier_cible(item):
     except KeyError:                       # etablissement retire de la config
         groupe, etab = "DIVERS", cle
     prenom, nom = config.identite(ch)
+    qui = " ".join(p for p in (nom.upper(), prenom) if p) or item["id"]
+    return groupe, etab, config.valeur(ch, "poste"), qui
+
+
+def _dossier_cible(item):
+    """Calcule UNE FOIS, a la validation : renommer un etablissement en config
+    ne deplace donc jamais un dossier deja cree."""
+    groupe, etab, poste, qui = _hierarchie(item)
     parent = (config.DONNEES / DOSSIERS / _segment(groupe, "DIVERS")
               / _segment(etab, "SANS ETABLISSEMENT")
-              / _segment(config.valeur(ch, "poste"), "SANS POSTE"))
-    nom_d = _segment(" ".join(p for p in (nom.upper(), prenom) if p), item["id"])
+              / _segment(poste, "SANS POSTE"))
+    nom_d = _segment(qui, item["id"])
     cible = parent / nom_d
     # Homonyme : sans ce suffixe, shutil.move fusionnerait deux salaries.
     return cible if not cible.exists() else parent / f"{nom_d} ({item['id'][-4:]})"
@@ -415,6 +508,17 @@ def valider(uid, par):
         shutil.move(str(src), str(dst))
         _carte[uid] = dst
         (dst / "soumission.json").unlink(missing_ok=True)
+        # Le dossier valide = l'arbo que la RH ouvre a la main : les pieces du
+        # candidat (noms techniques) passent en noms lisibles, comme tout ce qui
+        # sera depose/produit ensuite. Idempotent (un nom deja lisible se re-rend
+        # identique). Les vieux dossiers deja valides ne sont pas balayes.
+        pdir = dst / BUCKETS["pieces"]
+        for f in sorted(pdir.glob("*")) if pdir.is_dir() else []:
+            if f.is_file():
+                voulu = f.with_name(nom_piece(item, _extraire_role(f.name),
+                                              f.suffix, _index_nom(f.name)))
+                if voulu != f and not voulu.exists():
+                    f.rename(voulu)
         item["lien_comptable_epoch"] = 0
         item["journal"].append({"de": "Soumise", "vers": "ATraiter",
                                 "le": maintenant(), "par": par})
@@ -560,7 +664,7 @@ def _effacer_pieces(uid, item, d):
     # societe entre remettre et renvoyer en cree deux). compta/ n'est pas un
     # bucket de dossier -- meme chemin construit en dur que copier_compta().
     if not sur_soumission:
-        for copie in (config.DONNEES / "compta").glob(f"*/* - {uid}"):
+        for copie in (config.DONNEES / COMPTA).glob(f"**/* - {uid}"):
             shutil.rmtree(copie, ignore_errors=True)
     # Zone soumissions : le repertoire est nomme par l'ULID (aucune PII) et
     # _soumission() teste le parent -- ne rien renommer ni supprimer.

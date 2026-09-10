@@ -16,10 +16,10 @@
   <p class="titre-carte">Fichiers du dossier</p>
   <ul class="docs">
     {% for f in produits %}
-      <li><a href="{{ url_for('lot_fichier', jeton=jeton, bucket='contrat', nom=f) }}">{{ f }}</a></li>
+      <li><a href="{{ url_for('lot_fichier', jeton=jeton, bucket='contrat', nom=f) }}">{{ nom_export(item, 'contrat', f) }}</a></li>
     {% endfor %}
     {% for f in pieces %}
-      <li><a href="{{ url_for('lot_fichier', jeton=jeton, bucket='pieces', nom=f) }}">{{ f }}</a></li>
+      <li><a href="{{ url_for('lot_fichier', jeton=jeton, bucket='pieces', nom=f) }}">{{ nom_export(item, 'pieces', f) }}</a></li>
     {% else %}
       <li class="vide">Les pièces d'identité de ce dossier ont été supprimées
         (purge RGPD du client).</li>

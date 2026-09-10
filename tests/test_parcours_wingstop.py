@@ -67,10 +67,11 @@ def dernier_mail(nom):
 
 
 def contrat_texte(item):
-    """Le texte du contrat.docx produit (corps + cellules de tableau)."""
+    """Le texte du contrat produit (corps + cellules de tableau)."""
     from docx import Document
     import contrat as moteur
-    doc = Document(str(store.chemin(item["id"], "contrat", "contrat.docx")))
+    nom = store.fichiers_role(item, "contrat", "contrat")[0]
+    doc = Document(str(store.chemin(item["id"], "contrat", nom)))
     return "\n".join(p.text for p in moteur.paragraphes(doc))
 
 
@@ -106,14 +107,15 @@ def parcours_manager(c):
     c.post(f"/dossier/{uid}/valider")
     item = store.lire(uid)
     assert item["_zone"] == "documents" and store.etat(item) == "ContratPret"
-    assert "fiche-salarie.docx" in store.fichiers(item, "pieces"), "fiche salarié absente"
+    assert store.fichiers_role(item, "pieces", "fiche-salarie") == \
+        [f"Fiche salarié - {store._qui(item)}.docx"], store.fichiers(item, "pieces")
     rappel = dernier_mail("rappel_dpae")
     for attendu in ("NKEMBA Awa", "Manager", "943 142 067 00050", "/dossier/"):
         assert attendu in rappel, f"« {attendu} » absent du rappel DPAE :\n{rappel}"
 
     assert item["journal"][-1]["modele"] == "Manager.html"
     produits = store.fichiers(item, "contrat")
-    assert "contrat.docx" in produits, produits
+    assert f"Contrat - {store._qui(item)}.docx" in produits, produits
     txt = contrat_texte(item)
     assert "{{" not in txt, "contrat troué"
     for attendu in ("Madame Awa NKEMBA", "1er octobre 2026",
@@ -132,11 +134,12 @@ def parcours_manager(c):
     item = store.lire(uid)
     assert store.etat(item) == "RemisComptable"
 
-    assert (config.DONNEES / "compta").is_dir(), "pas de copie compta à la remise"
+    assert (config.DONNEES / "COMPTA").is_dir(), "pas de copie compta à la remise"
     lot = "/lot/" + store.signer("lot_comptable", uid, item.get("lien_comptable_epoch", 0))
     z = zipfile.ZipFile(BytesIO(app.test_client().get(lot + "/zip").data))
-    assert "contrat/contrat.docx" in z.namelist(), z.namelist()
-    assert "contrat/contrat-signe.pdf" in z.namelist()
+    noms = z.namelist()
+    assert f"CONTRAT/{store.nom_export(item, 'contrat', 'contrat.docx')}" in noms, noms
+    assert f"CONTRAT/{store.nom_export(item, 'contrat', 'contrat-signe.pdf')}" in noms, noms
     return uid
 
 
