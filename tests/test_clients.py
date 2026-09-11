@@ -226,7 +226,12 @@ def refus_avant_config(base, client):
     assert r.returncode == 0, "une copie fraîchement installée devrait refuser de servir"
     assert not list((copie / "config").rglob("*.docx")), "des .docx ont survécu à l'installation"
     for j in (copie / "config").rglob("*.json"):
-        assert "wingstop" not in j.read_text(encoding="utf-8").lower(), f"« wingstop » dans {j.name}"
+        # « acme » est la sentinelle : c'est le nom du client fictif de la
+        # fixture config/, le voisin dont un reste risquerait le plus de
+        # survivre a l'installation. Le test traque CE nom, pas une fuite
+        # generique -- installer.py copie config.exemple/ au lieu de nettoyer
+        # une config existante, et c'est cette copie qu'on verifie.
+        assert "acme" not in j.read_text(encoding="utf-8").lower(), f"« acme » dans {j.name}"
 
 
 def main():

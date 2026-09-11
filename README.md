@@ -294,7 +294,7 @@ Expéditeur unique : `mails.expediteur`.
 | Cron hebdomadaire (`recap.py`) | `recap_hebdo` | le cabinet de chaque société, `mails.rh` en copie |
 
 Le **multi-société** *à l'intérieur* d'un client reste possible :
-`config/societes.json` de Wingstop contient « Wingstop France » et « Wingstop Sud »,
+la fixture `config/societes.json` contient « ACME Restauration » et « ACME Sud »,
 deux SIREN du même client, chacun avec ses établissements et son cabinet. Le
 multi-tenant (une copie servant plusieurs entreprises) est hors périmètre —
 pièces d'identité et RIB, une fuite inter-client serait un incident RGPD.
@@ -502,6 +502,7 @@ l'avertissement drive.
 | `doctor.py` | couverture de la config, vérifiée en produisant les contrats |
 | `configurer.py` | bilan de config lisible, assistant interactif, ajout de comptes |
 | `tests/test_parcours.py` | les deux couloirs, signature, fiche, récap, refus attendus |
+| `tests/test_valeurs_contrat.py` | les VALEURS imprimées : grille (forfait et barème), mensualisation, blocs conditionnels, deux entités sans fuite — sur une config fabriquée en temp |
 | `tests/test_signature.py` | `signature.py` contre un transport factice |
 | `tests/test_clients.py` | plusieurs clients factices, une instance chacun, étanches |
 | `tests/test_produit.py` | balisage client refusé si mal écrit, fiche dérivée, config versionnée, rechargement à chaud, `conservation` malformée refusée, refus de démarrer à deux |
@@ -530,8 +531,8 @@ l'avertissement drive.
 - **`config/` est encore versionné**, secret et hash du compte RH compris, alors
   que ce dossier est une instance et pas du produit. Le sortir du dépôt suppose
   d'abord de rendre `test_parcours`, `test_ecrans` et `test_signature`
-  indépendants de `config/` — ils s'en servent comme jeu de démo. Deux tests
-  (`test_wingstop`, `test_parcours_wingstop`) sont déjà dans ce cas avec
-  `config_wingstop/`, ignoré de longue date : **un clone frais ne peut pas
-  lancer toute la suite**. À traiter par une instance de démo versionnée sous
-  `tests/`.
+  indépendants de `config/` — ils s'en servent comme jeu de démo. À traiter par
+  une instance de démo versionnée sous `tests/`, sur le patron de
+  `test_valeurs_contrat`, qui fabrique sa config de bout en bout dans un dossier
+  temporaire et ne dépend donc d'aucune instance. **Un clone frais lance
+  aujourd'hui toute la suite.**

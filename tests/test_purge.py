@@ -41,7 +41,7 @@ def piece():
     return (io.BytesIO(PDF[0]), PDF[1])
 
 
-def saisie(etab="Wingstop France / Lille Grand Place", poste="Manager"):
+def saisie(etab="ACME Restauration / Lille Grand Place", poste="Manager"):
     return {
         "etablissement": etab, "email_demandeur": "manager@example.com",
         "nom_naissance": NOM, "nom_usage": "", "prenom": PRENOM,

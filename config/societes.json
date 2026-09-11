@@ -1,10 +1,10 @@
 [
   {
-    "nom": "Wingstop France",
+    "nom": "ACME Restauration",
     "siren": "884 512 336",
     "comptable_email": "cabinet-nord@example.com",
     "mentions": {
-      "RaisonSociale": "WINGSTOP FRANCE SAS",
+      "RaisonSociale": "ACME RESTAURATION SAS",
       "FormeCapital": "Société par actions simplifiée au capital de 100 000 €",
       "RCS": "RCS Paris 884 512 336",
       "SiegeSocial": "12 rue de la Paix, 75002 Paris",
@@ -19,11 +19,11 @@
     ]
   },
   {
-    "nom": "Wingstop Sud",
+    "nom": "ACME Sud",
     "siren": "907 331 204",
     "comptable_email": "cabinet-sud@example.com",
     "mentions": {
-      "RaisonSociale": "WINGSTOP SUD SARL",
+      "RaisonSociale": "ACME SUD SARL",
       "FormeCapital": "Société à responsabilité limitée au capital de 40 000 €",
       "RCS": "RCS Marseille 907 331 204",
       "SiegeSocial": "45 La Canebière, 13001 Marseille",

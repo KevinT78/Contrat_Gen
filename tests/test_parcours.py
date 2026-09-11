@@ -76,7 +76,7 @@ def piece_refusee(_c):
     doit fuiter dans la session d'un appelant qui réutilise son client."""
     c = app.test_client()
     avant = {d.name for d in (config.DONNEES / "soumissions").glob("*/")}
-    r = c.post("/", data={**base_saisie("Wingstop France / Lille Grand Place"),
+    r = c.post("/", data={**base_saisie("ACME Restauration / Lille Grand Place"),
                           "identite": piece(), "carte_vitale": piece(),
                           "rib": (BytesIO(b"PK"), "rib.docx")},
                content_type="multipart/form-data")
@@ -89,7 +89,7 @@ def piece_refusee(_c):
 def couloir_dark_kitchen(c):
     """Lille Grand Place — contrat généré par l'app, signature manuelle."""
     piece_refusee(c)
-    uid = soumettre(c, base_saisie("Wingstop France / Lille Grand Place"))
+    uid = soumettre(c, base_saisie("ACME Restauration / Lille Grand Place"))
 
     # KO puis correction
     c.post(f"/dossier/{uid}/rejeter",
@@ -99,7 +99,7 @@ def couloir_dark_kitchen(c):
     assert ko.startswith("manager@example.com\n"), \
         "établissement sans manager_email : le rejet doit retomber sur l'email saisi"
     lien = lien_dans(ko, "corriger")
-    r = c.post(lien, data={**base_saisie("Wingstop France / Lille Grand Place"),
+    r = c.post(lien, data={**base_saisie("ACME Restauration / Lille Grand Place"),
                            "rib": piece()}, content_type="multipart/form-data")
     assert "Correction envoyée" in r.text
     assert c.get(lien).status_code == 410, "lien de correction encore vivant"
@@ -144,7 +144,7 @@ def couloir_dark_kitchen(c):
     texte = "\n".join(p.text for p in moteur.paragraphes(doc))
     assert "{{" not in texte, "contrat troué"
     for attendu in ("Camille MARTIN", "1er octobre 2026", "2450",
-                    "WINGSTOP FRANCE SAS", "884 512 336 00027", "Lille Grand Place"):
+                    "ACME RESTAURATION SAS", "884 512 336 00027", "Lille Grand Place"):
         assert attendu in texte, f"« {attendu} » absent du contrat"
 
     # refus : DPAE tant que le contrat n'est pas signé
@@ -211,7 +211,7 @@ def couloir_dark_kitchen(c):
 
 def couloir_restaurant(c):
     """Marseille Prado — contrat fait sur myrhis puis déposé."""
-    uid = soumettre(c, base_saisie("Wingstop Sud / Marseille Prado",
+    uid = soumettre(c, base_saisie("ACME Sud / Marseille Prado",
                                    poste="Équipier polyvalent"))
     c.post(f"/dossier/{uid}/valider")
     assert store.etat(store.lire(uid)) == "ATraiter"
@@ -247,7 +247,7 @@ def fiche_absente_si_non_declaree(c):
     """Sans "fiche_salarie" dans instance.json, aucune fiche n'est produite."""
     garde = config.instance().pop("fiche_salarie", None)
     try:
-        uid = soumettre(c, base_saisie("Wingstop France / Paris Opéra"))
+        uid = soumettre(c, base_saisie("ACME Restauration / Paris Opéra"))
         c.post(f"/dossier/{uid}/valider")
         assert not store.fichiers_role(store.lire(uid), "pieces", "fiche-salarie")
     finally:
@@ -257,7 +257,7 @@ def fiche_absente_si_non_declaree(c):
 
 def rejet_part_au_manager_de_l_etablissement(c):
     """Paris Opéra déclare manager_email : le rejet y part, pas à l'email saisi."""
-    uid = soumettre(c, base_saisie("Wingstop France / Paris Opéra"))
+    uid = soumettre(c, base_saisie("ACME Restauration / Paris Opéra"))
     c.post(f"/dossier/{uid}/rejeter",
            data={"motif": "Autre", "commentaire": "test adresse fixe"})
     ko = dernier_mail("rejet")

@@ -35,7 +35,7 @@ def piece(nom="p.pdf"):
     return (io.BytesIO(b"%PDF-1.4\n%%EOF"), nom)
 
 
-BASE = {"etablissement": "Wingstop France / Lille Grand Place",
+BASE = {"etablissement": "ACME Restauration / Lille Grand Place",
         "email_demandeur": "manager@example.com", "nom_naissance": "Martin",
         "nom_usage": "", "prenom": "Camille", "date_naissance": "1998-04-11",
         "lieu_naissance": "Lille", "nationalite": "Française",
