@@ -21,7 +21,14 @@ from pathlib import Path
 
 sys.stdout.reconfigure(encoding="utf-8")
 RACINE = Path(__file__).resolve().parent.parent
-os.environ["CONFIG_DIR"] = str(RACINE / "config_wingstop")
+CLIENT = RACINE / "config_wingstop"
+# Meme garde que test_wingstop.py : la config du client ne vit pas dans le
+# depot, un clone frais n'a donc rien a prouver ici.
+if not (CLIENT / "instance.json").exists():
+    print("config_wingstop/ absent — test ignoré : il tourne sur la config "
+          "réelle du client, qui ne vit pas dans le dépôt.")
+    raise SystemExit(0)
+os.environ["CONFIG_DIR"] = str(CLIENT)
 os.environ["DONNEES"] = tempfile.mkdtemp(prefix="parcours-wingstop-")
 sys.path.insert(0, str(RACINE))
 
@@ -32,6 +39,11 @@ from app import app    # noqa: E402
 for zone in ("soumissions",):
     (config.DONNEES / zone).mkdir(parents=True, exist_ok=True)
 
+# Identite du client (raison sociale, SIRET) : lue dans config/, jamais ecrite
+# ici -- ce fichier est versionne, la config non.
+DEFAUT = config.etablissements()[0][0]
+MENTIONS = config.mentions(DEFAUT)
+
 PDF = (b"%PDF-1.4\n1 0 obj<</Type/Catalog>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF", "p.pdf")
 
 
@@ -41,11 +53,11 @@ def piece():
 
 def saisie(poste="Manager", **over):
     c = {
-        "etablissement": "Wing Kitchen Boulogne / Boulogne (DK)",
+        "etablissement": DEFAUT,
         "poste": poste, "civilite": "Madame",
         "nom_prenom": "NKEMBA Awa", "date_naissance": "1996-03-07",
-        "telephone": "0612345678", "email": "manager.boulogne@example.com",
-        "adresse": "9 rue des Lilas, 92100 Boulogne-Billancourt",
+        "telephone": "0612345678", "email": "manager@example.com",
+        "adresse": "9 rue des Lilas, 92100 Villeneuve",
         "num_secu": "2 96 03 92 042 123 45",
         "date_embauche": "2026-10-01", "type_contrat": "CDI",
         "date_debut": "2026-10-01", "heure_demarrage": "9h30",
@@ -94,7 +106,7 @@ def parcours_manager(c):
            data={"motif": "Pièce illisible ou manquante", "commentaire": "RIB illisible"})
     assert store.etat(store.lire(uid)) == "Rejetee"
     ko = dernier_mail("rejet")
-    assert "manager.boulogne@example.com" in ko, "email demandeur absent du KO"
+    assert "manager@example.com" in ko, "email demandeur absent du KO"
     lien = re.search(r"http://localhost/corriger/[\w.=-]+", ko).group(0)
     r = c.post(lien, data={**saisie(poste="Manager"), "rib": piece()},
                content_type="multipart/form-data")
@@ -110,7 +122,7 @@ def parcours_manager(c):
     assert store.fichiers_role(item, "pieces", "fiche-salarie") == \
         [f"Fiche salarié - {store._qui(item)}.docx"], store.fichiers(item, "pieces")
     rappel = dernier_mail("rappel_dpae")
-    for attendu in ("NKEMBA Awa", "Manager", "943 142 067 00050", "/dossier/"):
+    for attendu in ("NKEMBA Awa", "Manager", MENTIONS["Siret"], "/dossier/"):
         assert attendu in rappel, f"« {attendu} » absent du rappel DPAE :\n{rappel}"
 
     assert item["journal"][-1]["modele"] == "Manager.html"
@@ -120,7 +132,7 @@ def parcours_manager(c):
     assert "{{" not in txt, "contrat troué"
     for attendu in ("Madame Awa NKEMBA", "1er octobre 2026",
                     "2 500 (deux mille cinq cents) euros bruts",
-                    "Wing Kitchen Boulogne"):
+                    MENTIONS["Societe"]):
         assert attendu in txt, f"« {attendu} » absent du contrat"
 
     # signature manuelle -> DPAE -> remise

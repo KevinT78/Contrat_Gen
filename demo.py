@@ -10,7 +10,7 @@ mode console : data_demo/mails/*.eml. Identifiants RH : rh / wingstop-rh.
 Quatre dossiers amorcés pour que le suivi ne soit pas vide au moment de
 présenter, chacun arrêté à une étape différente :
   - BENALI Sarah   : demande reçue, à valider — parcours « contrat généré » à jouer en live
-  - SOARES Rui     : demande validée, POP-UP (couloir myrhis) — parcours « contrat déposé »
+  - SOARES Rui     : demande validée, établissement en couloir myrhis — « contrat déposé »
                      à jouer en live : « Déposer le contrat » au lieu de « Générer »
   - NKEMBA Awa     : contrat généré, en attente du contrat signé
   - DUPONT Jean    : remis au cabinet (montre le lien comptable + mail hebdo)
@@ -28,6 +28,18 @@ os.environ.setdefault("CONFIG_DIR", str(RACINE / "config_wingstop"))
 os.environ.setdefault("DONNEES", str(RACINE / "data_demo"))
 os.environ.setdefault("PORT", "5000")
 sys.stdout.reconfigure(encoding="utf-8")
+# stderr AUSSI : le refus ci-dessous part par sys.exit(), donc sur stderr, et
+# sortirait en cp1252 illisible des que la sortie n'est pas un vrai terminal.
+sys.stderr.reconfigure(encoding="utf-8")
+
+# AVANT le rmtree : la demo tourne sur la config du client, qui ne vit pas dans
+# le depot. Sur un clone frais elle est absente -- le dire, plutot que d'effacer
+# data_demo/ puis d'exploser sur un FileNotFoundError d'instance.json.
+if not (Path(os.environ["CONFIG_DIR"]) / "instance.json").exists():
+    sys.exit(f"Config introuvable : {os.environ['CONFIG_DIR']}\n"
+             "La démo tourne sur une config client, qui n'est pas versionnée. "
+             "Installez une instance (python installer.py \"<Client>\" <dossier>) "
+             "puis relancez avec CONFIG_DIR pointé dessus.")
 
 shutil.rmtree(os.environ["DONNEES"], ignore_errors=True)
 for zone in ("soumissions", "mails"):
@@ -40,16 +52,26 @@ import app as serveur  # noqa: E402
 PDF = b"%PDF-1.4\n1 0 obj<</Type/Catalog>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF"
 
 
+# Les etablissements du client sont nommes dans config/, pas ici : ce
+# fichier est versionne, la config non. On les choisit par ce que la demo
+# doit montrer -- un couloir « contrat genere », un couloir « depose ».
+GENERE = [c for c, _ in config.etablissements() if config.mode_contrat(c) == "genere"]
+DEPOSE = next((c for c, _ in config.etablissements()
+               if config.mode_contrat(c) == "depose"), None)
+if not GENERE:
+    sys.exit("aucun établissement en contrat « genere » dans societes.json")
+
+
 def piece():
     return (BytesIO(PDF), "piece.pdf")
 
 
 def saisie(**over):
     c = {
-        "etablissement": "Wing Kitchen Boulogne / Boulogne (DK)", "poste": "Equipier Polyvalent",
+        "etablissement": GENERE[0], "poste": "Equipier Polyvalent",
         "civilite": "Madame", "nom_prenom": "BENALI Sarah", "date_naissance": "2001-02-11",
         "telephone": "0612345678", "email": "sarah.benali@example.com",
-        "adresse": "4 rue Gallieni, 92100 Boulogne-Billancourt",
+        "adresse": "4 rue Gallieni, 92100 Villeneuve",
         "num_secu": "2 01 02 92 012 345 67",
         "date_embauche": "2026-10-12", "type_contrat": "CDI", "date_debut": "2026-10-12",
         "heure_demarrage": "10h00", "nationalite": "Français", "nationalite_etrangere": "",
@@ -78,7 +100,7 @@ def amorcer():
     # 1. remis au comptable : équipier partiel étranger, tout le parcours
     uid = soumettre(c, saisie(
         civilite="Monsieur", nom_prenom="DUPONT Jean", date_naissance="1999-07-23",
-        email="jean.dupont@example.com", etablissement="Wing Kitchens / Montreuil (DK)",
+        email="jean.dupont@example.com", etablissement=GENERE[1 % len(GENERE)],
         date_embauche="2026-09-28", date_debut="2026-09-28",
         temps_partiel="OUI", temps_travail="24H",
         nationalite="Autres", nationalite_etrangere="Ivoirienne",
@@ -96,7 +118,7 @@ def amorcer():
     # 2. contrat prêt : manager, attend le contrat signé
     uid = soumettre(c, saisie(
         poste="Manager", nom_prenom="NKEMBA Awa", date_naissance="1996-03-07",
-        email="awa.nkemba@example.com", etablissement="Wing Kitchens / La Défense (DK)",
+        email="awa.nkemba@example.com", etablissement=GENERE[2 % len(GENERE)],
         date_embauche="2026-10-01", date_debut="2026-10-01", heure_demarrage="9h30"))
     c.post(f"/dossier/{uid}/valider")
     c.post(f"/dossier/{uid}/contrat")
@@ -106,12 +128,12 @@ def amorcer():
     uid = soumettre(c, saisie())
     assert store.etat(store.lire(uid)) == "Soumise"
 
-    # 4. couloir « contrat déposé » : POP-UP est en myrhis (societes.json), le
+    # 4. couloir « contrat déposé » : l etablissement est en myrhis (societes.json), le
     #    contrat est fait à la main hors app. Validé, en attente du dépôt — à
     #    jouer en live : l'écran propose « Déposer le contrat », pas « Générer ».
     uid = soumettre(c, saisie(
         civilite="Monsieur", nom_prenom="SOARES Rui", date_naissance="1998-05-14",
-        email="rui.soares@example.com", etablissement="Wing Kitchens / POP-UP",
+        email="rui.soares@example.com", etablissement=DEPOSE,
         date_embauche="2026-10-19", date_debut="2026-10-19"))
     c.post(f"/dossier/{uid}/valider")
     assert store.etat(store.lire(uid)) == "ATraiter"
@@ -131,12 +153,12 @@ Suivi vide : à toi de jouer, du formulaire public à la remise au cabinet.
   7. « Remettre au cabinet comptable » -> copie data_demo/compta/ + lien de lot
 
 Fiche candidat (parcours « contrat généré ») :
-  Établissement ......... Wing Kitchen Boulogne / Boulogne (DK)
+  Établissement ......... {etab}
   Poste ................ Equipier Polyvalent
   Civilité / NOM Prénom  Madame / BENALI Sarah
   Naissance ............ 11/02/2001
   Téléphone / Email .... 0612345678 / sarah.benali@example.com
-  Adresse ............. 4 rue Gallieni, 92100 Boulogne-Billancourt
+  Adresse ............. 4 rue Gallieni, 92100 Villeneuve
   N° sécu ............ 2 01 02 92 012 345 67
   Embauche / Début ... 12/10/2026 / 12/10/2026     Heure démarrage ... 10h00
   Type contrat ....... CDI    Nationalité ... Français
@@ -144,7 +166,7 @@ Fiche candidat (parcours « contrat généré ») :
   Pièces jointes ..... {dossier}
        (carte_vitale.pdf, rib.pdf, cni_recto.pdf + cni_verso.pdf, justif_domicile.pdf)
 
-Variante « contrat déposé » : même fiche, Établissement = Wing Kitchens / POP-UP
+Variante « contrat déposé » : même fiche, Établissement = {etab_depose}
   -> l'écran RH propose « Déposer le contrat » (pas « Générer ») ; l'étape 4
      devient un simple upload du PDF fait à la main, la suite est identique.
 """
@@ -156,7 +178,8 @@ if __name__ == "__main__":
         pieces.mkdir(exist_ok=True)
         for nom in ("carte_vitale", "rib", "cni_recto", "cni_verso", "justif_domicile"):
             (pieces / f"{nom}.pdf").write_bytes(PDF)
-        fiche = "\n" + FICHE.format(dossier=pieces)
+        fiche = "\n" + FICHE.format(dossier=pieces, etab=GENERE[0],
+                                    etab_depose=DEPOSE or "aucun en config")
     else:
         # les mails « console » de l'amorçage n'ont rien à faire sur l'écran de démo
         with contextlib.redirect_stdout(io.StringIO()):

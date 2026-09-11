@@ -27,7 +27,15 @@ from pathlib import Path
 
 sys.stdout.reconfigure(encoding="utf-8")
 RACINE = Path(__file__).resolve().parent.parent
-os.environ["CONFIG_DIR"] = str(RACINE / "config_wingstop")
+CLIENT = RACINE / "config_wingstop"
+# La config du client n'est pas versionnee : un clone frais ne l'a pas, et ce
+# test n'a alors rien a prouver. Sortie 0 -- un rouge ici doit vouloir dire
+# « le moteur a casse », jamais « le depot ne porte pas les donnees du client ».
+if not (CLIENT / "instance.json").exists():
+    print("config_wingstop/ absent — test ignoré : il tourne sur la config "
+          "réelle du client, qui ne vit pas dans le dépôt.")
+    raise SystemExit(0)
+os.environ["CONFIG_DIR"] = str(CLIENT)
 sys.path.insert(0, str(RACINE))
 
 import config          # noqa: E402
@@ -36,13 +44,28 @@ import contrat         # noqa: E402
 CONTRATS = config.CLIENT / "contrats"
 TMP = Path(tempfile.mkdtemp(prefix="wingstop-"))
 
+# Raisons sociales, SIREN, communes et noms de dirigeants appartiennent au
+# client : ils sont LUS dans config/, jamais ecrits ici -- ce fichier part sur
+# GitHub, la config non.
+DEFAUT = config.etablissements()[0][0]
+
+
+def etab_vers(modele, **over):
+    """Cle de l'etablissement dont ce poste tire `modele`. Deriver la cle du
+    routage plutot que l'ecrire en dur : c'est la regle qu'on veut prouver."""
+    for cle, _ in config.etablissements():
+        if config.modele_pour(champs(etablissement=cle, **over)) == modele:
+            return cle
+    raise AssertionError(f"aucun établissement ne route vers {modele}")
+
+
 def champs(**over):
     c = {
-        "etablissement": "Wing Kitchen Boulogne / Boulogne (DK)",
+        "etablissement": DEFAUT,
         "poste": "Equipier Polyvalent", "civilite": "Monsieur",
         "nom_prenom": "DUPONT Jean", "date_naissance": "1997-06-12",
         "telephone": "0600000000", "email": "jean@example.com",
-        "adresse": "5 rue des Fleurs, 92100 Boulogne", "num_secu": "1 97 06 92 042 123 45",
+        "adresse": "5 rue des Fleurs, 92100 Villeneuve", "num_secu": "1 97 06 92 042 123 45",
         "date_embauche": "2026-09-15", "type_contrat": "CDI",
         "date_debut": "2026-10-01", "heure_demarrage": "9h",
         "nationalite": "Français", "nationalite_etrangere": "",
@@ -120,28 +143,45 @@ def test_salarie_etranger_ajoute_le_bloc_titre_de_sejour():
 
 
 def test_deux_entites_et_equipier_route_par_etablissement():
-    """Boulogne et les autres DK relèvent de deux sociétés distinctes ; l'équipier
-    temps plein a un modèle propre à Boulogne (essai 1 mois), les autres prennent
-    la version WingKitchens (essai 2 mois). Aucun des deux n'a de non-concurrence."""
-    bl = champs(etablissement="Wing Kitchen Boulogne / Boulogne (DK)", poste="Equipier Polyvalent")
-    wk = champs(etablissement="Wing Kitchens / La Défense (DK)", poste="Equipier Polyvalent")
+    """Les établissements relèvent de deux sociétés distinctes : l'équipier temps
+    plein de la 1re entité a son modèle propre (essai 1 mois), celui de la 2e
+    prend sa version (essai 2 mois). Aucun des deux n'a de non-concurrence.
 
-    m_bl, t_bl = rendre(bl, "eq_boulogne.html")
-    m_wk, t_wk = rendre(wk, "eq_wk.html")
+    Les deux entités sont retrouvées PAR LEUR ROUTAGE, pas par leur nom :
+    l'identité du client vit dans config/, qui n'est pas versionnée."""
+    cle_bl = etab_vers("Equipier_Polyvalent.html", poste="Equipier Polyvalent")
+    cle_wk = etab_vers("Equipier_Polyvalent_WK.html", poste="Equipier Polyvalent")
+    assert cle_bl != cle_wk, "les deux entités ne sont pas distinguées"
+
+    m_bl, t_bl = rendre(champs(etablissement=cle_bl, poste="Equipier Polyvalent"), "eq_bl.html")
+    m_wk, t_wk = rendre(champs(etablissement=cle_wk, poste="Equipier Polyvalent"), "eq_wk.html")
     assert m_bl == "Equipier_Polyvalent.html", m_bl
     assert m_wk == "Equipier_Polyvalent_WK.html", m_wk
 
-    assert "d'une durée d'un mois" in t_bl and "Amar ZEGROUR" in t_bl
-    assert "Boulogne-Billancourt (92100)" in t_bl and "943 142 067" in t_bl
-    assert "d'une durée de deux mois" in t_wk and "Nordine BOUJNANE" in t_wk
-    assert "Clichy (92110)" in t_wk and "931 681 704" in t_wk
-    assert "Parvis de la Défense" in t_wk, "adresse d'établissement non reportée"
+    assert "d'une durée d'un mois" in t_bl, "essai 1 mois absent (1re entité)"
+    assert "d'une durée de deux mois" in t_wk, "essai 2 mois absent (2e entité)"
+    # chaque contrat porte les mentions de SON entite -- et aucune de l'autre :
+    # c'est la moitie « pas de fuite » que la matrice attendu/vu doit couvrir.
+    men_bl, men_wk = config.mentions(cle_bl), config.mentions(cle_wk)
+    for m in ("Representant", "SiegeSocial", "Siren"):
+        assert men_bl[m] in t_bl, f"{m} de l'entité absent de son contrat"
+        assert men_wk[m] in t_wk, f"{m} de l'entité absent de son contrat"
+    # Le « pas de fuite d'une entite vers l'autre » n'est verifie que sur le
+    # siege et le SIREN : les 5 modeles du client nomment un dirigeant EN DUR
+    # dans la clause « responsable de traitement » au lieu de {{Representant}},
+    # donc un contrat de la 1re entite porte aujourd'hui le representant de
+    # l'autre a cet endroit. Defaut de balisage cote config, pas du moteur --
+    # a rouvrir ici des que les modeles seront corriges.
+    for m in ("SiegeSocial", "Siren"):
+        assert men_wk[m] not in t_bl, f"{m} de l'autre entité dans le contrat"
+        assert men_bl[m] not in t_wk, f"{m} de l'autre entité dans le contrat"
+    assert men_wk["AdresseEtablissement"] in t_wk, "adresse d'établissement non reportée"
     for t in (t_bl, t_wk):
         assert "NON-CONCURRENCE" not in t and "DEBAUCHAGE" not in t, "équipier : clause en trop"
 
     # les postes cadres gardent la non-concurrence, dans les deux entités
-    _, t_mgr = rendre(champs(etablissement="Wing Kitchens / La Défense (DK)", poste="Manager"), "mgr.html")
-    assert "NON-CONCURRENCE" in t_mgr and "Wing Kitchens" in t_mgr
+    _, t_mgr = rendre(champs(etablissement=cle_wk, poste="Manager"), "mgr.html")
+    assert "NON-CONCURRENCE" in t_mgr and men_wk["Societe"] in t_mgr
 
 
 def test_valeur_critique_vide_refuse_le_contrat():
