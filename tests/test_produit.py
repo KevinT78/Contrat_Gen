@@ -210,6 +210,57 @@ def test_poste_sans_sa_ligne_de_grille_refuse_au_demarrage():
     assert config.verifier() == {}, config.verifier()
 
 
+def test_duree_hors_bareme_refusee_au_demarrage():
+    """Chaque duree hebdo proposee par le formulaire doit avoir sa ligne de
+    bareme. Mesure du 2026-09-14 sur config.demo : 9 durees proposees, 2 au
+    bareme, bilan OK -- doctor n'essaie que la PREMIERE option, et elle etait
+    couverte. Le premier vrai salarie a 20H voyait son contrat refuse devant la
+    RH. Le piege est rejoue tel quel : la duree couverte en premier."""
+    ligne = {"chiffres": "1 280,24", "lettres": "mille deux cent quatre-vingts euros"}
+
+    def form(type_heures="choix", options=("24H", "20H")):
+        champ = {"id": "temps_travail", "libelle": "Temps de travail",
+                 "type": type_heures, "requis": True}
+        if type_heures == "choix":
+            champ["options"] = list(options)
+        return {**FORMULAIRE, "champs": [
+            {**c, "options": ["Equipier"]} if c["id"] == "poste" else c
+            for c in FORMULAIRE["champs"]] + [champ]}
+
+    def grille(**over):
+        return {"champ_heures": "temps_travail",
+                "postes": [{"poste": "Equipier", "bareme": {"24": ligne}}], **over}
+
+    ecrire(formulaire=form(), grille=grille())
+    manques = config.verifier()
+    sujet = next((s for s in manques if "Equipier" in s and "grille" in s), None)
+    assert sujet and "20H" in " ".join(manques[sujet]), manques
+    assert "24H" not in " ".join(manques[sujet]), manques
+
+    ecrire(formulaire=form(), grille=grille(postes=[
+        {"poste": "Equipier", "bareme": {"24": ligne, "20": ligne}}]))
+    assert config.verifier() == {}, config.verifier()
+
+    # Les formes a REFUSER, sans planter le garde-fou.
+    for mauvaise in (grille(champ_heures=None), grille(champ_heures="inexistant"),
+                     {"postes": [{"poste": "Equipier", "bareme": {"24": ligne}}]},
+                     grille(postes=[{"poste": "Equipier", "bareme": ["24"]}]),
+                     grille(postes=[{"poste": "Equipier", "bareme": {"24": ligne, "20": "x"}}]),
+                     grille(postes=[{"poste": "Equipier",
+                                     "bareme": {"24": ligne, "20": {"chiffres": "1"}}}])):
+        ecrire(formulaire=form(), grille=mauvaise)
+        assert any("grille" in s for s in config.verifier()), mauvaise
+
+    # « mensuel » l'emporte sur « bareme » a la generation : pas de refus.
+    ecrire(formulaire=form(), grille=grille(postes=[
+        {"poste": "Equipier", "mensuel": 1900, "bareme": {"24": ligne}}]))
+    assert config.verifier() == {}, config.verifier()
+
+    # Duree en saisie libre : rien a enumerer, pas de refus.
+    ecrire(formulaire=form("nombre"), grille=grille())
+    assert config.verifier() == {}, config.verifier()
+
+
 def test_role_mal_declare_refuse_au_demarrage():
     """Les roles sont la promesse « n'importe quelle PME » : le moteur ne lit
     plus aucun id de champ en dur. Un role mal declare doit donc se payer au

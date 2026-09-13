@@ -8,6 +8,8 @@ qui faisaient planter le print de l'appelant), rejoué à chaque exécution.
 """
 import json
 import os
+import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -56,7 +58,8 @@ def ecrire(instance=None, societes=None):
 
 
 def lancer(*args, entree=""):
-    env = {k: v for k, v in os.environ.items() if k != "PYTHONIOENCODING"}
+    # MAILS_MODE aussi : le .bat MailHog le pose, il surclasserait le mode des fixtures
+    env = {k: v for k, v in os.environ.items() if k not in ("PYTHONIOENCODING", "MAILS_MODE")}
     env.update(CONFIG_DIR=str(CONF), DONNEES=str(BASE / "data"))
     p = subprocess.run([sys.executable, str(RACINE / "configurer.py"), *args],
                        input=entree.encode("utf-8"), capture_output=True, env=env)
@@ -163,8 +166,100 @@ def test_assistant_cree_la_premiere_societe():
     assert "contrat" not in soc[0]["etablissements"][0]
 
 
+PROD = {**INSTANCE, "url": "https://embauche.acme.example",
+        "mails": {**INSTANCE["mails"], "mode": "smtp", "hote": "127.0.0.1"},
+        "conservation": {"jours": 1095, "jours_candidature": 730,
+                         "apres": ["RemisComptable", "Rejetee", "Abandonnee"]}}
+SOCIETES_PROD = [{**SOCIETES[0], "etablissements": [
+    {**SOCIETES[0]["etablissements"][0], "manager_email": "chef@acme.example"}]}]
+
+
+def test_bilan_avertit_sans_bloquer():
+    """Ce que verifier() accepte parce que c'est legitime en demo, mais faux
+    sur une instance client : averti, jamais bloquant (code de sortie inchange).
+    Les 5 pieges mesures le 2026-09-14, bilan OK sur chacun."""
+    ecrire(PROD, SOCIETES_PROD)
+    code, sortie = lancer()
+    assert code == 0 and "⚠" not in sortie, sortie
+
+    sans_cabinet = [{**SOCIETES_PROD[0], "comptable_email": ""}]
+    for instance_, societes, attendu in (
+            ({**PROD, "mails": {**PROD["mails"], "mode": "console"}}, SOCIETES_PROD, "console"),
+            (PROD, SOCIETES, "manager_email"),
+            ({**PROD, "mails": {**PROD["mails"], "comptable_defaut": ""}}, sans_cabinet,
+             "cabinet"),
+            ({**PROD, "url": "http://embauche.acme.example"}, SOCIETES_PROD, "https"),
+            ({k: v for k, v in PROD.items() if k != "conservation"}, SOCIETES_PROD,
+             "conservation")):
+        ecrire(instance_, societes)
+        code, sortie = lancer()
+        avert = [l for l in sortie.splitlines() if "⚠" in l]
+        assert code == 0, sortie
+        assert len(avert) == 1 and attendu in avert[0], f"{attendu} : {avert}"
+
+
+def _faux_smtp():
+    """Relais SMTP minimal sur un port libre -> (port, liste des messages recus)."""
+    import threading
+    recus = []
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(1)
+
+    def servir():
+        conn, _ = srv.accept()
+        f = conn.makefile("rwb")
+        dire = lambda l: (f.write(l.encode() + b"\r\n"), f.flush())
+        dire("220 faux")
+        while (l := f.readline().decode().strip()):
+            v = l.split(" ")[0].upper()
+            if v == "DATA":
+                dire("354 go")
+                corps = []
+                while (x := f.readline().decode()).strip() != ".":
+                    corps.append(x)
+                recus.append("".join(corps))
+                dire("250 ok")
+            elif v == "QUIT":
+                dire("221 bye")
+                break
+            else:
+                dire("250 ok")
+        conn.close()
+        srv.close()
+
+    threading.Thread(target=servir, daemon=True).start()
+    return srv.getsockname()[1], recus
+
+
+def test_mail_envoie_en_smtp_meme_en_mode_console():
+    """`configurer.py mail` sert a tester le relais AVANT de passer en smtp :
+    il doit envoyer pour de vrai, jamais ecrire un .eml en mode console."""
+    port, recus = _faux_smtp()
+    ecrire({**INSTANCE, "mails": {**INSTANCE["mails"], "hote": "127.0.0.1", "port": port}})
+    (CONF / "mails").mkdir(exist_ok=True)                 # toute instance reçoit les 4
+    shutil.copy(RACINE / "config.exemple" / "mails" / "nouvelle_soumission.txt",
+                CONF / "mails")
+    code, sortie = lancer("mail", "vous@acme.example")
+    assert code == 0, sortie
+    assert len(recus) == 1 and "vous@acme.example" in recus[0], (recus, sortie)
+    assert not list((BASE / "data" / "mails").glob("*.eml")), "ecrit en console au lieu d'envoyer"
+
+    with socket.socket() as s:                        # port ferme -> echec lisible
+        s.bind(("127.0.0.1", 0))
+        ferme = s.getsockname()[1]
+    ecrire({**INSTANCE, "mails": {**INSTANCE["mails"], "hote": "127.0.0.1", "port": ferme}})
+    code, sortie = lancer("mail", "vous@acme.example")
+    assert code == 1 and "ÉCHEC" in sortie, sortie
+
+    # relais non renseigne, ou bloc mails absent : echec lisible, pas de trace
+    for inst in (INSTANCE, {k: v for k, v in INSTANCE.items() if k != "mails"}):
+        ecrire(inst)
+        code, sortie = lancer("mail", "vous@acme.example")      # lancer() refuse « Traceback »
+        assert code == 1 and "mails.hote vide" in sortie, sortie
+
+
 if __name__ == "__main__":
-    import shutil
     try:
         for nom, fn in sorted(globals().items()):
             if nom.startswith("test_"):

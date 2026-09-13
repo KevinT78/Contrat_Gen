@@ -98,6 +98,66 @@ def proxyfix_separe_les_ip():
         "une seconde IP est verrouillee par la premiere — ProxyFix absent ?"
 
 
+def proxyfix_actif_sous_waitress():
+    """Le cas precedent passe par test_client, qui contourne le serveur WSGI.
+    Or waitress efface X-Forwarded-* par defaut avant l'app : ProxyFix n'a
+    rien vu en production pendant que ce fichier etait vert (mesure derriere
+    Caddy le 2026-09-13). Meme assertion, mais sur le vrai `python app.py`."""
+    import socket
+    import time
+    import urllib.error
+    import urllib.request
+
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    donnees = Path(tempfile.mkdtemp(prefix="contratgen-waitress-"))
+    env = {**os.environ, "PORT": str(port), "PYTHONIOENCODING": "utf-8",
+           "DONNEES": str(donnees)}
+    env.pop("DEBUG", None)
+    # sortie dans un fichier, pas un PIPE jamais relu : un pipe plein bloquerait le serveur
+    journal = open(donnees / "app.log", "w", encoding="utf-8")
+    p = subprocess.Popen([sys.executable, "app.py"], env=env, stdout=journal,
+                         stderr=subprocess.STDOUT,
+                         cwd=str(Path(__file__).resolve().parent.parent))
+
+    def tentative(ip):
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/login", method="POST",
+            data=b"identifiant=rh&mot_de_passe=mauvais",
+            headers={"X-Forwarded-For": ip,
+                     "Content-Type": "application/x-www-form-urlencoded"})
+        try:
+            return urllib.request.urlopen(req, timeout=10).status
+        except urllib.error.HTTPError as e:
+            return e.code
+
+    try:
+        # « waitress sur » s'affiche AVANT que serve() n'ouvre le port : on
+        # attend que le port reponde, borne dans le temps.
+        fin = time.time() + 60
+        while True:
+            assert p.poll() is None, \
+                "app.py s'est arrete :\n" + (donnees / "app.log").read_text(encoding="utf-8")
+            assert time.time() < fin, "app.py n'ecoute toujours pas apres 60 s"
+            try:
+                socket.create_connection(("127.0.0.1", port), timeout=1).close()
+                break
+            except OSError:
+                time.sleep(0.2)
+        for _ in range(module._PLAFOND_LOGIN):
+            tentative("10.9.9.1")
+        assert tentative("10.9.9.1") == 429, \
+            "budget de la premiere IP non epuise, le cas ne prouve rien"
+        assert tentative("10.9.9.2") != 429, \
+            "sous waitress, une seconde IP est verrouillee par la premiere : " \
+            "X-Forwarded-For n'atteint pas l'app (clear_untrusted_proxy_headers ?)"
+    finally:
+        p.kill()
+        p.wait(timeout=10)
+        journal.close()
+
+
 
 
 def xff_ignore_sans_proxy_declare():
@@ -118,6 +178,7 @@ def main():
     le_verrou_ne_bloque_pas_en_permanence()
     la_session_expire()
     proxyfix_separe_les_ip()
+    proxyfix_actif_sous_waitress()
     xff_ignore_sans_proxy_declare()
     print(f"LOGIN OK — verrou {module._PLAFOND_LOGIN}/{module._FENETRE_LOGIN}s, "
           f"session {app.config['PERMANENT_SESSION_LIFETIME']}, ProxyFix actif")

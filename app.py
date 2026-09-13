@@ -94,8 +94,10 @@ app = Flask(__name__)
 # tourner contournerait entierement les deux rate-limits ci-dessus (verifie).
 # PROXIES declare donc le nombre REEL de proxies devant l'app -- 0 par defaut
 # (`python app.py` en direct), 1 derriere Caddy, 2 si un CDN s'ajoute devant.
-# Trop haut = remote_addr forgeable ; trop bas = tous les visiteurs partagent
-# le meme compteur et la Nieme requete legitime est jetee en silence.
+# Trop haut = remote_addr forgeable derriere un proxy qui AJOUTE a l'en-tete du
+# client (nginx $proxy_add_x_forwarded_for) ; derriere Caddy, qui l'ecrase, on
+# retombe sur l'IP du proxy. Trop bas = tous les visiteurs partagent le meme
+# compteur et la Nieme requete legitime est jetee en silence.
 try:
     _PROXIES = int(os.environ.get("PROXIES", 0))
 except ValueError:
@@ -1016,7 +1018,12 @@ def demarrer():
         # des pieces d'identite.
         hote = os.environ.get("HOST", "127.0.0.1")
         print(f"waitress sur {hote}:{port} (mono-process, 4 threads)", flush=True)
-        serve(app, host=hote, port=port, threads=4)
+        # waitress efface X-Forwarded-* par defaut AVANT l'app : sans ce
+        # drapeau, ProxyFix ne voit rien et PROXIES est sans effet (tous les
+        # visiteurs = 127.0.0.1, liens en http://). Garde a 0 : sans proxy
+        # declare, l'en-tete reste efface -- il serait fourni par le client.
+        serve(app, host=hote, port=port, threads=4,
+              clear_untrusted_proxy_headers=not _PROXIES)
 
 
 if __name__ == "__main__":

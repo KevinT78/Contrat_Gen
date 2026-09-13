@@ -650,7 +650,40 @@ def _verifier_grille():
                     f"le partage est voulu)"]
             else:
                 pris[ligne["poste"]] = opt
+    for ligne in lignes:
+        # « mensuel » l'emporte sur « bareme » dans contrat.salaire()
+        if "bareme" in ligne and "mensuel" not in ligne and ligne["poste"] in pris:
+            manques.update(_verifier_bareme(ligne, g))
     return manques
+
+
+def _verifier_bareme(ligne, g):
+    """Chaque duree hebdo que le formulaire PROPOSE doit avoir sa ligne de
+    bareme. doctor n'essaie que la premiere option : sur config.demo, 7 durees
+    sur 9 etaient hors bareme, bilan OK, et le premier salarie reel a 20H avait
+    son contrat refuse devant la RH (salaire vide). La FORME avant les valeurs.
+
+    simplification volontaire : une duree en saisie libre (champ sans options)
+    n'est pas enumerable, donc pas verifiee ici -- doctor la couvre pour sa
+    valeur d'exemple."""
+    import contrat
+    sujet = f"grille — barème « {ligne['poste']} »"
+    bareme, cid = ligne["bareme"], g.get("champ_heures")
+    if not isinstance(bareme, dict) or not all(
+            isinstance(v, dict) and isinstance(v.get("chiffres"), str) and v["chiffres"]
+            and isinstance(v.get("lettres"), str) and v["lettres"] for v in bareme.values()):
+        return {sujet: ["« bareme » attend un objet {\"<heures>\": {\"chiffres\": \"…\", "
+                        "\"lettres\": \"…\"}}, chaque ligne avec ses deux textes"]}
+    if not isinstance(cid, str) or cid not in {c["id"] for c in champs()}:
+        return {sujet: [f"« champ_heures » ({cid!r}) doit nommer le champ du formulaire "
+                        "qui porte la durée hebdomadaire"]}
+    trous = [o for o in champ(cid).get("options") or []
+             if contrat.cle_bareme(o) not in bareme]
+    if trous:
+        return {sujet: [f"durée(s) proposée(s) par le formulaire sans ligne : "
+                        f"{', '.join(map(str, trous))} — ces salariés auraient un "
+                        f"contrat sans salaire"]}
+    return {}
 
 
 def verifier():

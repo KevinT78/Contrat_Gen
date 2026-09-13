@@ -36,6 +36,14 @@ def rendre(modele, vals):
     return objet.removeprefix("Objet:").strip().format_map(vals), corps.strip().format_map(vals)
 
 
+def mode():
+    """Mode d'envoi effectif : `MAILS_MODE` surclasse instance.json (le .bat
+    MailHog met "smtp" sans toucher a instance.json, qui reste sur "console"
+    pour la suite de tests)."""
+    conf = config.instance().get("mails") or {}
+    return (os.environ.get("MAILS_MODE") or conf.get("mode") or "console").strip().lower()
+
+
 def envoyer(modele, a, cc=(), **vals):
     """-> (True, None) ou (False, raison). Un echec n'annule jamais une transition."""
     conf = config.instance()["mails"]
@@ -44,9 +52,7 @@ def envoyer(modele, a, cc=(), **vals):
         return False, "aucun destinataire configure"
     copie = [d for d in cc if d and d not in destinataires]
 
-    # MAILS_MODE surclasse le fichier : le .bat MailHog met "smtp" sans toucher a
-    # instance.json, qui reste sur "console" pour la suite de tests.
-    mode = (os.environ.get("MAILS_MODE") or conf.get("mode", "console")).strip().lower()
+    mode_envoi = mode()
     try:                                         # tout est rapporte, jamais fatal :
         objet, corps = rendre(modele, vals)      # un .txt disparu ne bloque pas la transition
         msg = EmailMessage()
@@ -57,7 +63,7 @@ def envoyer(modele, a, cc=(), **vals):
         msg["Subject"] = objet
         msg.set_content(corps)
 
-        if mode == "console":
+        if mode_envoi == "console":
             d = config.DONNEES / "mails"
             d.mkdir(parents=True, exist_ok=True)
             # Le compteur separe deux mails de la meme seconde (un par cabinet

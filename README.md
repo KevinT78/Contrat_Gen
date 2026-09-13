@@ -104,11 +104,21 @@ enchaîne `placeholders` puis `doctor` dès que la config passe :
 CONFIG_DIR=/srv/acme/config python configurer.py             # bilan : chaque manque, et le fichier à ouvrir
 CONFIG_DIR=/srv/acme/config python configurer.py --assister  # pose les questions (mails, comptes, société), boucle jusqu'à OK
 CONFIG_DIR=/srv/acme/config python configurer.py compte marc # ajoute ou remplace un compte
+CONFIG_DIR=/srv/acme/config python configurer.py mail vous@acme.fr  # envoi de test en SMTP, même en mode console
 ```
 
 L'assistant n'écrit que ce qui se dicte : adresses, comptes, société et
 établissements, secret. Rôles, balisage des modèles et grille restent à éditer
 à la main ; il montre où, puis revérifie.
+
+Quand la config passe, le bilan signale en `⚠`, **sans bloquer**, ce qui est
+légitime en démo mais faux chez un client : `mails.mode` resté en `console`,
+établissement sans `manager_email`, société sans cabinet comptable, `url` hors
+https, pas de bloc `conservation`.
+
+Le démarrage refuse aussi un barème de grille incomplet : chaque durée
+hebdomadaire proposée par le formulaire doit avoir sa ligne, sinon ces salariés
+auraient un contrat sans salaire (`doctor` n'essaie que la première durée).
 
 Un compte par personne qui valide : `installer.py` ne crée que `rh`, les autres
 s'ajoutent avec `python configurer.py compte <ident>` (mot de passe demandé, hash
@@ -144,9 +154,16 @@ tourner contourne entièrement les deux plafonds.
 PROXIES=1 CONFIG_DIR=/srv/acme/config DONNEES=/srv/acme/data python app.py
 ```
 
-Trop haut : `remote_addr` redevient forgeable par en-tête client. Trop bas : tous
-les visiteurs partagent un compteur unique et la Nᵉ requête légitime est jetée en
-silence. `tests/test_login.py` couvre les deux réglages.
+Trop haut : l'effet dépend du proxy. nginx avec `$proxy_add_x_forwarded_for`
+ajoute à la valeur du client, et `remote_addr` redevient forgeable. Caddy écrase
+cette valeur : l'app retombe alors sur l'IP du proxy, comme un réglage trop bas.
+Trop bas : tous les visiteurs partagent un compteur unique et la Nᵉ requête
+légitime est jetée en silence.
+
+waitress efface `X-Forwarded-*` par défaut avant l'app : `demarrer()` ne le laisse
+passer que si `PROXIES` est posé. `tests/test_login.py` couvre les deux réglages,
+dont un cas sur le vrai `python app.py` (le client de test Flask contourne
+waitress et ne voit pas ce piège).
 
 **Le cookie de session est `Secure` dès que `DEBUG` n'est pas posé** : un navigateur
 refusera de le renvoyer en clair. Servir la prod en `http://` sans terminaison TLS
@@ -239,7 +256,7 @@ Couverture de « ACME » — 8 cas, contrats dans …/contrat-gen-doctor
 Salarié fictif : Temps de travail = 10H, autres champs « Exemple ».
 
   Couvreur      / CDI / Chantier Nord   ✓ 01-Couvreur-CDI-Chantier-Nord.docx
-  Chef d'équipe / CDI / Chantier Nord   ✗ aucun modèle ne vise ce cas
+  Chef d'équipe / CDI / Chantier Nord   ✗ aucun modèle ne vise ce cas (instance.json → templates)
   Apprenti      / CDI / Chantier Sud    ⚠ valeurs vides dans CDI.docx : SalaireChiffres
   Couvreur      / CDI / Entrepôt        – contrat déposé (fait hors de l'app)
 ```
@@ -502,7 +519,7 @@ l'avertissement drive.
 | `recap.py` | mail hebdomadaire au cabinet : dossiers remis + liens de lot (CLI, à mettre en cron) |
 | `purger.py` | pendant lecture seule de la purge : éligibles, orphelins, avertissement drive (CLI) |
 | `doctor.py` | couverture de la config, vérifiée en produisant les contrats |
-| `configurer.py` | bilan de config lisible, assistant interactif, ajout de comptes |
+| `configurer.py` | bilan de config lisible (avec avertissements de mise en production), assistant interactif, ajout de comptes, envoi de test SMTP |
 | `tests/test_parcours.py` | les deux couloirs, signature, fiche, récap, refus attendus |
 | `tests/test_valeurs_contrat.py` | les VALEURS imprimées : grille (forfait et barème), mensualisation, blocs conditionnels, deux entités sans fuite — sur une config fabriquée en temp |
 | `tests/test_signature.py` | `signature.py` contre un transport factice |
@@ -510,7 +527,7 @@ l'avertissement drive.
 | `tests/test_produit.py` | balisage client refusé si mal écrit, fiche dérivée, config versionnée, rechargement à chaud, `conservation` malformée refusée, refus de démarrer à deux |
 | `tests/test_purge.py` | parcours complet → purge → nom/NIR/adresse absents partout, rejouable, jeton de lot révoqué |
 | `tests/test_mails.py` | mode console, override `MAILS_MODE`, STARTTLS+login imposés dès qu'un identifiant SMTP est présent |
-| `tests/test_configurer.py` | bilan sous cp1252 (sous-processus, pipe), assistant scripté, comptes |
+| `tests/test_configurer.py` | bilan sous cp1252 (sous-processus, pipe), avertissements non bloquants, assistant scripté, comptes, envoi de test contre un faux relais SMTP |
 
 ## Ce que le squelette ne fait pas encore
 

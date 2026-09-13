@@ -117,7 +117,8 @@ def examiner():
             continue
         modele = config.modele_pour(champs)
         if not modele:
-            ligne.update(statut="sans_modele", detail="aucun modèle ne vise ce cas")
+            ligne.update(statut="sans_modele", detail="aucun modèle ne vise ce cas "
+                                                         "(instance.json → templates)")
             continue
 
         # Ce que la RH tape au moment de générer : marqué comme tel, pour que le

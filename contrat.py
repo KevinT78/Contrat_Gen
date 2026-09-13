@@ -217,9 +217,16 @@ def salaire(champs, grille):
     if "mensuel" in e:
         v = float(e["mensuel"])
         return montant_fr(v), lettres_fr(v)
-    mo = re.match(r"\d+", str(champs.get(grille.get("champ_heures", ""), "")))
-    ligne = e.get("bareme", {}).get(mo.group() if mo else "")
+    ligne = e.get("bareme", {}).get(cle_bareme(champs.get(grille.get("champ_heures", ""), "")))
     return (ligne["chiffres"], ligne["lettres"]) if ligne else ("", "")
+
+
+def cle_bareme(duree):
+    """« 24H » -> "24" : la cle de bareme d'une duree hebdo, "" sans chiffre.
+    Partagee avec config._verifier_bareme : le garde-fou lit la duree
+    exactement comme la generation du contrat."""
+    mo = re.match(r"\d+", str(duree))
+    return mo.group() if mo else ""
 
 
 OPERATEURS = ("==", "!=", "in", "present", "absent")

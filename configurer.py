@@ -3,6 +3,7 @@
     python configurer.py                 # bilan : verifier -> placeholders -> doctor
     python configurer.py --assister      # pose les questions pour ce qu'il sait remplir
     python configurer.py compte <ident>  # ajoute ou remplace un compte de connexion
+    python configurer.py mail <adresse>  # envoi de test en SMTP, même en mode console
 
 Piloté par CONFIG_DIR comme doctor.py. Le bilan est le garde-fou de démarrage
 (config.verifier()) rendu lisible AVANT de lancer le serveur : chaque manque
@@ -16,6 +17,7 @@ restent un travail d'éditeur : il montre où, puis attend qu'on ait corrigé.
 """
 import getpass
 import json
+import os
 import secrets
 import sys
 
@@ -91,11 +93,68 @@ def bilan():
     dest = config.CLIENT / "PLACEHOLDERS.md"
     dest.write_text(placeholders.fiche(), encoding="utf-8")
     print(f"Config valide. {len(config.placeholders_connus())} jetons -> {dest}\n")
+    for a in avertissements():
+        print(f"⚠ {a}")
     lignes = doctor.examiner()
     print(doctor.rapport(lignes))
     code = doctor.verdict(lignes)
     print("\nOK" if code == 0 else "\nKO — un cas ne produit pas son contrat (voir doctor).")
     return code
+
+
+def avertissements():
+    """Ce que verifier() accepte parce que c'est légitime en démo ou en test,
+    mais faux sur une instance client en production. Mesuré le 2026-09-14 :
+    bilan OK sur chacun. Jamais bloquant -- le code de sortie ne change pas."""
+    import mails
+    m = config.instance().get("mails") or {}
+    out = []
+    if mails.mode() == "console":
+        out.append("mails.mode = « console » : aucun mail ne part. En production : "
+                   "« smtp », après un essai avec `configurer.py mail <adresse>`  "
+                   "[config/instance.json]")
+    sans_manager = [f"{s['nom']} / {e['nom']}" for s in config.societes()
+                    for e in s["etablissements"] if not e.get("manager_email")]
+    if sans_manager:
+        out.append(f"manager_email absent ({', '.join(sans_manager)}) : le lien de "
+                   "correction d'un rejet part à l'adresse tapée dans le formulaire "
+                   "public  [config/societes.json]")
+    if not m.get("comptable_defaut"):
+        if sans_cabinet := [s["nom"] for s in config.societes() if not s.get("comptable_email")]:
+            out.append(f"aucun cabinet comptable pour {', '.join(sans_cabinet)} : le mail "
+                       "hebdomadaire (recap.py) échouera  [config/societes.json]")
+    url = config.url_publique()
+    if url and not url.startswith("https://"):
+        out.append(f"url « {url} » n'est pas en https : les liens du mail hebdomadaire "
+                   "partiraient en clair  [config/instance.json]")
+    if not config.conservation():
+        out.append("aucun bloc « conservation » : les pièces ne sont jamais purgées "
+                   "(RGPD)  [config/instance.json]")
+    return out
+
+
+def mail(adresse):
+    """Envoi de test en SMTP quel que soit mails.mode : c'est l'essai à faire
+    AVANT de passer l'instance en smtp. Gabarit nouvelle_soumission, présent
+    dans toute instance."""
+    import mails
+    os.environ["MAILS_MODE"] = "smtp"           # mails.envoyer relit l'env à chaque envoi
+    m = config.instance().get("mails") or {}
+    relais = f"{m.get('hote')}:{m.get('port')}"
+    if not m.get("hote"):
+        print("ÉCHEC — mails.hote vide : renseignez le relais SMTP (hote, port, "
+              "utilisateur, mot_de_passe)  [config/instance.json]")
+        return 1
+    ok, raison = mails.envoyer("nouvelle_soumission", adresse, nom="Test d'envoi Contrat_Gen",
+                               id="test", lien=config.url_publique() or "-")
+    if ok:
+        print(f"Envoyé à {adresse} via {relais} (gabarit nouvelle_soumission). "
+              "Vérifiez la réception, spams compris.")
+        return 0
+    print(f"ÉCHEC via {relais} — {raison}")
+    if str(m.get("port")) == "465":
+        print("  Le port 465 (SSL implicite) n'est pas pris en charge : utilisez 587.")
+    return 1
 
 
 def compte(ident):
@@ -233,4 +292,6 @@ if __name__ == "__main__":
         sys.exit(assister())
     if len(args) == 2 and args[0] == "compte":
         sys.exit(compte(args[1]))
+    if len(args) == 2 and args[0] == "mail":
+        sys.exit(mail(args[1]))
     sys.exit(__doc__)
