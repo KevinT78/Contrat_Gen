@@ -1,0 +1,12 @@
+Objet: Demande d'embauche à corriger — {nom}
+Bonjour,
+
+La demande d'embauche de {nom} a été rejetée par le service RH.
+
+Motif : {motif}
+Commentaire : {commentaire}
+
+Corrigez-la ici (lien valable 30 jours) : {lien}
+
+-- 
+Envoi automatique, ne pas répondre.

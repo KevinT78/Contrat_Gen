@@ -1,11 +1,11 @@
-"""Démo de bout en bout sur la config Wingstop (config_wingstop/).
+"""Démo de bout en bout sur la config de démo (config.demo/).
 
     python demo.py            # remet la démo à zéro, amorce 4 dossiers, sert sur :5000
     python demo.py --vide     # suivi vide : c'est toi qui fais tout, du formulaire
-                              # public à la remise au cabinet (fiche + pièces imprimées)
+                              # public à la remise au cabinet (pièces imprimées)
 
 Données dans data_demo/ (jamais data/), effacées à chaque lancement. Mails en
-mode console : data_demo/mails/*.eml. Identifiants RH : rh / wingstop-rh.
+mode console : data_demo/mails/*.eml. Identifiants RH : rh / demo-rh.
 
 Quatre dossiers amorcés pour que le suivi ne soit pas vide au moment de
 présenter, chacun arrêté à une étape différente :
@@ -24,7 +24,7 @@ from io import BytesIO
 from pathlib import Path
 
 RACINE = Path(__file__).resolve().parent
-os.environ.setdefault("CONFIG_DIR", str(RACINE / "config_wingstop"))
+os.environ.setdefault("CONFIG_DIR", str(RACINE / "config.demo"))
 os.environ.setdefault("DONNEES", str(RACINE / "data_demo"))
 os.environ.setdefault("PORT", "5000")
 sys.stdout.reconfigure(encoding="utf-8")
@@ -37,9 +37,8 @@ sys.stderr.reconfigure(encoding="utf-8")
 # data_demo/ puis d'exploser sur un FileNotFoundError d'instance.json.
 if not (Path(os.environ["CONFIG_DIR"]) / "instance.json").exists():
     sys.exit(f"Config introuvable : {os.environ['CONFIG_DIR']}\n"
-             "La démo tourne sur une config client, qui n'est pas versionnée. "
-             "Installez une instance (python installer.py \"<Client>\" <dossier>) "
-             "puis relancez avec CONFIG_DIR pointé dessus.")
+             "La démo nécessite une config complète (formulaire riche, "
+             "modèles de contrats, grille de salaires), pas une instance vide.")
 
 shutil.rmtree(os.environ["DONNEES"], ignore_errors=True)
 for zone in ("soumissions", "mails"):
@@ -95,7 +94,7 @@ def soumettre(c, s):
 
 def amorcer():
     c = serveur.app.test_client()
-    c.post("/login", data={"identifiant": "rh", "mot_de_passe": "wingstop-rh"})
+    c.post("/login", data={"identifiant": "rh", "mot_de_passe": "demo-rh"})
 
     # 1. remis au comptable : équipier partiel étranger, tout le parcours
     uid = soumettre(c, saisie(
@@ -143,10 +142,9 @@ FICHE = """\
 Suivi vide : à toi de jouer, du formulaire public à la remise au cabinet.
   1. /  -> remplis la fiche ci-dessous, joins les pièces -> « Envoyer la demande »
        (CNI : sélectionne les DEUX fichiers cni_recto.pdf + cni_verso.pdf)
-  2. /login (rh / wingstop-rh) -> « Demandes d'embauche » -> clic sur BENALI Sarah
+  2. /login (rh / demo-rh) -> « Demandes d'embauche » -> clic sur BENALI Sarah
   3. « Accepter — ouvrir le dossier »
-       -> fiche salarié .docx dans « Documents produits » + mail « rappel DPAE »
-          dans data_demo/mails/
+        -> mail « rappel DPAE » dans data_demo/mails/
   4. « Générer le contrat » -> aucun champ à saisir -> ouvre contrat.docx
   5. « Déposer le contrat signé » -> un des PDF
   6. « DPAE créée et stockée » -> dépose l'accusé (un des PDF)  <- la DPAE dans le dossier
@@ -187,9 +185,9 @@ if __name__ == "__main__":
     print(f"""
 Démo Contrat_Gen — {config.instance()['client']}
   Formulaire (public) : http://localhost:{os.environ['PORT']}/
-  Espace RH           : http://localhost:{os.environ['PORT']}/login   (rh / wingstop-rh)
+  Espace RH           : http://localhost:{os.environ['PORT']}/login   (rh / demo-rh)
   Mails « envoyés »   : {config.DONNEES / 'mails'}
-  Mail hebdo cabinet  : CONFIG_DIR=config_wingstop DONNEES=data_demo python recap.py
+  Mail hebdo cabinet  : CONFIG_DIR=config.demo DONNEES=data_demo python recap.py
 {fiche}""", flush=True)
     sys.argv = [sys.argv[0]]
     serveur.demarrer()

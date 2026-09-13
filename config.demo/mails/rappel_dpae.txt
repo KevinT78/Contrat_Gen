@@ -1,0 +1,16 @@
+Objet: DPAE à déclarer — {nom}
+Bonjour,
+
+Une embauche vient d'être validée : la DPAE est à déclarer.
+
+  Salarié      : {nom}
+  Poste        : {poste}
+  Début        : {debut}
+  Employeur    : {societe} — {etablissement}
+  SIRET        : {siret}
+
+Les pièces du salarié sont dans le dossier : {lien}
+Une fois la DPAE faite, déposez-y l'accusé.
+
+--
+Envoi automatique, ne pas répondre.

@@ -1,0 +1,59 @@
+{
+  "config_version": 1,
+  "client": "Basilic Café — Démo",
+  "secret": "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6a7b8c9d0e1f2a3b4c5d6a7b8c9d0e1f2",
+  "url": "http://localhost:5000",
+
+  "signature": {"mode": "manuel"},
+  "stockage": {"mode": "local"},
+
+  "mails": {
+    "mode": "console",
+    "hote": "smtp.example.com",
+    "port": 587,
+    "utilisateur": "rh@basiliccafe.example",
+    "mot_de_passe": "",
+    "expediteur": "rh@basiliccafe.example",
+    "rh": ["rh@basiliccafe.example"],
+    "dpae": null,
+    "recap": null,
+    "comptable_defaut": "compta@basiliccafe.example"
+  },
+
+  "utilisateurs": {
+    "rh": {
+      "mdp_hash": "scrypt:32768:8:1$QgFpwnl73bwFC1Y7$75baac832e854c47bd90839b38fa7fd0729c39778f471e27770ea4b6d46800a9835178bf545e51fe1773f9acf701047fadacd8752c48f1c118bbe9ec140c69f1"
+    }
+  },
+
+  "motifs_ko": [
+    "Pièce illisible ou manquante",
+    "Informations incohérentes",
+    "Établissement ou poste erroné",
+    "Rémunération à revoir",
+    "Autre"
+  ],
+
+  "templates": [
+    {"quand": {"poste": "Equipier Polyvalent", "temps_partiel": "OUI"}, "modele": "Equipier_Partiel.html"},
+    {"quand": {"poste": "Equipier Polyvalent"}, "modele": "Equipier.html"},
+    {"quand": {"poste": "Manager"}, "modele": "Manager.html"}
+  ],
+
+  "critiques": ["SalaireChiffres", "SalaireLettres"],
+
+  "derives": [
+    {"placeholder": "Nationalite",
+     "si": ["nationalite", "==", "Autres"],
+     "alors": "{{NationaliteEtrangere}}", "sinon": "française"},
+    {"placeholder": "BlocAutorisationTravail",
+     "si": ["nationalite", "==", "Autres"],
+     "alors": "<p>Le salarié déclare être titulaire d'un titre de séjour de type « {{TypeAutorisation}} », valable jusqu'au {{DateFinValidite}}, l'autorisant à occuper un emploi salarié sur le territoire français.</p>",
+     "sinon": ""},
+    {"placeholder": "DureeMensuelle", "format": "mensualise", "de": "TempsTravail"},
+    {"placeholder": "Semaine1", "format": "nombre", "de": "TempsTravail"},
+    {"placeholder": "Semaine2", "format": "nombre", "de": "TempsTravail"},
+    {"placeholder": "Semaine3", "format": "nombre", "de": "TempsTravail"},
+    {"placeholder": "Semaine4", "format": "nombre", "de": "TempsTravail"}
+  ]
+}

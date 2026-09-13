@@ -1,0 +1,23 @@
+[
+  {
+    "nom": "Basilic Café",
+    "siren": "789 456 123",
+    "comptable_email": "compta@basiliccafe.example",
+    "mentions": {
+      "RaisonSociale": "BASILIC CAFÉ SAS",
+      "FormeCapital": "société par actions simplifiée au capital de 25 000,00 euros",
+      "GreffeRCS": "Paris",
+      "RCS": "RCS Paris 789 456 123",
+      "SiegeSocial": "18 rue des Rosiers à Paris (75004)",
+      "Representant": "Madame Élodie MARTIN",
+      "VilleSignature": "Paris",
+      "ConventionCollective": "Convention collective nationale de la restauration rapide (IDCC 1501)"
+    },
+    "etablissements": [
+      {"nom": "Paris Bastille", "siret": "789 456 123 00014",
+       "mentions": {"AdresseEtablissement": "7 boulevard Beaumarchais, 75004 Paris"}},
+      {"nom": "Lyon Confluence", "siret": "789 456 123 00022", "contrat": "depose",
+       "mentions": {"AdresseEtablissement": "10 quai des Célestins, 69002 Lyon"}}
+    ]
+  }
+]

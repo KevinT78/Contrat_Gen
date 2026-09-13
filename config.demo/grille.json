@@ -1,0 +1,22 @@
+{
+  "_note": [
+    "Grille de rémunération brute mensuelle pour la démo.",
+    "Manager : forfait mensuel direct.",
+    "Equipier : barème par durée hebdomadaire du contrat (champ « temps_travail »),",
+    "chiffres ET lettres figés ici et servis tels quels au contrat.",
+    "35H = SMIC mensuel officiel (1 867,02 € au 01/06/2026, horaire 12,31 €) ;",
+    "durées partielles = heures x 52/12 x taux, arrondi au centime."
+  ],
+  "champ_heures": "temps_travail",
+  "postes": [
+    { "poste": "Manager", "mensuel": 2500 },
+    {
+      "poste": "Equipier",
+      "horaire": 12.31,
+      "bareme": {
+        "24": { "chiffres": "1 280,24", "lettres": "mille deux cent quatre-vingts euros et vingt-quatre centimes" },
+        "35": { "chiffres": "1 867,02", "lettres": "mille huit cent soixante-sept euros et deux centimes" }
+      }
+    }
+  ]
+}

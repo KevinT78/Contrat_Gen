@@ -1,0 +1,12 @@
+Objet: Dossiers d'embauche à récupérer — {periode}
+Bonjour,
+
+{nombre} dossier(s) d'embauche vous ont été remis sur la période {periode} :
+
+{liste}
+
+Chaque lien est personnel, valable 30 jours, et donne accès aux pièces du
+salarié, au contrat signé et à l'accusé DPAE (« Tout télécharger »).
+
+--
+Envoi automatique, ne pas répondre.

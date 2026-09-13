@@ -314,17 +314,16 @@ Les deux voies mènent à `ContratPret`, puis à `ContratSigne`.
 
 - **`"signature": {"mode": "manuel"}`** (défaut) : la RH télécharge le contrat, le
   fait signer hors app, dépose le PDF signé → `ContratSigne`.
-- **`"signature": {"mode": "yousign", "cle_api": "...", "url": "..."}`** : boutons
-  « Envoyer à la signature » / « Vérifier la signature » (polling, pas de webhook).
-  Livré désactivé — non validable sans clé sandbox du client.
 
 ## La démo en 5 minutes
 
-`python demo.py` remet `data_demo/` à zéro, amorce trois dossiers à des étapes
-différentes (demande reçue, contrat prêt, remis au cabinet) sur la config
-Wingstop (`config_wingstop/`, hors dépôt) et sert sur `:5000` — identifiants
-`rh` / `wingstop-rh`. Le déroulé ci-dessous vaut aussi pour la fixture `config/`
-(`rh` / `fixture`).
+`python demo.py` remet `data_demo/` à zéro, amorce quatre dossiers à des étapes
+différentes (demande reçue, demande validée en contrat déposé, contrat prêt,
+remis au cabinet) sur la config de démo fictive versionnée (`config.demo/`,
+« Basilic Café ») et sert sur `:5000` — identifiants `rh` / `demo-rh`.
+`python demo.py --vide` démarre sur un suivi vide pour tout jouer à la main. Mail
+hebdo de la démo : `CONFIG_DIR=config.demo DONNEES=data_demo python recap.py`.
+Le déroulé ci-dessous vaut aussi pour la fixture `config/` (`rh` / `fixture`).
 
 1. `http://localhost:5000` — le formulaire, **rendu depuis `config/formulaire.json`**.
    Remplir, joindre 3 fichiers PDF/JPG.
@@ -333,15 +332,18 @@ Wingstop (`config_wingstop/`, hors dépôt) et sert sur `:5000` — identifiants
 3. Ouvrir la demande → **Rejeter** avec un motif → mail de KO avec **lien signé de
    correction** dans la console : l'ouvrir, corriger. L'ancien lien est mort.
 4. **Accepter** → dossier salarié (même ULID, changement de zone) ; la **fiche
-   salarié** est générée dans `contrat/` et le **rappel DPAE** part aussitôt à
-   `mails.dpae` (repli `rh`) avec nom, poste, date de début, employeur et SIRET.
-   Selon l'établissement : **Générer** ou **Déposer** le contrat.
-5. **Déposer le contrat signé** → `ContratSigne`. La signature électronique
-   (Yousign) est optionnelle ; par défaut c'est un dépôt manuel du PDF signé.
+   salarié** (si `fiche_salarie` est déclarée) est générée dans
+   `FICHE PERSONNELLE/` et le **rappel DPAE** part aussitôt à `mails.dpae`
+   (repli `rh`) avec nom, poste, date de début, employeur et SIRET. Établissement
+   en contrat « genere » : le contrat est produit dans la foulée (bouton
+   **Générer** seulement si la config réclame une saisie RH, ou pour reprendre
+   après un échec). Établissement en contrat « depose » : **Déposer le contrat**.
+5. **Déposer le contrat signé** → `ContratSigne` (dépôt manuel du PDF signé).
 6. **DPAE** : dépôt de l'accusé (refusé sans pièce, refusé avant
    signature). **Remettre au comptable** → le dossier est **dupliqué** dans
-   `data/compta/<Société>/<Prénom NOM - id>/` (pièces + contrat + contrat signé +
-   fiche + accusé), miroitable sur un Drive. Aucun mail à ce moment : le cabinet
+   `data/COMPTA/<GROUPE>/<ETABLISSEMENT>/<POSTE>/<NOM PRENOM - id>/`
+   (`FICHE PERSONNELLE/` + `CONTRAT/`, segments en capitales sans accents,
+   fichiers renommés lisiblement), miroitable sur un Drive. Aucun mail à ce moment : le cabinet
    **de la société concernée** reçoit le lien signé dans le mail hebdomadaire
    (`recap.py`) ; la page sans login offre « Tout télécharger (.zip) ».
    **Refaire la copie et le lien** → l'ancien lien renvoie 410, le dossier repart

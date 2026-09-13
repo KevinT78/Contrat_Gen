@@ -1,0 +1,71 @@
+{
+  "version": 1,
+  "titre": "Formulaire d'embauche",
+  "intro": "À remplir par le manager du restaurant. Les pièces du candidat sont jointes ici ; le service RH prend la suite.",
+
+  "roles": {"nom": "nom_prenom", "email": "email", "date_debut": "date_debut"},
+
+  "champs": [
+    {"id": "etablissement", "libelle": "Établissement", "type": "etablissement", "requis": true},
+    {"id": "poste", "libelle": "Poste", "type": "choix", "requis": true,
+     "options": ["Equipier Polyvalent", "Manager"], "placeholder": "Poste"},
+
+    {"id": "civilite", "libelle": "Civilité", "type": "choix", "requis": true,
+     "options": ["Monsieur", "Madame"], "placeholder": "Civilite"},
+    {"id": "nom_prenom", "libelle": "NOM Prénom", "type": "texte", "requis": true,
+     "placeholder": "NomPrenom"},
+    {"id": "date_naissance", "libelle": "Date de naissance", "type": "date", "requis": true,
+     "placeholder": "DateNaissance"},
+    {"id": "telephone", "libelle": "Téléphone", "type": "texte", "requis": true,
+     "placeholder": "Telephone"},
+    {"id": "email", "libelle": "Email", "type": "email", "requis": true,
+     "placeholder": "Email"},
+    {"id": "adresse", "libelle": "Adresse complète", "type": "texte_long", "requis": true,
+     "placeholder": "Domicile"},
+
+    {"id": "date_embauche", "libelle": "Date d'embauche", "type": "date", "requis": true,
+     "placeholder": "DateEmbauche"},
+    {"id": "type_contrat", "libelle": "Type de contrat", "type": "choix", "requis": true,
+     "options": ["CDI", "CDD"], "defaut": "CDI", "placeholder": "TypeContrat"},
+
+    {"id": "nationalite", "libelle": "Nationalité", "type": "choix", "requis": true,
+     "options": ["Français", "Autres"]},
+    {"id": "nationalite_etrangere", "libelle": "Nationalité étrangère", "type": "texte",
+     "requis_si": ["nationalite", "Autres"], "placeholder": "NationaliteEtrangere"},
+    {"id": "type_autorisation", "libelle": "Type d'autorisation de travail", "type": "choix",
+     "options": ["Carte de résident", "Carte de séjour", "VLS-TS", "Récépissé de renouvellement"],
+     "requis_si": ["nationalite", "Autres"], "placeholder": "TypeAutorisation"},
+    {"id": "date_fin_validite", "libelle": "Date de fin de validité du titre", "type": "date",
+     "requis_si": ["nationalite", "Autres"], "placeholder": "DateFinValidite"},
+
+    {"id": "date_debut", "libelle": "Date de début de contrat", "type": "date", "requis": true,
+     "aide": "prévoir 48 h ouvrées pour les salariés étrangers", "placeholder": "DateDebut"},
+    {"id": "heure_demarrage", "libelle": "Heure de démarrage", "type": "texte", "requis": true,
+     "placeholder": "HeureDemarrage"},
+
+    {"id": "temps_partiel", "libelle": "Embauche d'un temps partiel", "type": "choix", "requis": true,
+     "options": ["OUI", "NON"], "defaut": "NON"},
+    {"id": "temps_travail", "libelle": "Temps de travail", "type": "choix", "requis": true,
+     "options": ["10H", "12H", "15H", "18H", "20H", "24H", "25H", "30H", "35H"],
+     "placeholder": "TempsTravail"},
+
+    {"id": "lundi", "libelle": "Lundi", "type": "texte", "placeholder": "DispoLundi"},
+    {"id": "mardi", "libelle": "Mardi", "type": "texte", "placeholder": "DispoMardi"},
+    {"id": "mercredi", "libelle": "Mercredi", "type": "texte", "placeholder": "DispoMercredi"},
+    {"id": "jeudi", "libelle": "Jeudi", "type": "texte", "placeholder": "DispoJeudi"},
+    {"id": "vendredi", "libelle": "Vendredi", "type": "texte", "placeholder": "DispoVendredi"},
+    {"id": "samedi", "libelle": "Samedi", "type": "texte", "placeholder": "DispoSamedi"},
+    {"id": "dimanche", "libelle": "Dimanche", "type": "texte", "placeholder": "DispoDimanche"},
+
+    {"id": "num_secu", "libelle": "Numéro de sécurité sociale", "type": "texte", "requis": true,
+     "placeholder": "NumSS"},
+
+    {"id": "carte_vitale", "libelle": "Attestation de carte vitale", "type": "piece_jointe",
+     "role": "carte-vitale", "requis": true},
+    {"id": "rib", "libelle": "RIB", "type": "piece_jointe", "role": "rib", "requis": true},
+    {"id": "cni", "libelle": "Carte Nationale d'Identité (recto-verso)", "type": "piece_jointe",
+     "role": "identite", "requis": true, "max_fichiers": 2},
+    {"id": "justif_domicile", "libelle": "Justificatif de domicile", "type": "piece_jointe",
+     "role": "justif-domicile", "requis": true}
+  ]
+}
