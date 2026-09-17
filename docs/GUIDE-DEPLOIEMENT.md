@@ -19,7 +19,7 @@ exemples de commandes visent **Debian 12 ou Ubuntu 24.04** avec systemd et Caddy
 
 | | Où | Contenu | Qui écrit |
 |---|---|---|---|
-| **Code** | `/opt/contrat-gen` (clone git) | `app.py`, `templates/`, `config.exemple/`, `config.demo/` | `git pull` uniquement |
+| **Code** | `/opt/contrat-gen` (clone git) | `app.py`, `templates/`, `modeles/`, `config.exemple/`, `config.demo/` | `git pull` uniquement |
 | **Instance** | `/srv/contratgen/<client>/` | `config/` (secrets, comptes, sociétés, modèles) + `data/` (dossiers, pièces) | l'app, `installer.py`, `configurer.py` |
 
 - Le même code peut servir plusieurs instances. Chacune a son process, son port et son
@@ -57,6 +57,9 @@ config. `python app.py` démarre donc **waitress** : un seul process, 4 threads.
 - règles `derives` ;
 - rôles du formulaire ;
 - jetons `{{...}}` des modèles qu'aucune source n'alimente ;
+- règles `templates` (forme liste) dont un `quand` ne peut jamais correspondre
+  (champ inconnu, option mal orthographiée, établissement écrit sans sa
+  société) ;
 - postes sans modèle ;
 - grille.
 
@@ -353,7 +356,7 @@ Tout ce qui varie d'un client à l'autre est dans des fichiers : aucun écran d'
 
 | Fichier | À renseigner |
 |---|---|
-| `instance.json` | `client`, `url` (**obligatoire**, ex. `https://embauche.acme.fr`), bloc `mails` (§3.1), `templates` (poste → modèle), et selon les besoins `derives`, `saisie_rh`, `critiques`, `fiche_salarie`, `conservation` (§2.6), `motifs_ko` |
+| `instance.json` | `client`, `url` (**obligatoire**, ex. `https://embauche.acme.fr`), bloc `mails` (§3.1), `templates` (poste → modèle, ou règles `{"quand": {...}, "modele": ...}` ; `"modele": null` marque un croisement volontairement sans contrat — `doctor` l'affiche en « exclu », pas en échec), et selon les besoins `derives`, `saisie_rh`, `critiques`, `fiche_salarie` (nom du modèle `.docx` du client dans `contrats/` — **facultatif** : sans lui, la fiche salarié est quand même produite, avec le modèle générique versé avec le code), `conservation` (§2.6), `motifs_ko` |
 | `societes.json` | Liste des sociétés : `nom`, `siren`, `comptable_email`, `mentions` (jetons légaux du contrat), `etablissements[]` avec `nom`, `siret`, **`manager_email`**, `mentions`, `groupe` (optionnel) et `"contrat": "genere"` (défaut, contrat produit par l'app) ou `"depose"` (contrat fait ailleurs, la RH dépose le PDF) |
 | `formulaire.json` | `titre`, `intro`, `roles` (quel champ joue `etablissement`, `poste`, `nom`, `email`, etc.) et `champs[]` avec `id`, `libelle`, `type` (`texte`, `texte_long`, `email`, `date`, `nombre`, `montant`, `choix`, `etablissement`, `tel`, `piece_jointe`), `requis`, `requis_si`, `options`, `placeholder`, et pour les pièces `role` et `max_fichiers` |
 | `grille.json` | Optionnel. `postes[]` (`mensuel`, ou `bareme` par durée hebdo) et `champ_heures`. Alimente `{{SalaireChiffres}}` et `{{SalaireLettres}}` |
@@ -368,7 +371,7 @@ cg acme placeholders.py            # génère config/PLACEHOLDERS.md : la liste 
 #   → envoyer PLACEHOLDERS.md au client, qui balise ses .docx et les renvoie
 #   → déposer les .docx dans /srv/contratgen/acme/config/contrats/ et les déclarer dans "templates"
 cg acme configurer.py              # bilan : verifier() → PLACEHOLDERS.md → doctor
-cg acme doctor.py                  # génère réellement un contrat par cas (poste × temps partiel × établissement…)
+cg acme doctor.py                  # génère réellement un contrat par cas (poste × temps partiel × durée hebdo × établissement…)
 ```
 
 - `doctor.py` écrit les contrats d'essai dans le dossier temporaire du système

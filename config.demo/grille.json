@@ -3,7 +3,8 @@
     "Grille de rémunération brute mensuelle pour la démo.",
     "Manager : forfait mensuel direct.",
     "Equipier : barème par durée hebdomadaire du contrat (champ « temps_travail »),",
-    "chiffres ET lettres figés ici et servis tels quels au contrat.",
+    "« chiffres » figé ici et servi tel quel au contrat -- les lettres sont",
+    "dérivées de ce montant par le moteur, pas saisies à part.",
     "35H = SMIC mensuel officiel (1 867,02 € au 01/06/2026, horaire 12,31 €) ;",
     "durées partielles = heures x 52/12 x taux, arrondi au centime."
   ],
@@ -14,15 +15,15 @@
       "poste": "Equipier",
       "horaire": 12.31,
       "bareme": {
-        "10": { "chiffres": "533,43", "lettres": "cinq cent trente-trois euros et quarante-trois centimes" },
-        "12": { "chiffres": "640,12", "lettres": "six cent quarante euros et douze centimes" },
-        "15": { "chiffres": "800,15", "lettres": "huit cents euros et quinze centimes" },
-        "18": { "chiffres": "960,18", "lettres": "neuf cent soixante euros et dix-huit centimes" },
-        "20": { "chiffres": "1 066,87", "lettres": "mille soixante-six euros et quatre-vingt-sept centimes" },
-        "24": { "chiffres": "1 280,24", "lettres": "mille deux cent quatre-vingts euros et vingt-quatre centimes" },
-        "25": { "chiffres": "1 333,58", "lettres": "mille trois cent trente-trois euros et cinquante-huit centimes" },
-        "30": { "chiffres": "1 600,30", "lettres": "mille six cents euros et trente centimes" },
-        "35": { "chiffres": "1 867,02", "lettres": "mille huit cent soixante-sept euros et deux centimes" }
+        "10": { "chiffres": "533,43" },
+        "12": { "chiffres": "640,12" },
+        "15": { "chiffres": "800,15" },
+        "18": { "chiffres": "960,18" },
+        "20": { "chiffres": "1 066,87" },
+        "24": { "chiffres": "1 280,24" },
+        "25": { "chiffres": "1 333,58" },
+        "30": { "chiffres": "1 600,30" },
+        "35": { "chiffres": "1 867,02" }
       }
     }
   ]

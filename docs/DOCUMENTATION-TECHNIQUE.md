@@ -235,7 +235,7 @@ Sur la même machine, le PID est sondé (vivant ou mort). Depuis une autre machi
 | `grille.json` | Grille de rémunération (optionnel) |
 | `contrats/` | Modèles de contrat `.docx` ou `.html` |
 | `mails/` | Modèles de mails `.txt` |
-| `contrats/fiche_salarie.docx` | Modèle de la fiche salarié (optionnel ; le fichier vit dans `contrats/`, la clé `fiche_salarie` d'`instance.json` le nomme) |
+| `contrats/fiche_salarie.docx` | Modèle de la fiche salarié du CLIENT (optionnel ; le fichier vit dans `contrats/`, la clé `fiche_salarie` d'`instance.json` le nomme). Sans elle, le modèle générique versé avec le code (`modeles/fiche_salarie.docx`) sert à toutes les instances — la fiche est **toujours** produite à la validation, avec l'un ou l'autre modèle |
 | `PLACEHOLDERS.md` | Fiche des jetons valides, générée par `placeholders.py`, à remettre au client |
 
 ### `instance.json`
@@ -279,11 +279,13 @@ Sur la même machine, le PID est sondé (vivant ou mort). Depuis une autre machi
 
 Notes :
 
-- `templates` accepte aussi la forme simple `{"Manager": "Manager.docx"}`. En forme liste, la **première** règle dont tous les `quand` correspondent aux champs du dossier l'emporte : mettre les cas particuliers avant le cas général.
+- `templates` accepte aussi la forme simple `{"Manager": "Manager.docx"}`. En forme liste, la **première** règle dont tous les `quand` correspondent aux champs du dossier l'emporte : mettre les cas particuliers avant le cas général. Une règle `{"quand": {...}, "modele": null}` marque une **exclusion volontaire** (croisement identifié, mais sans contrat à produire) plutôt que d'omettre la règle ; `doctor` l'affiche « exclu (volontaire) », distinct d'un cas oublié (`✗`). Les deux formes lisent `null` pareil : en forme simple, `{"Manager": null}` exclut le poste de la même façon.
+- Le garde-fou de démarrage (`_verifier_regles`) refuse une règle `templates` en liste dont une clé de `quand` n'est pas un champ du formulaire, dont la valeur ne correspond à aucune option du champ visé, ou — pour le champ `etablissement` — qui écrit le nom d'un site seul au lieu de la clé complète « Société / Établissement » (il propose alors la bonne clé). Une règle ou un `quand` qui n'est pas un objet est refusé sans faire planter le garde-fou lui-même.
 - `stockage.mode` vaut `local` (répertoire `data/` de l'instance) ou `dossier` avec une clé `chemin` (répertoire synchronisé).
 - `conservation` absent = aucune purge. `jours` et `jours_candidature` sont des entiers strictement positifs ; `apres` liste des états de `store.ETATS`.
 - `critiques` : jetons qui doivent avoir une valeur non vide à la génération, en plus des champs requis du formulaire.
 - `saisie_rh` : jetons qu'aucun champ ne fournit ; la RH les saisit sur l'écran « À traiter » avant de générer.
+- `fiche_salarie` : facultatif. Absent, le modèle générique `modeles/fiche_salarie.docx` (versé avec le code, hors `config/`) sert par défaut : état civil, titre de séjour, coordonnées, poste et contrat, disponibilités, pièces. À la génération, une ligne **de tableau** dont aucun mot-clé n'a de valeur (absent de la config, ou réponse vide) est retirée, et une section vide disparaît avec son titre ; `doctor` liste les lignes que la config n'alimente pas. L'élagage ne concerne que les tableaux : un mot-clé placé dans la prose, un titre ou un en-tête reste obligatoire et fait refuser la fiche s'il n'est pas alimenté. Deux lignes acceptent deux noms de mot-clé : `{{NumSS}}`/`{{NumeroSecu}}` et `{{Domicile}}`/`{{Adresse}}`. Ses **mots-clés** ne sont donc pas vérifiés au démarrage — l'élagage les rend facultatifs — mais sa **présence** l'est : `modeles/fiche_salarie.docx` manquant refuse le démarrage, sinon la fiche échouerait à chaque validation. Un modèle déclaré par le client est vérifié mot-clé par mot-clé, comme un contrat.
 
 ### `formulaire.json`
 
@@ -358,16 +360,15 @@ Un objet : `champ_heures` à la racine (l'id du champ du formulaire qui porte la
   "postes": [
     {"poste": "Manager", "mensuel": 2800},
     {"poste": "Equipier",
-     "bareme": {"24": {"chiffres": "1 480,08",
-                       "lettres": "mille quatre cent quatre-vingts euros et huit centimes"},
-                "35": {"chiffres": "1 801,80", "lettres": "…"}}}
+     "bareme": {"24": {"chiffres": "1 480,08"},
+                "35": {"chiffres": "1 801,80"}}}
   ]
 }
 ```
 
-Le poste du dossier est rapproché d'une ligne par mots normalisés, la plus spécifique gagnant : « Equipier Polyvalent » prend la ligne « Equipier », « Assistant Manager » ne prend pas celle de « Manager ». `mensuel` l'emporte sur `bareme` s'ils cohabitent ; les montants du barème sont servis tels quels, sans recalcul, pour qu'aucun arrondi ne diverge du contrat papier.
+Le poste du dossier est rapproché d'une ligne par mots normalisés, la plus spécifique gagnant : « Equipier Polyvalent » prend la ligne « Equipier », « Assistant Manager » ne prend pas celle de « Manager ». `mensuel` l'emporte sur `bareme` s'ils cohabitent ; le montant du barème (`chiffres`) est servi tel quel, sans recalcul, pour qu'aucun arrondi ne diverge du contrat papier. `{{SalaireLettres}}` n'est **pas** une seconde clé à saisir : le moteur la dérive de `chiffres` (`contrat.lettres_fr`), une seule source pour les deux jetons. Une clé `lettres` encore présente dans un `grille.json` ancien est tolérée et ignorée.
 
-Le garde-fou refuse un barème qui ne couvre pas toutes les options du champ d'heures, et refuse deux postes du formulaire qui retomberaient sur la même ligne (le second sortirait au tarif du premier, sans rien signaler).
+Le garde-fou refuse un barème qui ne couvre pas toutes les options du champ d'heures, et refuse deux postes du formulaire qui retomberaient sur la même ligne (le second sortirait au tarif du premier, sans rien signaler). Il refuse aussi un `chiffres` qui n'est pas un nombre (prose, case vide d'espaces, `1.2.3`) : la lecture tombait alors à zéro sans erreur et le contrat sortait signé avec « zéro » en toutes lettres à côté du bon montant en chiffres. Les écritures acceptées sont `1 480,08`, `1.480,08` et `1480.08`.
 
 ---
 
@@ -383,11 +384,11 @@ Le garde-fou refuse un barème qui ne couvre pas toutes les options du champ d'h
 |--------|----------|
 | Champs du formulaire (`placeholder` du champ) | `{{NomPrenom}}`, `{{DateDebut}}`, `{{TempsTravail}}` |
 | Mentions de la société et de l'établissement | `{{RaisonSociale}}`, `{{Siret}}`, `{{AdresseEtablissement}}` |
-| Grille de salaire | `{{SalaireChiffres}}`, `{{SalaireLettres}}` |
+| Grille de salaire | `{{SalaireChiffres}}`, `{{SalaireLettres}}` (dérivé de `SalaireChiffres`, jamais saisi à part) |
 | Saisie RH (`saisie_rh`) | `{{NumeroCarteBTP}}` |
 | Règles dérivées (`derives`) | `{{Nationalite}}`, `{{DureeMensuelle}}`, `{{BlocAutorisationTravail}}` |
 | Calculées par le moteur | `{{Aujourdhui}}`, dates en toutes lettres |
-| Pièces | `{{PiecesFournies}}`, `{{PiecesManquantes}}` (fiche salarié) |
+| Pièces | `{{PiecesFournies}}`, `{{PiecesManquantes}}` |
 
 ### Règles dérivées
 
@@ -404,12 +405,12 @@ Deux formes, évaluées dans l'ordre du fichier (une règle peut utiliser un jet
  "sinon": ""}
 ```
 
-Formats disponibles : `lettres` (nombre en toutes lettres, centimes compris), `mensualise` (heures hebdomadaires × 52 / 12), `nombre` (« 24H » → « 24 »), `majuscules`, `date_longue`.
+Formats disponibles : `lettres` (nombre en toutes lettres, centimes compris ; **jamais** « euro(s) » ni « centime(s) » — c'est la prose du modèle qui écrit l'unité, ex. « {{SalaireChiffres}} euros bruts ({{SalaireLettres}}) »), `mensualise` (heures hebdomadaires × 52 / 12), `nombre` (« 24H » → « 24 »), `majuscules`, `date_longue`.
 
 ### Vérification
 
-- `config.verifier()` refuse au démarrage tout jeton d'un modèle actif sans source.
-- `python doctor.py` génère réellement un contrat pour chaque croisement (poste × temps partiel × établissement…) et signale les cas sans modèle ou avec une valeur vide.
+- `config.verifier()` refuse au démarrage tout jeton d'un modèle actif sans source (contrats **et** fiche salarié), ainsi qu'une règle `templates` mal formée ou pointant un champ/une option/une clé d'établissement inconnus (`_verifier_regles`).
+- `python doctor.py` génère réellement un contrat pour chaque croisement (poste × temps partiel × établissement × les champs dont dépendent le modèle ou le salaire) **et la fiche salarié**, et signale les cas sans modèle, exclus volontairement (`modele: null`), ou avec une valeur vide.
 - `python placeholders.py` écrit `PLACEHOLDERS.md`, la liste exacte des jetons valides pour cette instance, à remettre au client qui balise ses modèles.
 
 ---

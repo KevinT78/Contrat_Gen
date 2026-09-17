@@ -140,7 +140,7 @@ Sur un dossier à l'état **« Soumise »**, la carte « Décision » propose **
 **Ce que fait l'acceptation, en une seule fois :**
 
 1. Le dossier passe à **« À traiter »** et rejoint l'arborescence des dossiers salariés (société / établissement / poste / NOM Prénom). Les pièces reçoivent un nom lisible (« Carte vitale - NOM Prénom.pdf »).
-2. La **fiche salarié** est générée si un modèle est configuré (pièce « Fiche salarié » dans les documents produits).
+2. La **fiche salarié** est générée (pièce « Fiche salarié » dans les documents produits) : au modèle du client s'il en a un, sinon à un modèle générique fourni avec l'application.
 3. Un **mail de rappel DPAE** part au service RH (ou à l'adresse dédiée si elle est configurée), avec ce qu'il faut pour déclarer : nom, poste, date de début, employeur et SIRET.
 4. En couloir **contrat généré** sans saisie RH, le **contrat est produit immédiatement** et le dossier passe directement à **« Contrat prêt »**.
 

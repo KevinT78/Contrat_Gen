@@ -49,16 +49,17 @@ LEVAIN = "Levain du Sud"
 ETAB_M = f"{MISTRAL} / Aix Centre"
 ETAB_L = f"{LEVAIN} / Toulon Port"
 
-# Montants pris TELS QUELS dans le contrat : aucun calcul cote moteur, donc
-# aucune divergence d'arrondi avec le barème papier.
+# Montants ("chiffres") pris TELS QUELS dans le contrat : aucun calcul cote
+# moteur, donc aucune divergence d'arrondi avec le barème papier. Pas de
+# "lettres" ici : le moteur les derive desormais de "chiffres" -- une seule
+# source, plus rien a tenir synchronise a la main dans la grille.
 GRILLE = {
     "champ_heures": "temps_travail",
     "postes": [
         {"poste": "Manager", "mensuel": 2500},
         {"poste": "Vendeur", "bareme": {
-            "15": {"chiffres": "800,15", "lettres": "huit cents euros et quinze centimes"},
-            "35": {"chiffres": "1 867,02",
-                   "lettres": "mille huit cent soixante-sept euros et deux centimes"},
+            "15": {"chiffres": "800,15"},
+            "35": {"chiffres": "1 867,02"},
         }},
     ],
 }
@@ -210,15 +211,18 @@ def test_config_servable():
 
 
 def test_salaire_au_forfait_et_au_bareme():
-    """Chiffres ET lettres viennent de la grille, par poste. C'est l'assertion
-    qui tombe si un montant de grille est faux — celle qu'aucun autre test de la
-    suite ne porte."""
+    """Chiffres viennent de la grille, lettres DERIVEES des chiffres — au
+    forfait comme au barème, meme forme, jamais « euro(s) » ni « centime(s) »
+    dedans (la prose du template ecrit l'unite une seule fois)."""
     _, mgr = rendre(saisie(poste="Manager"), "mgr.html")
     assert "montant de 2 500 (deux mille cinq cents) euros bruts" in mgr, mgr[-300:]
+    assert mgr.count("euros") == 1, "« euros » en double : lettres et prose se chevauchent"
 
     _, vendeur = rendre(saisie(poste="Vendeur", temps_travail="35H"), "vendeur.html")
-    assert ("montant de 1 867,02 (mille huit cent soixante-sept euros et deux "
-            "centimes) euros bruts") in vendeur, vendeur[-300:]
+    assert ("montant de 1 867,02 (mille huit cent soixante-sept virgule zéro deux) "
+            "euros bruts") in vendeur, vendeur[-300:]
+    assert vendeur.count("euros") == 1, "« euros » en double : lettres et prose se chevauchent"
+    assert "centime" not in vendeur, "« centime » ne doit venir que de la prose, pas des lettres"
 
 
 def test_temps_partiel_bascule_le_modele_et_mensualise():
@@ -226,7 +230,7 @@ def test_temps_partiel_bascule_le_modele_et_mensualise():
     modele, txt = rendre(saisie(temps_partiel="OUI", temps_travail="15H"), "partiel.html")
     assert modele == "Vendeur_Partiel.html", modele
     assert "fixée à 65 heures par mois" in txt, "mensualisation 15H -> 65 h absente"
-    assert "montant de 800,15 (huit cents euros et quinze centimes)" in txt, txt[-300:]
+    assert "montant de 800,15 (huit cents virgule quinze) euros bruts" in txt, txt[-300:]
     assert "1 867,02" not in txt, "barème temps plein sur un contrat à temps partiel"
 
 
@@ -288,6 +292,92 @@ def test_aucun_placeholder_orphelin():
         assert "{{" not in txt, f"{libelle} : contrat troué"
 
 
+def test_lettres_fr_sans_unite_et_centimes_bien_lus():
+    """contrat.lettres_fr ne porte jamais « euro(s) »/« centime(s) » — sinon la
+    prose « ({{SalaireLettres}}) euros bruts » double l'unité. Les centimes
+    doivent se lire comme deux chiffres (« virgule cinquante », pas « virgule
+    cinq » pour ,50) : num2words(float) lit le décimal tel quel et confond les
+    deux, d'où la construction manuelle testée ici."""
+    for mot in ("euro", "centime"):
+        assert mot not in contrat.lettres_fr("1867,05")
+        assert mot not in contrat.lettres_fr("2000")
+
+    assert contrat.lettres_fr("1867,05") == "mille huit cent soixante-sept virgule zéro cinq"
+    assert contrat.lettres_fr("1867,5") == "mille huit cent soixante-sept virgule cinquante"
+    assert contrat.lettres_fr("2000") == "deux mille"
+    assert contrat.lettres_fr("1801,8") == "mille huit cent un virgule quatre-vingts"
+
+
+def test_lettres_fr_lit_le_point_separateur_de_milliers():
+    """« 1.867,02 » est une façon courante d'écrire un salaire dans grille.json.
+    Le point partait dans le float avec la virgule (« 1.867.02 ») -> ValueError
+    -> _nombre renvoyait 0 EN SILENCE, et le contrat sortait signé avec
+    « 1.867,02 € (zéro) ». Aucune exception, aucune ligne vide : le mode
+    d'échec qu'aucun garde-fou ne voyait."""
+    attendu = "mille huit cent soixante-sept virgule zéro deux"
+    for ecriture in ("1867,02", "1 867,02", "1.867,02", "1867.02"):
+        assert contrat.lettres_fr(ecriture) == attendu, ecriture
+
+    # Sans virgule, « 1.480 » est ambigu. La FORME tranche : un point suivi
+    # d'exactement trois chiffres est un séparateur de milliers. Sinon le
+    # montant sortait en « un virgule quarante-huit » (et « 1.480.500 » en
+    # « zéro ») -- la variante du même bug, que le premier correctif laissait.
+    assert contrat.lettres_fr("1.480") == "mille quatre cent quatre-vingts"
+    assert contrat.lettres_fr("1.480.500") == "un million quatre cent " \
+                                              "quatre-vingt mille cinq cents"
+    # deux chiffres ou moins après le point : c'est un décimal, pas des milliers
+    assert contrat.lettres_fr("1480.08") == "mille quatre cent quatre-vingts " \
+                                            "virgule zéro huit"
+    assert contrat.lettres_fr("1.5") == "un virgule cinquante"
+
+
+def test_lettres_fr_ne_produit_jamais_plus_de_99_centimes():
+    """Les centimes étaient arrondis sans retenue : 1867,999 -> « virgule cent ».
+    L'arrondi doit porter sur le montant entier, et remonter sur l'unité."""
+    # Valeurs franches : ,995 tomberait sur la frontiere d'arrondi binaire
+    # (round(1867.995, 2) == 1867.99), ce qui testerait le float, pas la retenue.
+    assert contrat.lettres_fr("1867,999") == "mille huit cent soixante-huit"
+    assert contrat.lettres_fr("1867,994") == "mille huit cent soixante-sept virgule " \
+                                             "quatre-vingt-dix-neuf"
+
+
+def test_elagage_ne_blanchit_pas_un_jeton_hors_tableau():
+    """L'élagage ne coupe que des LIGNES DE TABLEAU ; le blanchiment qui suit
+    (pour les synonymes des lignes GARDÉES : {{NumSS}}{{NumeroSecu}}) portait
+    sur tous les jetons restants du document — prose, titres, en-têtes compris.
+
+    Un mot-clé hors tableau que la config n'alimente pas sortait donc vide, en
+    silence, au lieu d'être refusé comme dans n'importe quel autre modèle."""
+    from docx import Document
+    doc = Document()
+    doc.add_paragraph("Fait le {{FaitLe}}")
+    doc.add_paragraph("Mention {{JetonHorsTableau}}")
+    t = doc.add_table(rows=2, cols=2)
+    t.rows[0].cells[0].text = "Numéro SS"
+    t.rows[0].cells[1].text = "{{NumSS}}{{NumeroSecu}}"   # synonymes : un seul alimenté
+    t.rows[1].cells[0].text = "Titre de séjour"
+    t.rows[1].cells[1].text = "{{TitreSejour}}"           # rien ne l'alimente -> ligne coupée
+    modele = TMP / "fiche_hors_tableau.docx"
+    doc.save(str(modele))
+
+    vals = {"FaitLe": "1er janvier 2026", "NumSS": "1 84 12 75 123 456 78"}
+    try:
+        contrat.generer(modele, vals, TMP / "sortie_hors_tableau.docx",
+                        elaguer_lignes=True)
+        assert False, "jeton hors tableau blanchi en silence"
+    except ValueError as e:
+        assert "JetonHorsTableau" in str(e), e
+
+    # le blanchiment des synonymes DANS les tableaux, lui, doit continuer
+    retires = []
+    vals["JetonHorsTableau"] = "présent"
+    sortie = contrat.generer(modele, vals, TMP / "sortie_ok.docx",
+                             elaguer_lignes=True, retires=retires)
+    texte = "\n".join(p.text for p in contrat.paragraphes(Document(str(sortie))))
+    assert "1 84 12 75 123 456 78" in texte and "{{" not in texte, texte
+    assert retires == ["Titre de séjour"], retires
+
+
 def test_valeur_critique_vide_refuse_le_contrat():
     """Poste hors grille -> salaire vide. Sans garde, le contrat sortirait avec
     « un montant de  () euros bruts » : complet, sans aucun {{}} à repérer, et
@@ -309,6 +399,10 @@ def main():
     test_deux_entites_chacune_son_modele_et_ses_mentions()
     test_nom_prenom_reordonne_pour_la_prose()
     test_aucun_placeholder_orphelin()
+    test_lettres_fr_sans_unite_et_centimes_bien_lus()
+    test_lettres_fr_lit_le_point_separateur_de_milliers()
+    test_lettres_fr_ne_produit_jamais_plus_de_99_centimes()
+    test_elagage_ne_blanchit_pas_un_jeton_hors_tableau()
     test_valeur_critique_vide_refuse_le_contrat()
     print(f"Valeurs OK — grille, mensualisation, blocs conditionnels, 2 entités\n{TMP}")
 

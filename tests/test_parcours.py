@@ -243,16 +243,98 @@ def couloir_restaurant(c):
     return uid
 
 
-def fiche_absente_si_non_declaree(c):
-    """Sans "fiche_salarie" dans instance.json, aucune fiche n'est produite."""
+def fiche_generique_sans_cle(c):
+    """Sans "fiche_salarie" dans instance.json, la fiche générique (modèle
+    versé au dépôt, hors config/) est quand même produite."""
     garde = config.instance().pop("fiche_salarie", None)
     try:
         uid = soumettre(c, base_saisie("ACME Restauration / Paris Opéra"))
         c.post(f"/dossier/{uid}/valider")
-        assert not store.fichiers_role(store.lire(uid), "pieces", "fiche-salarie")
+        item = store.lire(uid)
+        noms = store.fichiers_role(item, "pieces", "fiche-salarie")
+        assert noms, "fiche générique non produite"
+        from docx import Document
+        import contrat as moteur
+        doc = Document(str(store.chemin(uid, "pieces", noms[0])))
+        texte = "\n".join(p.text for p in moteur.paragraphes(doc))
+        assert "{{" not in texte, "fiche générique trouée"
+        # NumeroSecu / Adresse : synonymes de NumSS / Domicile dans le modele
+        for attendu in ("Camille MARTIN", "Paris Opéra", "884 512 336 00019",
+                        "2 98 04 59 350 042 21", "14 rue Nationale"):
+            assert attendu in texte, f"« {attendu} » absent de la fiche générique"
+        # sections sans aucune donnee dans cette config : retirees, titre compris
+        for absent in ("Titre de séjour", "Disponibilités", "Heure de démarrage"):
+            assert absent not in texte, f"« {absent} » aurait dû être retiré"
+        assert "État civil" in texte and "Pièces" in texte, texte
     finally:
         if garde:
             config.instance()["fiche_salarie"] = garde
+
+
+def contrat_peut_citer_les_pieces_jointes(c):
+    """`{{PiecesFournies}}` / `{{PiecesManquantes}}` sont annoncés au client par
+    PLACEHOLDERS.md, donc il les met dans son contrat.
+
+    Trois garde-fous disaient OK et le contrat sortait quand même refusé devant
+    la RH : le démarrage (la source est déclarée), `doctor` (qui INJECTE les
+    deux valeurs lui-même), et la fiche salarié (qui les fournit). Seul
+    `_produire_contrat` ne les passait pas -- le chemin du vrai contrat."""
+    modele = config.CLIENT / "contrats" / "_pieces_jointes.html"
+    modele.write_text("<p>{{Prenom}} {{NomNaissance}} — {{Poste}}</p>"
+                      "<p>Pièces fournies : {{PiecesFournies}}</p>"
+                      "<p>Pièces manquantes : {{PiecesManquantes}}</p>",
+                      encoding="utf-8")
+    garde = config.instance()["templates"]
+    try:
+        config.instance()["templates"] = {**garde, "Manager": "_pieces_jointes.html"}
+        uid = soumettre(c, base_saisie("ACME Restauration / Paris Opéra"))
+        r = c.post(f"/dossier/{uid}/valider", follow_redirects=True)
+        item = store.lire(uid)
+        assert store.etat(item) == "ContratPret", \
+            "contrat non généré — " + " | ".join(
+                re.findall(r"[Cc]ontrat[^<]*génér[^<]*", r.text) or ["(aucun message)"])
+        noms = store.fichiers_role(item, "contrat", "contrat")
+        assert noms, "aucun contrat déposé dans le dossier"
+        from docx import Document
+        import contrat as moteur
+        texte = "\n".join(p.text for p in moteur.paragraphes(
+            Document(str(store.chemin(uid, "contrat", noms[0])))))
+        assert "{{" not in texte, f"contrat troué : {texte}"
+        assert "Pièces fournies :" in texte, texte
+    finally:
+        config.instance()["templates"] = garde
+        modele.unlink(missing_ok=True)
+
+
+def valider_survit_a_un_etablissement_retire(c):
+    """Un établissement fermé, retiré de societes.json, alors qu'un vieux
+    dossier attend encore : la validation ne doit pas rendre un 500.
+
+    config.mentions() lève KeyError sur une clé inconnue. L'appel était HORS du
+    try de _fiche_salarie, et la fiche est désormais produite pour tous les
+    clients : le 500 tombait APRÈS l'écriture de la transition -- dossier
+    marqué validé, mais ni fiche, ni contrat, ni DPAE, et rien dans le journal
+    pour dire pourquoi."""
+    uid = soumettre(c, base_saisie("ACME Restauration / Paris Opéra"))
+    garde = config.societes()
+    try:
+        # l'établissement disparaît entre la soumission et la validation
+        config._CACHE["societes.json"] = [
+            {**s, "etablissements": [e for e in s["etablissements"]
+                                     if e["nom"] != "Paris Opéra"]}
+            for s in garde]
+        assert not any(cle.endswith("Paris Opéra") for cle, _ in config.etablissements()), \
+            "l'établissement n'a pas été retiré : le test ne prouverait rien"
+        r = c.post(f"/dossier/{uid}/valider")
+        assert r.status_code != 500, "500 sur /valider (établissement retiré)"
+    finally:
+        config._CACHE["societes.json"] = garde
+
+    item = store.lire(uid)
+    assert store.etat(item) != "Soumis", "la validation n'a pas eu lieu"
+    echecs = [e for e in item["journal"] if e.get("type") == "fiche_echouee"]
+    assert echecs, "échec de fiche non tracé dans le journal"
+    assert "societes.json" in echecs[-1]["motif"], echecs[-1]
 
 
 def rejet_part_au_manager_de_l_etablissement(c):
@@ -301,7 +383,9 @@ def main():
 
     dk = couloir_dark_kitchen(c)
     resto = couloir_restaurant(c)
-    fiche_absente_si_non_declaree(c)
+    fiche_generique_sans_cle(c)
+    contrat_peut_citer_les_pieces_jointes(c)
+    valider_survit_a_un_etablissement_retire(c)
     rejet_part_au_manager_de_l_etablissement(c)
     recap_liste_la_semaine([dk, resto])
 

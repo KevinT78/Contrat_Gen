@@ -117,6 +117,50 @@ def test_jeton_mal_ecrit_refuse_au_demarrage():
     assert "aucune source" in " ".join(config.verifier()["contrat.txt"])
 
 
+def test_exclusion_volontaire_en_forme_dict():
+    """`{"Manager": null}` dit la même chose que la règle liste `modele: null` :
+    un cas identifié, sans contrat à produire chez ce client.
+
+    Le null était pris pour un nom de fichier : `config/contrats/None` levait
+    un TypeError AU DÉMARRAGE (_verifier_placeholders), et la fiche des jetons
+    mourait dans sorted() -- un client qui exclut un poste en forme dict ne
+    pouvait plus lancer l'application du tout."""
+    ecrire(instance={**INSTANCE, "templates": {"Manager": None}})
+
+    assert config.verifier() == {}, config.verifier()
+    assert None not in config._templates_actifs()
+
+    # Les deux None de modele_pour restent distinguables (ce que lit doctor) :
+    # règle trouvée mais sans modèle  vs  aucune règle ne vise ce cas.
+    regle = config.regle_pour({"poste": "Manager"})
+    assert regle is not None and regle["modele"] is None, regle
+    assert config.regle_pour({"poste": "Stagiaire"}) is None
+
+    assert "None" not in placeholders.fiche(), placeholders.fiche()
+
+
+def test_modele_generique_de_fiche_absent_refuse_au_demarrage():
+    """La fiche salarié est TOUJOURS produite : sans clé `fiche_salarie`, au
+    modèle générique versé avec le code (`modeles/fiche_salarie.docx`).
+
+    Un déploiement où `modeles/` n'a pas été copié démarrait donc VERT, puis
+    échouait à chaque validation (« Fiche salarié non générée : modèle
+    absent ») -- devant la RH, dossier par dossier. Le garde-fou de démarrage
+    existe pour dire ça à l'installation."""
+    ecrire()                                   # aucune clé `fiche_salarie`
+    assert config.verifier() == {}, config.verifier()      # modeles/ est dans le dépôt
+
+    vrai = config.MODELE_FICHE_GENERIQUE
+    config.MODELE_FICHE_GENERIQUE = BASE / "modeles" / "jamais-copie.docx"
+    try:
+        manques = config.verifier()
+    finally:
+        config.MODELE_FICHE_GENERIQUE = vrai
+    sujet = next((s for s in manques if "fiche" in s.casefold()), None)
+    assert sujet, manques
+    assert "absent" in " ".join(manques[sujet]).casefold(), manques
+
+
 def test_fiche_des_jetons_derivee_de_la_config():
     ecrire()
     texte = placeholders.fiche()
@@ -154,6 +198,60 @@ def test_derive_mal_ecrite_refusee_au_demarrage():
     assert config.verifier() == {}, config.verifier()
     ecrire({**INSTANCE, "derives": [{"placeholder": "Nom", "alors": "toujours"}]})
     assert config.verifier() == {}, config.verifier()
+
+
+def test_regle_template_incoherente_refusee_au_demarrage():
+    """Une regle `templates` (forme liste) dont une valeur de « quand » ne peut
+    JAMAIS correspondre a un dossier reel passait sans message : le mauvais
+    modele partait en silence sur la regle fourre-tout suivante. Cas reel : la
+    cle d'un etablissement est « Societe / Etablissement » (voir
+    config.etablissements()), pas le nom du site seul."""
+    # -- valeurs : a travers le bilan complet (les regles sont bien formees). --
+    def refus(quand, attendu):
+        ecrire(instance={**INSTANCE, "templates": [
+            {"quand": quand, "modele": None}, {"modele": "contrat.txt"}]})
+        manques = config.verifier()
+        sujet = next((s for s in manques if s.startswith("templates")), None)
+        assert sujet, (quand, manques)
+        assert attendu in " ".join(manques[sujet]), (attendu, manques)
+
+    # nom du site seul au lieu de la cle complete "Societe / Etablissement"
+    refus({"etablissement": "Siège"}, "écrire exactement « ACME / Siège »")
+    # etablissement qui n'existe nulle part
+    refus({"etablissement": "Roissy"}, "n'est pas une clé d'établissement")
+    # option mal orthographiee sur un champ a choix
+    refus({"poste": "Manageur"}, "Manager")
+    # champ inconnu
+    refus({"champ_absurde": "x"}, "n'est pas un champ du formulaire")
+
+    # cas valide : la cle complete est acceptee (poste inclus pour ne pas
+    # declencher, en plus, le garde-fou separe « aucun poste ne vise Manager »)
+    ecrire(instance={**INSTANCE, "templates": [
+        {"quand": {"etablissement": "ACME / Siège", "poste": "Manager"},
+         "modele": "contrat.txt"}]})
+    assert config.verifier() == {}, config.verifier()
+
+    # modele null (exclusion volontaire) : la regle reste verifiee, pas refusee
+    ecrire(instance={**INSTANCE, "templates": [
+        {"quand": {"etablissement": "ACME / Siège", "poste": "Manager"},
+         "modele": None},
+        {"modele": "contrat.txt"}]})
+    assert config.verifier() == {}, config.verifier()
+
+    # forme dict (client simple) : pas de « quand », rien a verifier ici
+    ecrire()
+    assert config.verifier() == {}, config.verifier()
+
+    # -- forme : a travers le bilan complet aussi. Les verificateurs voisins
+    # (_templates_actifs, _verifier_postes) plantaient sur ces formes au lieu de
+    # laisser _verifier_regles les refuser. --
+    for templates, attendu in (
+            ([{"quand": "poste=Manager", "modele": None}], "« quand » attend un objet"),
+            (["pas-un-objet"], "attend un objet")):
+        ecrire(instance={**INSTANCE, "templates": templates})
+        manques = config.verifier()
+        sujet = next((s for s in manques if s.startswith("templates")), None)
+        assert sujet and attendu in " ".join(manques[sujet]), (templates, manques)
 
 
 def test_poste_sans_sa_ligne_de_grille_refuse_au_demarrage():
@@ -241,13 +339,26 @@ def test_duree_hors_bareme_refusee_au_demarrage():
         {"poste": "Equipier", "bareme": {"24": ligne, "20": ligne}}]))
     assert config.verifier() == {}, config.verifier()
 
+    # Un montant que contrat._nombre ne sait pas lire tombait a 0 EN SILENCE :
+    # le contrat sortait signe avec « (zéro) » en toutes lettres. La FORME
+    # (« chiffres » non vide) ne suffit pas, il faut que ca fasse un nombre.
+    for illisible in ("", "  ", "a partir de 1500", "-", "1.2.3"):
+        mauvais = {**ligne, "chiffres": illisible}
+        ecrire(formulaire=form(), grille=grille(postes=[
+            {"poste": "Equipier", "bareme": {"24": mauvais, "20": ligne}}]))
+        sujet = next((s for s in config.verifier() if "grille" in s), None)
+        assert sujet, f"« {illisible} » passe le garde-fou du barème"
+
     # Les formes a REFUSER, sans planter le garde-fou.
     for mauvaise in (grille(champ_heures=None), grille(champ_heures="inexistant"),
                      {"postes": [{"poste": "Equipier", "bareme": {"24": ligne}}]},
                      grille(postes=[{"poste": "Equipier", "bareme": ["24"]}]),
                      grille(postes=[{"poste": "Equipier", "bareme": {"24": ligne, "20": "x"}}]),
+                     # "chiffres" reste la seule cle exigee ("lettres" est
+                     # desormais derivee, pas saisie) -- une ligne qui n'en a
+                     # pas doit toujours etre refusee.
                      grille(postes=[{"poste": "Equipier",
-                                     "bareme": {"24": ligne, "20": {"chiffres": "1"}}}])):
+                                     "bareme": {"24": ligne, "20": {"lettres": "dix"}}}])):
         ecrire(formulaire=form(), grille=mauvaise)
         assert any("grille" in s for s in config.verifier()), mauvaise
 

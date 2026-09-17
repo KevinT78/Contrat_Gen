@@ -31,20 +31,27 @@ if not sys.stdin.isatty():          # réponses par pipe : UTF-8, pas cp1252
     sys.stdin.reconfigure(encoding="utf-8")
 
 # Où ouvrir pour corriger un sujet de verifier() ; à défaut, c'est un modèle.
-FICHIERS = {"secret": "instance.json", "compte RH": "instance.json",
-            "comptes": "instance.json", "mails": "instance.json",
-            "config_version": "instance.json", "derives →": "instance.json",
-            "poste «": "instance.json", "url": "instance.json",
-            "stockage": "instance.json", "conservation": "instance.json",
-            "établissements": "societes.json",
-            "roles": "formulaire.json", "grille": "grille.json"}
+# Chemins depuis la racine de l'INSTANCE, prefixe compris : presque tout vit
+# sous config/, mais pas le modele generique de fiche salarie, verse avec le
+# code. Mettre « config/ » dans le format d'affichage le lui collait aussi.
+FICHIERS = {"secret": "config/instance.json", "compte RH": "config/instance.json",
+            "comptes": "config/instance.json", "mails": "config/instance.json",
+            "config_version": "config/instance.json", "derives →": "config/instance.json",
+            "templates →": "config/instance.json",
+            "poste «": "config/instance.json", "url": "config/instance.json",
+            "stockage": "config/instance.json", "conservation": "config/instance.json",
+            "établissements": "config/societes.json",
+            "roles": "config/formulaire.json", "grille": "config/grille.json",
+            "fiche salarié": "modeles/fiche_salarie.docx"}
 REPARABLES = ("secret", "stockage", "conservation", "url", "mails", "comptes",
               "compte RH", "établissements")
 
 
 def fichier(sujet):
+    """Chemin à ouvrir pour corriger ce sujet, depuis la racine de l'instance.
+    Sujet inconnu = un modèle que le client doit déposer."""
     return next((f for p, f in FICHIERS.items() if sujet.startswith(p)),
-                f"contrats/{sujet}")
+                f"config/contrats/{sujet}")
 
 
 def _ecrire(nom, fn):
@@ -77,7 +84,7 @@ def _mot_de_passe(question):
 
 def afficher(manques):
     for sujet, raisons in manques.items():
-        print(f"! {sujet}  [config/{fichier(sujet)}]")
+        print(f"! {sujet}  [{fichier(sujet)}]")
         for r in raisons:
             print(f"    {r}")
 
@@ -95,7 +102,7 @@ def bilan():
     print(f"Config valide. {len(config.placeholders_connus())} jetons -> {dest}\n")
     for a in avertissements():
         print(f"⚠ {a}")
-    lignes = doctor.examiner()
+    lignes = doctor.examiner() + [doctor.fiche()]
     print(doctor.rapport(lignes))
     code = doctor.verdict(lignes)
     print("\nOK" if code == 0 else "\nKO — un cas ne produit pas son contrat (voir doctor).")

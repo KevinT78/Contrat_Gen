@@ -28,7 +28,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from werkzeug.security import generate_password_hash          # noqa: E402
 import config                                                 # noqa: E402
+import contrat                                                # noqa: E402
 import doctor                                                 # noqa: E402
+import store                                                  # noqa: E402
 
 CONF = BASE / "config"
 (CONF / "contrats").mkdir(parents=True)
@@ -199,6 +201,228 @@ def test_rapport_quand_aucun_contrat_n_est_a_produire():
     assert doctor.verdict(lignes) == 0, "aucun contrat attendu ne peut pas être un échec"
     assert "Aucun contrat à produire (4 en contrat déposé, hors compte)." \
         in doctor.rapport(lignes), doctor.rapport(lignes)
+
+
+def test_regle_exclusion_volontaire_hors_compte():
+    """Un cas volontairement sans modèle (« Manager » n'existe qu'à temps plein
+    chez ce client, pas de contrat « Manager » à temps partiel) ne doit plus
+    sortir en ✗ irrécupérable : `modele: null` le marque « exclu (volontaire) »,
+    statut à part, hors compte comme un contrat déposé, sans faire échouer
+    doctor ni bloquer configurer.py."""
+    ecrire({"templates": [
+        {"quand": {"poste": "Manager", "temps_partiel": "OUI"}, "modele": None},
+        {"quand": {"poste": "Manager", "temps_partiel": "NON"}, "modele": "contrat.txt"},
+        {"quand": {"poste": "Leavers"}, "modele": "contrat.txt"}]})
+    lignes = doctor.examiner()
+
+    exclus = [l for l in lignes if l["statut"] == "exclu"]
+    # 1 seul étab en mode « genere » (Siège) ; l'Entrepôt (déposé) est ignoré
+    # avant même d'atteindre la règle.
+    assert len(exclus) == 1, lignes
+    assert all(l["champs"]["poste"] == "Manager" and l["champs"]["temps_partiel"] == "OUI"
+               for l in exclus), exclus
+    assert all(l["detail"] == "exclu (volontaire)" for l in exclus), exclus
+    assert doctor.verdict(lignes) == 0, "une exclusion volontaire fait échouer doctor"
+    # Le garde-fou de demarrage specifique aux postes ne doit pas re-signaler
+    # « Manager » comme poste sans regle : la fixture globale echoue par
+    # ailleurs (roles nom/email non declares, sans rapport avec ce test).
+    assert config._verifier_postes() == {}, config._verifier_postes()
+
+    texte = doctor.rapport(lignes)
+    assert "– exclu (volontaire)" in texte, texte
+    assert "exclu(s) volontairement" in texte, texte    # hors compte, comme "contrat déposé"
+
+
+def test_regle_exclusion_volontaire_distincte_d_une_regle_absente():
+    """`config.regle_pour` doit distinguer les deux None de `modele_pour` :
+    aucune règle ne matche (sans_modele) vs. une règle matche avec `modele:
+    null` (exclu). Un vrai dossier refuse dans les deux cas -- app.py ne lit
+    que modele_pour, dont le contrat (None) est inchangé."""
+    ecrire({"templates": [
+        {"quand": {"poste": "Manager", "temps_partiel": "OUI"}, "modele": None},
+        {"quand": {"poste": "Manager", "temps_partiel": "NON"}, "modele": "contrat.txt"}]})
+
+    exclu = {"poste": "Manager", "temps_partiel": "OUI"}
+    absent = {"poste": "Stagiaire", "temps_partiel": "OUI"}
+
+    regle = config.regle_pour(exclu)
+    assert regle is not None and regle["modele"] is None, regle
+    assert config.regle_pour(absent) is None
+
+    # Cote generation reelle (ce que lit app.py::_produire_contrat) : refuse
+    # pareil dans les deux cas, comme avant l'ajout de l'exclusion.
+    assert config.modele_pour(exclu) is None
+    assert config.modele_pour(absent) is None
+
+
+def test_exclusion_volontaire_en_forme_dict_aussi():
+    """Les deux formes de `templates` doivent lire `null` pareil : la forme
+    liste donnait « exclu (volontaire) », la forme dict « aucun modèle ne vise
+    ce cas » -- le relecteur voyait un trou de config là où le client avait
+    explicitement dit « ce poste n'existe pas ici »."""
+    ecrire({"templates": {"Manager": None, "Leavers": "contrat.txt"}})
+    lignes = doctor.examiner()
+
+    exclus = [l for l in lignes if l["statut"] == "exclu"]
+    assert len(exclus) == 1, lignes                  # 1 seul étab en mode « genere »
+    assert exclus[0]["champs"]["poste"] == "Manager", exclus
+    assert exclus[0]["detail"] == "exclu (volontaire)", exclus
+    assert not [l for l in lignes if l["statut"] == "sans_modele"], lignes
+    assert doctor.verdict(lignes) == 0, "une exclusion volontaire fait échouer doctor"
+
+
+def test_champ_heures_devient_un_axe():
+    """Reproduction du bug réel : une règle branche sur « temps partiel »
+    OUI/NON, mais la durée hebdo (qui décide la ligne de barème) n'était pas un
+    axe et restait figée sur sa première option -- le cas NON (temps plein)
+    sortait un contrat « 151,67 h/mois » payé au tarif temps partiel, doctor
+    vert. La durée hebdo doit varier elle aussi."""
+    partiel = {"chiffres": "533,00", "lettres": "cinq cent trente-trois euros"}
+    plein = {"chiffres": "1 867,00", "lettres": "mille huit cent soixante-sept euros"}
+    formulaire = {"champs": FORMULAIRE["champs"] + [
+        {"id": "temps_travail", "libelle": "Durée hebdo", "type": "choix",
+         "options": ["10H", "35H"]}]}
+    ecrire({"templates": [
+        {"quand": {"poste": "Manager", "temps_partiel": "OUI"}, "modele": "contrat.txt"},
+        {"quand": {"poste": "Manager", "temps_partiel": "NON"}, "modele": "contrat.txt"},
+        {"quand": {"poste": "Leavers"}, "modele": "contrat.txt"}]},
+           formulaire=formulaire,
+           grille={"champ_heures": "temps_travail",
+                   "postes": [{"poste": "Manager", "bareme": {"10": partiel, "35": plein}}]})
+
+    assert "temps_travail" in doctor.axes(), doctor.axes()
+    lignes = [l for l in doctor.examiner() if l["statut"] != "ignore"]
+    manager_non = [l for l in lignes if l["champs"]["poste"] == "Manager"
+                   and l["champs"]["temps_partiel"] == "NON"]
+    # Les deux durées sont essayées pour CHAQUE branche -- c'est la variante
+    # à 35H qui aurait été masquée avant le correctif.
+    assert {l["champs"]["temps_travail"] for l in manager_non} == {"10H", "35H"}, manager_non
+
+
+def test_champs_lus_par_derives_deviennent_des_axes():
+    """Les champs que seules des règles `derives` lisent (`si[0]`, `de`) doivent
+    varier aussi, sans doublon, et seulement s'ils désignent un vrai champ du
+    formulaire -- ni un placeholder calculé, ni l'établissement (déjà l'axe
+    extérieur)."""
+    formulaire = {"champs": FORMULAIRE["champs"] + [
+        {"id": "cdd", "libelle": "CDD ?", "type": "choix", "options": ["OUI", "NON"]}]}
+    ecrire({"templates": {"Manager": "contrat.txt"},
+            "derives": [
+                {"placeholder": "MentionCdd", "si": ["cdd", "==", "OUI"],
+                 "alors": "à durée déterminée", "sinon": "à durée indéterminée"},
+                {"placeholder": "CddMajuscule", "format": "majuscules", "de": "cdd"},
+                # placeholder calculé, pas un champ du formulaire -- ignoré
+                {"placeholder": "X", "format": "majuscules", "de": "SalaireChiffres"},
+                # l'établissement est déjà l'axe extérieur -- pas un doublon
+                {"placeholder": "Y", "format": "majuscules", "de": "etablissement"}]},
+           formulaire=formulaire)
+
+    axes = doctor.axes()
+    assert axes.count("cdd") == 1, axes                 # cité par « si » ET « de »
+    assert "SalaireChiffres" not in axes, axes
+    assert "etablissement" not in axes, axes
+
+    valeurs = {l["champs"]["cdd"] for l in doctor.examiner()
+               if l["champs"]["poste"] == "Manager"}
+    assert valeurs == {"OUI", "NON"}, valeurs
+
+
+def test_court_ne_tronque_pas_au_milieu_d_un_mot():
+    """Un libellé long ne doit plus produire de nom de fichier coupé en plein
+    mot (`…-Chamber.docx`) : la coupe tombe sur un séparateur, ou pas de coupe
+    du tout."""
+    long_libelle = ("Equipier Polyvalent Confirme / OUI / 24H / "
+                     "Francais / ACME / Paris Bastille Confluence")
+    brut = store.SAIN.sub("-", contrat.sans_accent(long_libelle)).strip("-")
+    assert len(brut) > 40, "le fixture doit forcer la troncature"
+
+    court = doctor._court(long_libelle)
+    assert len(court) <= 40, court
+    assert brut.startswith(court), (brut, court)
+    suite = brut[len(court):]
+    assert suite == "" or suite.startswith("-"), (brut, court)  # coupe = separateur
+
+
+def test_fichier_genere_a_un_nom_lisible_non_tronque_en_plein_mot():
+    """Bout en bout : un poste au nom long produit un vrai fichier dont le nom
+    n'est jamais coupé en plein mot (le poste seul dépasse déjà 40 caractères
+    une fois assaini)."""
+    poste_long = "Manager Senior Adjoint Confirme Principal"
+    formulaire = {"champs": [c if c["id"] != "poste" else
+                             {**c, "options": [poste_long]} for c in FORMULAIRE["champs"]]}
+    ecrire({"templates": {poste_long: "contrat.txt"}}, formulaire=formulaire)
+
+    ok = [l for l in doctor.examiner() if l["statut"] == "ok"]
+    assert ok, ok
+    for l in ok:
+        stem = Path(l["fichier"]).stem
+        court = stem.split("-", 1)[1]                   # retire le préfixe NN-
+        brut = store.SAIN.sub("-", contrat.sans_accent(l["libelle"])).strip("-")
+        suite = brut[len(court):]
+        assert suite == "" or suite.startswith("-"), (brut, court)
+
+
+def test_fiche_salarie_produite_et_relue():
+    """La fiche part à chaque validation : doctor la produit aussi, modèle
+    générique par défaut, et une fiche client trouée fait échouer le verdict."""
+    from docx import Document
+    ecrire({"templates": {"Manager": "contrat.txt", "Leavers": "contrat.txt"}})
+    l = doctor.fiche()
+    assert l["statut"] == "ok" and l["detail"] == "fiche_salarie.docx", l
+    texte = "\n".join(p.text for p in contrat.paragraphes(Document(l["fichier"])))
+    assert "{{" not in texte and "Siège" in texte, texte
+    # config minimale : le generique retire ce qu'elle n'alimente pas, et le dit
+    assert "Disponibilités" not in texte and "Lundi" in l["retires"], l
+    lignes = doctor.examiner() + [l]
+    assert doctor.verdict(lignes) == 0
+    rapport = doctor.rapport(lignes)
+    assert "Les 2 cas produisent un contrat" in rapport
+    assert "lignes absentes de la config : " in rapport and "Lundi" in rapport, rapport
+
+    (CONF / "contrats" / "fiche.txt").write_text("Fiche {{Inconnu}}", encoding="utf-8")
+    ecrire({"templates": {"Manager": "contrat.txt", "Leavers": "contrat.txt"},
+            "fiche_salarie": "fiche.txt"})
+    l = doctor.fiche()
+    assert l["statut"] == "refuse", l
+    assert doctor.verdict(doctor.examiner() + [l]) != 0, "fiche trouée passe en vert"
+
+
+def test_fiche_client_voit_la_saisie_rh_comme_les_contrats():
+    """`examiner()` injecte les placeholders de `saisie_rh` (ce que la RH tape à
+    la génération) ; `fiche()` les oubliait. Une fiche salarié CLIENT qui en
+    utilise un passait le garde-fou de démarrage — la source existe — puis
+    sortait « refuse » chez doctor : `configurer` annonçait KO sur une config
+    saine, et l'installateur cherchait un défaut qui n'existe pas."""
+    (CONF / "contrats" / "fiche_rh.txt").write_text(
+        "Fiche de {{Nom}} — entrée le {{DateEntree}}", encoding="utf-8")
+    ecrire({"templates": {"Manager": "contrat.txt", "Leavers": "contrat.txt"},
+            "saisie_rh": ["DateEntree"], "fiche_salarie": "fiche_rh.txt"})
+
+    assert "fiche_rh.txt" not in config.verifier(), config.verifier()
+    ligne = doctor.fiche()
+    assert ligne["statut"] == "ok", ligne
+    assert doctor.verdict(doctor.examiner() + [ligne]) == 0, ligne
+
+
+def test_regle_mal_formee_ne_plante_pas_doctor():
+    """doctor tourne même sur une config refusée au démarrage : une règle qui
+    n'est pas un objet est sautée, pas un AttributeError dans axes()."""
+    ecrire({"templates": ["pas un objet", {"quand": "pas un dict", "modele": "contrat.txt"},
+                          {"quand": {"poste": "Manager"}, "modele": "contrat.txt"}]})
+    assert "templates → règle 1" in config.verifier()
+    lignes = doctor.examiner()
+    assert any(l["statut"] == "ok" for l in lignes), lignes
+
+
+def test_modele_absent_marque_refuse_pas_de_crash():
+    """Un .docx déclaré mais absent : python-docx lève une erreur hors OSError,
+    doctor plantait au lieu de marquer le cas ⚠."""
+    ecrire({"templates": {"Manager": "absent.docx", "Leavers": "contrat.txt"},
+            "fiche_salarie": "fiche_absente.docx"})
+    lignes = doctor.examiner() + [doctor.fiche()]
+    refus = [l for l in lignes if l["statut"] == "refuse"]
+    assert len(refus) == 2 and all("absent" in l["detail"] for l in refus), lignes
+    assert doctor.verdict(lignes) != 0
 
 
 def test_ne_touche_pas_aux_donnees():

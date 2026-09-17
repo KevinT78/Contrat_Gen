@@ -93,6 +93,10 @@ CLIENTS = [
     {
         "slug": "sushi",
         "nom": "Sushi Express",
+        # Aucune cle instance()['fiche_salarie'] pour ce client : prouve que
+        # le modele generique (modeles/fiche_salarie.docx, verse avec le
+        # code) prend le relais sans rien a deposer dans config/contrats/.
+        "fiche_generique": True,
         "societes": [
             societe("Sushi Express Paris", "222 222 222", "compta.paris@sushi.example",
                     "SUSHI EXPRESS PARIS SARL", "10 av. de l'Opéra, 75001 Paris", [
@@ -155,6 +159,9 @@ def poser_code(copie):
         shutil.copy2(RACINE / f, copie / f)
     for t in (RACINE / "templates").glob("*.html"):
         shutil.copy2(t, copie / "templates" / t.name)
+    # modele generique de la fiche salarie : verse avec le code (hors
+    # config*), donc part avec chaque copie comme templates/.
+    shutil.copytree(RACINE / "modeles", copie / "modeles")
     shutil.copytree(RACINE / "config.exemple", copie / "config.exemple")
 
 
@@ -183,7 +190,8 @@ def installer_copie(base, client):
     inst = json.loads((copie / "config" / "instance.json").read_text(encoding="utf-8"))
     inst["templates"] = {p: "contrat.docx" for p in client.get(
         "postes", ("Équipier polyvalent", "Assistant manager", "Manager"))}
-    inst["fiche_salarie"] = "fiche_salarie.docx"
+    if not client.get("fiche_generique"):
+        inst["fiche_salarie"] = "fiche_salarie.docx"
     inst["url"] = "http://localhost"
     inst["mails"].update(expediteur=f"rh@{client['slug']}.example",
                          rh=[f"rh@{client['slug']}.example"])
@@ -202,11 +210,12 @@ def installer_copie(base, client):
         "et {{NomPrenom}}, engage(e) au poste de {{Poste}}.",
         "Convention collective : {{ConventionCollective}}.",
     ])
-    modele_docx(copie / "config" / "contrats" / "fiche_salarie.docx", [
-        "FICHE SALARIE — {{NomPrenom}}",
-        "Pieces fournies : {{PiecesFournies}}",
-        "Pieces manquantes : {{PiecesManquantes}}",
-    ])
+    if not client.get("fiche_generique"):
+        modele_docx(copie / "config" / "contrats" / "fiche_salarie.docx", [
+            "FICHE SALARIE — {{NomPrenom}}",
+            "Pieces fournies : {{PiecesFournies}}",
+            "Pieces manquantes : {{PiecesManquantes}}",
+        ])
     return copie
 
 

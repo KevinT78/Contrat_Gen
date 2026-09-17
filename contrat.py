@@ -139,7 +139,19 @@ def calculees(champs):
 #    "alors": "texte {{avec}} placeholders", "sinon": ""}
 
 def _nombre(v):
-    s = re.sub(r"[^\d,.-]", "", str(v)).replace(",", ".")
+    s = re.sub(r"[^\d,.-]", "", str(v))
+    # « 1.867,02 » : le point separe les MILLIERS, la virgule les decimales.
+    # Les laisser tous deux devenir « . » donnait « 1.867.02 » -> ValueError ->
+    # 0 en silence, et un salaire en lettres « zero » dans le contrat signe.
+    #
+    # Sans virgule, « 1.480 » est ambigu. La FORME tranche : un point suivi
+    # d'EXACTEMENT trois chiffres (repete) est un separateur de milliers
+    # (« 1.480 » = 1480, « 1.480.500 » = 1480500) ; deux chiffres ou moins,
+    # c'est un decimal (« 1480.08 », « 1.5 »). Sans cette regle « 1.480 »
+    # devenait 1,48 -- la variante non-« zero » du meme degat.
+    if "," in s or re.fullmatch(r"-?\d{1,3}(?:\.\d{3})+", s):
+        s = s.replace(".", "")
+    s = s.replace(",", ".")
     try:
         return float(s) if "." in s else int(s or 0)
     except ValueError:
@@ -155,15 +167,25 @@ def montant_fr(v):
 
 
 def lettres_fr(v):
-    """Montant en toutes lettres pour la parenthese du contrat. Sans centimes :
-    cardinal seul (« deux mille ») -- le template ecrit deja « euros bruts ».
-    Avec centimes : mode monnaie, qui EXIGE un float (un int y est lu comme des
-    centimes -- num2words(2500, to='currency') = « vingt-cinq euros »).
-    (repris de wingstop_)"""
-    n = _nombre(v)
-    if round(n % 1, 2) == 0:
-        return num2words(int(n), lang="fr")
-    return num2words(float(n), lang="fr", to="currency")
+    """Montant en toutes lettres pour la parenthese du contrat, JAMAIS
+    « euro(s) » ni « centime(s) » -- c'est la prose du template qui ecrit
+    l'unite (ex. « ({{SalaireLettres}}) euros bruts »). Sans centimes :
+    cardinal seul (« deux mille »). Avec centimes : « <entier> virgule
+    <centimes> » -- les centimes sont construits chiffre a chiffre plutot que
+    lus depuis le float par num2words, qui confond 1867,50 et 1867,05 (0.5 et
+    0.05 s'ecrivent tous deux « virgule cinq »)."""
+    # Arrondir le MONTANT, pas les seuls centimes : round((n - entier) * 100)
+    # sur 1867,999 donnait 100 centimes -> « virgule cent ». La retenue doit
+    # remonter sur l'unite (-> « mille huit cent soixante-huit »).
+    n = round(_nombre(v), 2)
+    entier = int(n)
+    centimes = round((n - entier) * 100)
+    if centimes == 0:
+        return num2words(entier, lang="fr")
+    mot = num2words(centimes, lang="fr")
+    if centimes < 10:
+        mot = "zéro " + mot          # « 05 » se lit « zéro cinq », pas « cinq »
+    return f"{num2words(entier, lang='fr')} virgule {mot}"
 
 
 FORMATEURS = {
@@ -202,10 +224,11 @@ def salaire(champs, grille):
 
     Poste au forfait  : {"poste": ..., "mensuel": N}      -> montant direct.
     Poste au SMIC     : {"poste": "Equipier", "champ_heures"?, "bareme":
-                         {"<heures>": {"chiffres", "lettres"}}}  -> ligne par
-                         duree hebdo du contrat, chiffres/lettres PRIS TELS QUELS
-                         (aucun calcul ici -> aucune divergence d'arrondi avec le
-                         contrat papier).
+                         {"<heures>": {"chiffres"}}}  -> ligne par duree hebdo
+                         du contrat, "chiffres" PRIS TEL QUEL (aucun calcul ici
+                         -> aucune divergence d'arrondi avec le contrat papier) ;
+                         les lettres sont DERIVEES de ce meme "chiffres", pas
+                         lues d'un second champ fige -- une seule source.
     Poste inconnu ou duree hors bareme -> ("", "") : le contrat refuse alors de
     sortir plutot que de porter un mauvais salaire. Match du poste par mots
     normalises, le plus specifique gagne (« Assistant Manager » ne prend pas le
@@ -218,7 +241,7 @@ def salaire(champs, grille):
         v = float(e["mensuel"])
         return montant_fr(v), lettres_fr(v)
     ligne = e.get("bareme", {}).get(cle_bareme(champs.get(grille.get("champ_heures", ""), "")))
-    return (ligne["chiffres"], ligne["lettres"]) if ligne else ("", "")
+    return (ligne["chiffres"], lettres_fr(ligne["chiffres"])) if ligne else ("", "")
 
 
 def cle_bareme(duree):
@@ -295,7 +318,31 @@ def valeurs(champs, mentions, extra=None):
     return vals
 
 
-def generer(template, vals, dest=None):
+def elaguer(doc, vals):
+    """Fiche generique : retire chaque ligne de tableau dont AUCUN {{jeton}}
+    n'a de valeur ici (absent de la config du client, ou reponse vide -- ex.
+    titre de sejour d'un salarie francais), puis tout tableau devenu vide avec
+    son titre de section juste au-dessus. Plusieurs jetons dans une ligne =
+    synonymes d'une config a l'autre ({{NumSS}}{{NumeroSecu}}) : le premier
+    alimente s'affiche, les autres sont vides par _generer_docx. Retourne les
+    libelles retires (1re cellule). Tableaux du corps seulement : c'est la
+    forme du modele."""
+    retires = []
+    for t in list(doc.tables):
+        for row in list(t.rows):
+            jetons = re.findall(r"\{\{(\w+)\}\}", "".join(c.text for c in row.cells))
+            if jetons and not any(str(vals.get(j, "")).strip() for j in jetons):
+                retires.append(row.cells[0].text)
+                row._tr.getparent().remove(row._tr)
+        if not t.rows:
+            titre = t._tbl.getprevious()
+            if titre is not None and titre.tag.endswith("}p"):
+                titre.getparent().remove(titre)
+            t._tbl.getparent().remove(t._tbl)
+    return retires
+
+
+def generer(template, vals, dest=None, elaguer_lignes=False, retires=None):
     """Remplit les {{Placeholder}}. Refuse d'ecrire s'il en reste un : un contrat
     troue -- ou pire, portant le nom de l'ancien salarie -- ne doit pas sortir.
     Le produit est TOUJOURS un .docx : template .docx via python-docx (runs
@@ -304,9 +351,18 @@ def generer(template, vals, dest=None):
 
     `dest` None -> retourne les octets du document, a charge de l'appelant de
     les confier a store.poser_octets (le moteur ne connait pas le stockage).
-    `dest` fourni -> ecrit dans ce Path et le retourne (doctor, tests)."""
+    `dest` fourni -> ecrit dans ce Path et le retourne (doctor, tests).
+    `elaguer_lignes` (modele .docx seulement) : voir elaguer().
+    `retires` liste fournie -> les libelles elagues y sont ajoutes. Le retour
+    est deja pris (octets ou Path) et doctor, seul interesse, rouvrait le .docx
+    pour rejouer elaguer() sur ce que la generation venait de calculer."""
+    # python-docx leve PackageNotFoundError (pas un OSError) sur un fichier
+    # absent : doctor et app ne l'attrapaient pas et plantaient au lieu de
+    # marquer le cas « refuse ».
+    if not Path(template).exists():
+        raise FileNotFoundError(f"modèle absent : {template}")
     if Path(template).suffix.lower() == ".docx":
-        return _generer_docx(template, vals, dest)
+        return _generer_docx(template, vals, dest, elaguer_lignes, retires)
     return _texte_vers_docx(remplir(template, vals), dest)
 
 
@@ -355,10 +411,24 @@ def _verifier_critiques(nom, texte_brut, vals):
         raise ValueError(f"valeurs vides dans {nom} : " + ", ".join(vides))
 
 
-def _generer_docx(template, vals, dest):
+def _generer_docx(template, vals, dest, elaguer_lignes=False, retires=None):
     doc = Document(str(template))
+    # critiques AVANT l'elagage : une valeur requise vide doit refuser la
+    # fiche, pas faire disparaitre sa ligne en silence.
     _verifier_critiques(Path(template).name,
                         "\n".join(p.text for p in paragraphes(doc)), vals)
+    if elaguer_lignes:
+        coupes = elaguer(doc, vals)
+        if retires is not None:
+            retires.extend(coupes)
+        # Synonymes non alimentes des lignes GARDEES -> vides, pas « troues ».
+        # Restreint aux cellules de tableau : c'est la seule zone qu'elaguer
+        # sait couper. Blanchir tout le document faisait sortir en silence un
+        # jeton de prose ou d'en-tete que la config n'alimente pas, au lieu de
+        # le refuser comme dans n'importe quel autre modele.
+        cellules = "\n".join(c.text for t in doc.tables
+                             for row in t.rows for c in row.cells)
+        vals = {**{j: "" for j in re.findall(r"\{\{(\w+)\}\}", cellules)}, **vals}
     for p in paragraphes(doc):
         for cle, val in vals.items():
             remplacer(p, re.compile(r"\{\{" + re.escape(cle) + r"\}\}"),

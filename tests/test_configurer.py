@@ -87,6 +87,34 @@ def test_bilan_nomme_le_fichier_a_corriger():
     assert "KO" in sortie and not (CONF / "PLACEHOLDERS.md").exists()
 
 
+def test_bilan_n_invente_pas_de_chemin_pour_un_fichier_hors_config():
+    """Le modèle générique de fiche salarié est versé AVEC LE CODE, hors de
+    config/. Son sujet tombait sur le défaut « contrats/<sujet> » : l'installateur
+    lisait « [config/contrats/fiche salarié] » — un dossier où ce fichier n'a
+    jamais à être — juste sous un message qui dit de copier « modeles/ »."""
+    import io
+    import contextlib
+    import configurer
+
+    # Le préfixe fait partie de la VALEUR : tout ne vit pas sous config/.
+    assert configurer.fichier("fiche salarié") == "modeles/fiche_salarie.docx"
+    assert configurer.fichier("mails") == "config/instance.json"
+    assert configurer.fichier("établissements") == "config/societes.json"
+    assert configurer.fichier("grille — barème « Equipier »") == "config/grille.json"
+    # un sujet inconnu reste un modèle à déposer chez le client
+    assert configurer.fichier("Manager.docx") == "config/contrats/Manager.docx"
+
+    tampon = io.StringIO()
+    with contextlib.redirect_stdout(tampon):
+        configurer.afficher({"fiche salarié": ["fichier absent : ...\\modeles\\f.docx"],
+                             "mails": ["« rh » vide"]})
+    sortie = tampon.getvalue()
+    assert "config/contrats/fiche salarié" not in sortie, sortie
+    # chaque ligne garde son crochet : alignement conservé
+    assert "! fiche salarié  [modeles/fiche_salarie.docx]" in sortie, sortie
+    assert "! mails  [config/instance.json]" in sortie, sortie
+
+
 def test_assistant_renseigne_les_mails():
     casse = {**INSTANCE, "mails": {**INSTANCE["mails"], "rh": [], "expediteur": ""}}
     ecrire(casse)

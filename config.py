@@ -171,8 +171,45 @@ def mode_contrat(cle):
     return e.get("contrat", "genere")
 
 
+def _normaliser(x):
+    """Comparaison de valeurs de config insensible a la casse et aux accents :
+    « Equipier polyvalent » exporte par MS Forms doit matcher « Equipier
+    Polyvalent », « Oui » matcher « OUI ». Import local de sans_accent : c'est
+    contrat qui importe config, pas l'inverse."""
+    from contrat import sans_accent
+    return sans_accent(x).casefold().strip()
+
+
+def regle_pour(champs):
+    """La regle de template qui matche ces champs, ou None si aucune ne colle.
+
+    Meme matching que modele_pour, expose a part pour distinguer « aucune
+    regle ne vise ce cas » (regle_pour renvoie None) de « regle d'exclusion
+    volontaire » (regle trouvee, mais `modele: null` -- un cas identifie sans
+    contrat a produire, ex. « Manager » a temps partiel qui n'existe pas chez
+    ce client) sans dupliquer la comparaison. Voir modele_pour pour les
+    formes acceptees.
+    """
+    n = _normaliser
+    t = instance()["templates"]
+    if isinstance(t, dict):
+        # `null` en forme dict = exclusion volontaire, comme `modele: null` en
+        # forme liste : la cle EXISTE, son modele est None. A distinguer du
+        # poste absent de la table, qu'aucune regle ne vise.
+        poste = valeur(champs, "poste")
+        return {"modele": t[poste]} if poste in t else None
+    for regle in _regles_bien_formees():
+        if all(n(champs.get(k, "")) == n(v)
+               for k, v in regle.get("quand", {}).items()):
+            return regle
+    return None
+
+
 def modele_pour(champs):
-    """Poste (+ conditions eventuelles) -> nom du modele de contrat, ou None.
+    """Poste (+ conditions eventuelles) -> nom du modele de contrat, ou None
+    (aucune regle ne vise ce cas, ou regle d'exclusion volontaire -- voir
+    regle_pour pour distinguer les deux ; ici le contrat doit refuser dans
+    les deux cas).
 
     Deux formes acceptees pour instance()['templates'] :
       - dict {poste: fichier}                              (client simple)
@@ -180,22 +217,15 @@ def modele_pour(champs):
         premiere regle dont TOUS les champs 'quand' collent ; une regle sans
         'quand' est un fourre-tout. Sert au branchement temps partiel, ou a un
         modele par etablissement quand les mentions sont figees dans la prose.
+        `modele: null` marque une exclusion volontaire (cas identifie, pas de
+        contrat pour ce croisement) plutot que d'omettre la regle -- doctor
+        l'affiche a part, distinct d'un cas oublie.
 
     Comparaison insensible a la casse et aux accents : « Equipier polyvalent »
     exporte par MS Forms matche « Equipier Polyvalent », « Oui » matche « OUI ».
     """
-    from contrat import sans_accent
-    def n(x):
-        return sans_accent(x).casefold().strip()
-
-    t = instance()["templates"]
-    if isinstance(t, dict):
-        return t.get(valeur(champs, "poste"))
-    for regle in t:
-        if all(n(champs.get(k, "")) == n(v)
-               for k, v in regle.get("quand", {}).items()):
-            return regle.get("modele")
-    return None
+    regle = regle_pour(champs)
+    return regle.get("modele") if regle else None
 
 
 def derives():
@@ -312,15 +342,42 @@ def secret():
     return instance()["secret"].encode()
 
 
+# Modele generique verse au depot (hors config*) : sert a TOUTE instance qui
+# n'en declare pas un a elle -- la fiche salarie est desormais toujours
+# produite, plus besoin de la deposer pour l'avoir.
+MODELE_FICHE_GENERIQUE = RACINE / "modeles" / "fiche_salarie.docx"
+
+
+def fiche_salarie():
+    """(chemin du modele de fiche salarie, est-ce le generique ?).
+
+    Celui du CLIENT (config/contrats/) si instance()['fiche_salarie'] le
+    declare, sinon le modele generique. Le booleen voyage AVEC le chemin
+    parce qu'il en decoule : seul le generique s'elague (contrat.elaguer),
+    un modele client est cense etre taille pour sa config. Chaque appelant
+    le recalculait de son cote a partir de instance()."""
+    if cle := instance().get("fiche_salarie"):
+        return CLIENT / "contrats" / cle, False
+    return MODELE_FICHE_GENERIQUE, True
+
+
 def _templates_actifs():
-    """Les modeles dont un placeholder manquant doit bloquer le demarrage :
-    les contrats (par poste ou par regle), plus la fiche salarie si declaree."""
+    """Les modeles de CONTRAT (par poste ou par regle) dont un placeholder
+    manquant doit bloquer le demarrage -- noms relatifs a config/contrats/.
+    La fiche salarie est verifiee a part (_verifier_placeholders) : son
+    modele generique ne vit pas forcement sous config/contrats/."""
     t = instance()["templates"]
-    noms = set(t.values()) if isinstance(t, dict) \
-        else {r["modele"] for r in t if r.get("modele")}
-    if fiche := instance().get("fiche_salarie"):
-        noms.add(fiche)
-    return noms
+    return {m for m in t.values() if m} if isinstance(t, dict) \
+        else {r["modele"] for r in _regles_bien_formees() if r.get("modele")}
+
+
+def _regles_bien_formees():
+    """Les regles `templates` (forme liste) lisibles sans planter. Les autres
+    sont refusees par _verifier_regles ; les verificateurs voisins les sautent
+    pour que le bilan affiche ce refus au lieu d'un AttributeError."""
+    t = instance()["templates"]
+    return [r for r in t if isinstance(r, dict)
+            and isinstance(r.get("quand", {}), dict)] if isinstance(t, list) else []
 
 
 # Volontairement laxiste : on veut VOIR « {{ Nom }} » et « {{nom}} » pour les
@@ -566,26 +623,104 @@ def _verifier_roles():
     return manques
 
 
+def _jetons_manquants(chemin, sources):
+    """Jetons de `chemin` qu'aucune `sources` n'alimente. None si le fichier
+    est absent (appelant : le signaler autrement), [] si tout est couvert."""
+    if not chemin.exists():
+        return None
+    raisons = []
+    for j in sorted(_jetons(chemin)):
+        if j in sources:
+            continue
+        proche = next((s for s in sources if s.casefold() == j.strip().casefold()),
+                      None)
+        raisons.append(f"{{{{{j}}}}} → écrire exactement {{{{{proche}}}}}"
+                       if proche else f"{{{{{j}}}}} — aucune source ne l'alimente")
+    return raisons
+
+
 def _verifier_placeholders():
-    """Un placeholder de .docx actif qu'aucune source n'alimente : la promesse
-    d'adaptabilite du produit, verifiee au demarrage."""
+    """Un placeholder de template actif qu'aucune source n'alimente : la
+    promesse d'adaptabilite du produit, verifiee au demarrage. La fiche
+    salarie du CLIENT en est ; pas le modele generique, qui retire a la
+    generation les lignes que la config n'alimente pas (contrat.elaguer)."""
     manques = {}
     sources = placeholders_connus()
     for nom in _templates_actifs():
-        chemin = CLIENT / "contrats" / nom
-        if not chemin.exists():
+        raisons = _jetons_manquants(CLIENT / "contrats" / nom, sources)
+        if raisons is None:
             manques[nom] = ["fichier absent de config/contrats/"]
+        elif raisons:
+            manques[nom] = raisons
+    if nom_fiche := instance().get("fiche_salarie"):
+        raisons = _jetons_manquants(CLIENT / "contrats" / nom_fiche, sources)
+        if raisons is None:
+            manques[nom_fiche] = ["fichier absent de config/contrats/"]
+        elif raisons:
+            manques[nom_fiche] = raisons
+    elif not MODELE_FICHE_GENERIQUE.exists():
+        # Rien a verifier sur ses jetons (elaguer retire a la generation les
+        # lignes que la config n'alimente pas) -- seulement sa PRESENCE : un
+        # deploiement sans le dossier « modeles/ » demarrait vert, puis ratait
+        # la fiche a chaque validation, devant la RH.
+        manques["fiche salarié"] = [
+            f"fichier absent : {MODELE_FICHE_GENERIQUE} — copiez le dossier "
+            "« modeles/ » à côté du code"]
+    return manques
+
+
+def _verifier_regles():
+    """Regles `templates` (forme liste) : une valeur de « quand » qui ne peut
+    JAMAIS correspondre a un dossier reel passait ici sans message -- le
+    mauvais modele partait en silence sur la regle fourre-tout suivante. Cas
+    reel : la cle d'un etablissement est « Societe / Etablissement »
+    (etablissements()), pas le nom du site seul. La FORME avant les valeurs,
+    comme les autres _verifier_* : une regle ou un « quand » mal forme ne doit
+    pas faire planter le garde-fou lui-meme."""
+    n = _normaliser
+    t = instance().get("templates")
+    if not isinstance(t, list):
+        return {}
+    ids = {c["id"] for c in champs()}
+    cles_etab = {cle for cle, _ in etablissements()}
+    # nom du site seul (sans la societe) -> cle complete, pour le message d'aide
+    par_nom_seul = {}
+    for s in societes():
+        for e in s["etablissements"]:
+            par_nom_seul.setdefault(n(e["nom"]), f"{s['nom']} / {e['nom']}")
+
+    manques = {}
+    for i, regle in enumerate(t):
+        sujet = f"templates → règle {i + 1}"
+        if not isinstance(regle, dict):
+            manques[sujet] = ["attend un objet {\"quand\": {...}, \"modele\": ...}"]
+            continue
+        quand = regle.get("quand", {})
+        if not isinstance(quand, dict):
+            manques[sujet] = ["« quand » attend un objet {champ: valeur}"]
             continue
         raisons = []
-        for j in sorted(_jetons(chemin)):
-            if j in sources:
+        for cid, val in quand.items():
+            if cid not in ids:
+                raisons.append(f"« {cid} » n'est pas un champ du formulaire")
                 continue
-            proche = next((s for s in sources if s.casefold() == j.strip().casefold()),
-                          None)
-            raisons.append(f"{{{{{j}}}}} → écrire exactement {{{{{proche}}}}}"
-                           if proche else f"{{{{{j}}}}} — aucune source ne l'alimente")
+            c = champ(cid)
+            if c.get("type") == "etablissement":
+                if any(n(val) == n(cle) for cle in cles_etab):
+                    continue
+                if n(val) in par_nom_seul:
+                    raisons.append(f"« {cid} » : « {val} » ne correspond à aucun "
+                                   f"établissement — écrire exactement "
+                                   f"« {par_nom_seul[n(val)]} »")
+                else:
+                    raisons.append(f"« {cid} » : « {val} » n'est pas une clé "
+                                   "d'établissement connue (config/societes.json)")
+            elif c.get("options"):
+                if not any(n(val) == n(o) for o in c["options"]):
+                    raisons.append(f"« {cid} » : « {val} » ne correspond à aucune "
+                                   "option (" + ", ".join(map(str, c["options"])) + ")")
         if raisons:
-            manques[nom] = raisons
+            manques[sujet] = raisons
     return manques
 
 
@@ -594,6 +729,7 @@ def _verifier_postes():
     manques = {}
     t = instance()["templates"]
     if isinstance(t, list):
+        t = _regles_bien_formees()
         vises = set()
         fourre_tout = any(not r.get("quand") for r in t)
         for r in t:
@@ -663,6 +799,9 @@ def _verifier_bareme(ligne, g):
     sur 9 etaient hors bareme, bilan OK, et le premier salarie reel a 20H avait
     son contrat refuse devant la RH (salaire vide). La FORME avant les valeurs.
 
+    « lettres » n'est plus une cle attendue -- contrat.salaire() la derive de
+    « chiffres » -- mais reste toleree (ignoree) si un client l'a encore.
+
     simplification volontaire : une duree en saisie libre (champ sans options)
     n'est pas enumerable, donc pas verifiee ici -- doctor la couvre pour sa
     valeur d'exemple."""
@@ -671,9 +810,23 @@ def _verifier_bareme(ligne, g):
     bareme, cid = ligne["bareme"], g.get("champ_heures")
     if not isinstance(bareme, dict) or not all(
             isinstance(v, dict) and isinstance(v.get("chiffres"), str) and v["chiffres"]
-            and isinstance(v.get("lettres"), str) and v["lettres"] for v in bareme.values()):
-        return {sujet: ["« bareme » attend un objet {\"<heures>\": {\"chiffres\": \"…\", "
-                        "\"lettres\": \"…\"}}, chaque ligne avec ses deux textes"]}
+            for v in bareme.values()):
+        return {sujet: ["« bareme » attend un objet {\"<heures>\": {\"chiffres\": \"…\"}}, "
+                        "chaque ligne avec son montant"]}
+    # La FORME ne suffit pas : un « chiffres » non vide mais illisible tombait a
+    # 0 dans contrat._nombre SANS ERREUR, et le contrat sortait signe avec
+    # « (zéro) » en toutes lettres a cote du bon montant en chiffres.
+    def lisible(s):
+        # Chiffres et separateurs SEULEMENT : _nombre() extrait « 1500 » de
+        # « a partir de 1500 », ce qui mettrait de la prose dans la case montant
+        # du contrat a cote d'un « mille cinq cents » sorti de nulle part.
+        return re.fullmatch(r"[\d ., ]+", str(s)) and contrat._nombre(s)
+
+    if illisibles := sorted(h for h, v in bareme.items() if not lisible(v["chiffres"])):
+        return {sujet: [f"montant illisible pour « {h} » : {bareme[h]['chiffres']!r} — "
+                        "attendu un nombre (ex. « 1 280,24 » ou « 1.280,24 »), sinon le "
+                        "contrat porterait « zéro » en toutes lettres"
+                        for h in illisibles]}
     if not isinstance(cid, str) or cid not in {c["id"] for c in champs()}:
         return {sujet: [f"« champ_heures » ({cid!r}) doit nommer le champ du formulaire "
                         "qui porte la durée hebdomadaire"]}
@@ -693,6 +846,6 @@ def verifier():
     for check in (_verifier_version, _verifier_comptes, _verifier_stockage,
                   _verifier_conservation, _verifier_installation,
                   _verifier_derives, _verifier_roles, _verifier_placeholders,
-                  _verifier_postes, _verifier_grille):
+                  _verifier_regles, _verifier_postes, _verifier_grille):
         manques.update(check())
     return manques

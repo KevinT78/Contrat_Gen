@@ -241,6 +241,13 @@ paie à la mise en service, jamais à la génération du contrat d'un vrai salar
 La **relecture juridique** du modèle balisé reste au client : le garde-fou
 vérifie qu'un placeholder est alimenté, pas qu'il est au bon endroit.
 
+`config.verifier()` refuse aussi une règle `templates` (forme liste) dont un
+`quand` ne peut **jamais** correspondre à un dossier réel — champ inconnu,
+option mal orthographiée, ou établissement écrit sans sa société (`"Wagram"`
+au lieu de `"Ailes & Cie / Wagram"`, la clé rendue par `config.etablissements()`).
+Sans ce garde-fou la règle passe le bilan et le mauvais modèle part en
+silence, absorbé par la règle fourre-tout suivante.
+
 ### `doctor` — relire les contrats que la config produit vraiment
 
 ```bash
@@ -248,24 +255,29 @@ CONFIG_DIR=/srv/acme/config python doctor.py
 ```
 
 Un salarié fictif est promené sur chaque croisement que la config sait
-distinguer — poste × temps partiel × … × établissement — et le contrat est
-**réellement généré** dans un dossier temporaire :
+distinguer — poste × temps partiel × durée hebdo × … × établissement — et le
+contrat est **réellement généré** dans un dossier temporaire :
 
 ```
-Couverture de « ACME » — 8 cas, contrats dans …/contrat-gen-doctor
-Salarié fictif : Temps de travail = 10H, autres champs « Exemple ».
+Couverture de « ACME » — 16 cas, contrats dans …/contrat-gen-doctor
 
-  Couvreur      / CDI / Chantier Nord   ✓ 01-Couvreur-CDI-Chantier-Nord.docx
-  Chef d'équipe / CDI / Chantier Nord   ✗ aucun modèle ne vise ce cas (instance.json → templates)
-  Apprenti      / CDI / Chantier Sud    ⚠ valeurs vides dans CDI.docx : SalaireChiffres
-  Couvreur      / CDI / Entrepôt        – contrat déposé (fait hors de l'app)
+  Couvreur      / CDI / 24H / Chantier Nord   ✓ 01-Couvreur-CDI-24H-Chantier-Nord.docx
+  Chef d'équipe / CDI / 24H / Chantier Nord   ✗ aucun modèle ne vise ce cas (instance.json → templates)
+  Apprenti      / CDI / 24H / Chantier Sud    ⚠ valeurs vides dans CDI.docx : SalaireChiffres
+  Manager       / CDI / 24H / Chantier Sud    – exclu (volontaire)
+  Couvreur      / CDI / 24H / Entrepôt        – contrat déposé (fait hors de l'app)
 ```
 
 C'est le livrable de la relecture juridique : le client relit **ses** contrats,
 pas un modèle abstrait. Les colonnes sortent de ses propres règles `templates`
-(les clés de `quand`), donc un client qui branche sur le temps partiel voit ses
-deux cas. Sortie non nulle dès qu'un cas ne produit pas son contrat — à rejouer
-après chaque modification de `config/`.
+(les clés de `quand`), du champ dont dépend le barème (`grille.json` →
+`champ_heures`) et des champs que lisent les règles `derives`, donc un client
+qui branche sur le temps partiel voit ses deux cas, et un salaire lu sur la
+durée hebdo n'est plus figé sur une seule valeur d'exemple. Un cas
+volontairement sans contrat (`"modele": null` dans une règle `templates`)
+sort en « exclu (volontaire) », hors compte comme un contrat déposé — pas un
+échec. Sortie non nulle dès qu'un cas ne produit pas son contrat alors qu'il
+le devrait — à rejouer après chaque modification de `config/`.
 
 Rien n'est écrit hors du dossier temporaire : la commande est sûre sur une
 instance en production. Elle attrape ce que `config.verifier()` ne peut pas
@@ -349,8 +361,10 @@ Le déroulé ci-dessous vaut aussi pour la fixture `config/` (`rh` / `fixture`).
 3. Ouvrir la demande → **Rejeter** avec un motif → mail de KO avec **lien signé de
    correction** dans la console : l'ouvrir, corriger. L'ancien lien est mort.
 4. **Accepter** → dossier salarié (même ULID, changement de zone) ; la **fiche
-   salarié** (si `fiche_salarie` est déclarée) est générée dans
-   `FICHE PERSONNELLE/` et le **rappel DPAE** part aussitôt à `mails.dpae`
+   salarié** est toujours générée dans `FICHE PERSONNELLE/` — au modèle du
+   client (`fiche_salarie` dans `instance.json`) s'il en déclare un, sinon au
+   modèle générique versé avec le code (`modeles/fiche_salarie.docx`) — et le
+   **rappel DPAE** part aussitôt à `mails.dpae`
    (repli `rh`) avec nom, poste, date de début, employeur et SIRET. Établissement
    en contrat « genere » : le contrat est produit dans la foulée (bouton
    **Générer** seulement si la config réclame une saisie RH, ou pour reprendre
@@ -406,11 +420,12 @@ Tout vit dans `config/` — aucun `.py` n'y entre jamais :
 | `formulaire.json` | les champs du formulaire, leur type, le placeholder `.docx` de chacun, et la table `roles` |
 | `societes.json` | sociétés (SIREN, mentions, cabinet) et établissements (SIRET, couloir `contrat`) |
 | `grille.json` | grille de rémunération (facultative : sans elle, le salaire est saisi au formulaire) |
-| `contrats/*.docx` | modèles de contrat + `fiche_salarie.docx`, à placeholders `{{Nom}}` |
+| `contrats/*.docx` | modèles de contrat +, si le client en dépose un, `fiche_salarie.docx` — à placeholders `{{Nom}}` |
 | `mails/*.txt` | objet + corps de chaque mail |
 
-Au démarrage, `config.verifier()` extrait les `{{placeholders}}` des `.docx`
-actifs et refuse ceux qu'aucune source n'alimente — le garde-fou qui rend
+Au démarrage, `config.verifier()` extrait les `{{placeholders}}` des modèles
+actifs (contrats, fiche salarié déclarée par le client ; le modèle générique
+retire lui-même les lignes sans valeur) et refuse ceux qu'aucune source n'alimente — le garde-fou qui rend
 l'adaptation à un nouveau client vérifiable.
 
 Il exige aussi, quand un `grille.json` est présent, **une ligne de grille par
@@ -524,7 +539,7 @@ l'avertissement drive.
 | `tests/test_valeurs_contrat.py` | les VALEURS imprimées : grille (forfait et barème), mensualisation, blocs conditionnels, deux entités sans fuite — sur une config fabriquée en temp |
 | `tests/test_signature.py` | `signature.py` contre un transport factice |
 | `tests/test_clients.py` | plusieurs clients factices, une instance chacun, étanches |
-| `tests/test_produit.py` | balisage client refusé si mal écrit, fiche dérivée, config versionnée, rechargement à chaud, `conservation` malformée refusée, refus de démarrer à deux |
+| `tests/test_produit.py` | balisage client refusé si mal écrit, fiche dérivée, config versionnée, rechargement à chaud, `conservation` malformée refusée, refus de démarrer à deux, règle `templates` dont un `quand` ne peut jamais correspondre refusée |
 | `tests/test_purge.py` | parcours complet → purge → nom/NIR/adresse absents partout, rejouable, jeton de lot révoqué |
 | `tests/test_mails.py` | mode console, override `MAILS_MODE`, STARTTLS+login imposés dès qu'un identifiant SMTP est présent |
 | `tests/test_configurer.py` | bilan sous cp1252 (sous-processus, pipe), avertissements non bloquants, assistant scripté, comptes, envoi de test contre un faux relais SMTP |

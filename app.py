@@ -495,30 +495,52 @@ def _transition(uid, vers, **extra):
         return None
 
 
-def _fiche_salarie(item):
-    """Génère la fiche salarié dans pieces/ (FICHE PERSONNELLE) si un template
-    est déclaré. Elle décrit le salarié, pas l'engagement contractuel.
-    Le schéma la place à l'ouverture du dossier. Un échec n'annule pas la
-    validation : on note et on continue."""
-    modele = config.instance().get("fiche_salarie")
-    if not modele:
-        return
+def _pieces_du_dossier(item):
+    """{{PiecesFournies}} / {{PiecesManquantes}} pour ce dossier.
+
+    placeholders_connus() les annonce au client (PLACEHOLDERS.md), donc ils
+    peuvent tomber dans N'IMPORTE quel modele -- contrat comme fiche. Les
+    calculer a un seul endroit : la fiche les fournissait, le contrat non, et
+    doctor les injectant de son cote, un contrat qui les citait passait tous
+    les garde-fous puis sortait « non genere » devant la RH."""
     fournies = [c["libelle"] for c in config.pieces()
                 if store.fichiers_role(item, "pieces", c["role"])]
     manquantes = [m["champ"]["libelle"] for m in store.manquantes(item)]
-    vals = contrat.valeurs(
-        item["champs"],
-        config.mentions(config.valeur(item["champs"], "etablissement")),
-        extra={"PiecesFournies": ", ".join(fournies) or "—",
-               "PiecesManquantes": ", ".join(manquantes) or "aucune"})
+    return {"PiecesFournies": ", ".join(fournies) or "—",
+            "PiecesManquantes": ", ".join(manquantes) or "aucune"}
+
+
+def _fiche_salarie(item):
+    """Génère la fiche salarié dans pieces/ (FICHE PERSONNELLE) : le modèle du
+    CLIENT s'il en déclare un, sinon le modèle générique versé avec le code --
+    elle est désormais TOUJOURS produite. Elle décrit le salarié, pas
+    l'engagement contractuel. Le schéma la place à l'ouverture du dossier. Un
+    échec n'annule pas la validation : on note et on continue."""
+    def echec(motif):
+        store.noter(item["id"], type="fiche_echouee", par="systeme", motif=motif)
+        flash(f"Fiche salarié non générée : {motif}", "erreur")
+
+    # KeyError attrape SEUL config.mentions(), et rien d'autre : l'etablissement
+    # du dossier peut avoir ete retire de societes.json depuis la soumission, et
+    # la fiche est desormais produite pour TOUS les clients (avant, ceux sans
+    # modele sortaient plus haut). Hors try, ce KeyError faisait un 500 sur
+    # /valider APRES l'ecriture de la transition : dossier valide, mais ni fiche,
+    # ni contrat, ni DPAE. Envelopper tout le bloc ferait passer un KeyError venu
+    # d'ailleurs pour un etablissement manquant -- motif mensonger au journal.
     try:
+        mentions = config.mentions(config.valeur(item["champs"], "etablissement"))
+    except KeyError as e:
+        return echec(f"établissement {e} absent de config/societes.json")
+    try:
+        vals = contrat.valeurs(item["champs"], mentions,
+                               extra=_pieces_du_dossier(item))
+        modele, generique = config.fiche_salarie()
         store.poser_octets(item["id"], "pieces",
                            store.nom_piece(item, "fiche-salarie", ".docx"),
-                           contrat.generer(config.CLIENT / "contrats" / modele, vals))
+                           contrat.generer(modele, vals, elaguer_lignes=generique))
         store.noter(item["id"], type="fiche_salarie", par="systeme")
     except (ValueError, OSError) as e:
-        store.noter(item["id"], type="fiche_echouee", par="systeme", motif=str(e))
-        flash(f"Fiche salarié non générée : {e}", "erreur")
+        echec(str(e))
 
 
 @app.post("/dossier/<uid>/valider")
@@ -610,13 +632,24 @@ def _produire_contrat(uid, extra=None):
     extra = {k: (v or "").strip() for k, v in (extra or {}).items()}
     if extra:
         item = store.completer_champs(uid, extra)
-    vals = contrat.valeurs(item["champs"],
-                           config.mentions(config.valeur(item["champs"], "etablissement")),
-                           extra=extra)
-    # OSerror compris : la génération est un EFFET de la validation (comme
+    # Les listes de pieces sont CALCULEES, pas saisies : elles rejoignent les
+    # valeurs du rendu, jamais completer_champs (qui fige la saisie RH dans le
+    # dossier). Meme source que la fiche salarie, sinon un contrat qui cite
+    # {{PiecesFournies}} sort « non genere » alors que doctor l'a validé.
+    extra = {**extra, **_pieces_du_dossier(item)}
+    # KeyError attrape SEUL config.mentions() : l'etablissement du dossier peut
+    # avoir ete retire de societes.json depuis la soumission, et le 500 tombait
+    # APRES l'ecriture de la transition. Envelopper tout le bloc ferait passer un
+    # KeyError venu d'ailleurs pour un etablissement manquant.
+    try:
+        mentions = config.mentions(config.valeur(item["champs"], "etablissement"))
+    except KeyError as e:
+        return False, f"établissement {e} absent de config/societes.json"
+    # OSError compris : la génération est un EFFET de la validation (comme
     # _fiche_salarie, qui garde le même couple) -- un disque plein ne doit pas
     # renvoyer un 500 alors que le dossier est déjà ouvert.
     try:
+        vals = contrat.valeurs(item["champs"], mentions, extra=extra)
         octets = contrat.generer(config.CLIENT / "contrats" / modele, vals)
         store.poser_octets(uid, "contrat", store.nom_piece(item, "contrat", ".docx"), octets)
     except (ValueError, OSError) as e:

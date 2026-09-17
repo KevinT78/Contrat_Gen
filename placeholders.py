@@ -50,6 +50,15 @@ def fiche():
     for nom in sorted(config._templates_actifs()):
         etat = "déposé" if (config.CLIENT / "contrats" / nom).exists() else "**manquant**"
         lignes.append(f"- `config/contrats/{nom}` — {etat}\n")
+    # La fiche salarié est toujours produite. Lire le choix chez config plutot
+    # que de rejouer la branche instance()['fiche_salarie'] : c'est
+    # fiche_salarie() qui tranche, pour tous les appelants.
+    modele, generique = config.fiche_salarie()
+    if generique:
+        lignes.append("- fiche salarié — modèle générique (fourni avec l'application)\n")
+    else:
+        etat = "déposé" if modele.exists() else "**manquant**"
+        lignes.append(f"- `config/contrats/{modele.name}` (fiche salarié) — {etat}\n")
     return "".join(lignes)
 
 
