@@ -1,0 +1,98 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 620 424" font-family="Segoe UI, Arial, sans-serif">
+  <!-- Chaine verticale : le viewBox etroit est ce qui rend le texte lisible une
+       fois le SVG reduit a la largeur de page (170,9 mm). En une ligne
+       horizontale de 1180 unites, tout tombait sous 7 pt.
+       Trois colonnes : ce qui fait avancer a gauche, les etats au centre, les
+       sorties a droite. Hauteur tenue sous ~120 mm pour que la figure reste sur
+       la page de son paragraphe (page-break-inside: avoid).
+       Pas de legende en tete : le paragraphe qui precede la figure dit deja
+       qu'une etape franchie ne se refait pas. -->
+  <defs>
+    <marker id="fl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#475569"/>
+    </marker>
+    <marker id="flRouge" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#b91c1c"/>
+    </marker>
+    <marker id="flGris" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#64748b"/>
+    </marker>
+  </defs>
+
+  <!-- chaîne principale -->
+  <g>
+    <rect x="170" y="20" width="230" height="46" rx="8" fill="#0d4437"/>
+    <text x="285" y="40" text-anchor="middle" fill="#fff" font-size="14" font-weight="600">Soumise</text>
+    <text x="285" y="57" text-anchor="middle" fill="#a7c4ba" font-size="10.5">« Demande reçue »</text>
+
+    <rect x="170" y="90" width="230" height="46" rx="8" fill="#0d4437"/>
+    <text x="285" y="119" text-anchor="middle" fill="#fff" font-size="14" font-weight="600">À traiter</text>
+
+    <rect x="170" y="160" width="230" height="46" rx="8" fill="#0d4437"/>
+    <text x="285" y="189" text-anchor="middle" fill="#fff" font-size="14" font-weight="600">Contrat prêt</text>
+
+    <rect x="170" y="230" width="230" height="46" rx="8" fill="#0d4437"/>
+    <text x="285" y="259" text-anchor="middle" fill="#fff" font-size="14" font-weight="600">Contrat signé</text>
+
+    <rect x="170" y="300" width="230" height="46" rx="8" fill="#0d4437"/>
+    <text x="285" y="329" text-anchor="middle" fill="#fff" font-size="14" font-weight="600">DPAE faite</text>
+
+    <rect x="170" y="370" width="230" height="46" rx="8" fill="#082c24"/>
+    <text x="285" y="399" text-anchor="middle" fill="#fff" font-size="14" font-weight="600">Remis au comptable</text>
+  </g>
+
+  <!-- flèches de progression -->
+  <g stroke="#475569" stroke-width="2.5" marker-end="url(#fl)">
+    <line x1="285" y1="66"  x2="285" y2="86"/>
+    <line x1="285" y1="136" x2="285" y2="156"/>
+    <line x1="285" y1="206" x2="285" y2="226"/>
+    <line x1="285" y1="276" x2="285" y2="296"/>
+    <line x1="285" y1="346" x2="285" y2="366"/>
+  </g>
+
+  <!-- ce qui fait avancer -->
+  <g font-size="12" fill="#475569" text-anchor="end">
+    <text x="268" y="81">« Accepter »</text>
+    <text x="268" y="151">contrat généré ou déposé</text>
+    <text x="268" y="221">contrat signé déposé</text>
+    <text x="268" y="291">accusé DPAE enregistré</text>
+    <text x="268" y="361">« Remettre »</text>
+  </g>
+
+  <!-- rejet et correction -->
+  <rect x="450" y="20" width="160" height="46" rx="8" fill="#b91c1c"/>
+  <text x="530" y="49" text-anchor="middle" fill="#fff" font-size="14" font-weight="600">Rejetée</text>
+  <line x1="400" y1="34" x2="444" y2="34" stroke="#b91c1c" stroke-width="2.5" marker-end="url(#flRouge)"/>
+  <text x="422" y="27" text-anchor="middle" font-size="11" fill="#b91c1c">Rejeter</text>
+  <line x1="446" y1="54" x2="404" y2="54" stroke="#b91c1c" stroke-width="2" stroke-dasharray="4,4" marker-end="url(#flRouge)"/>
+  <g font-size="11" fill="#b91c1c">
+    <text x="450" y="84">le manager corrige</text>
+    <text x="450" y="99">et renvoie (lien signé,</text>
+    <text x="450" y="114">valable 30 jours)</text>
+  </g>
+
+  <!-- abandon : un rail avec un ergot par état concerné, au lieu de cinq
+       courbes qui se croisaient et traversaient la légende -->
+  <g stroke="#64748b" stroke-width="1.5" stroke-dasharray="5,4" fill="none">
+    <line x1="418" y1="113" x2="418" y2="393"/>
+    <line x1="400" y1="113" x2="418" y2="113"/>
+    <line x1="400" y1="183" x2="418" y2="183"/>
+    <line x1="400" y1="253" x2="418" y2="253"/>
+    <line x1="400" y1="323" x2="418" y2="323"/>
+    <line x1="400" y1="393" x2="418" y2="393"/>
+  </g>
+  <line x1="418" y1="253" x2="444" y2="253" stroke="#64748b" stroke-width="1.5" stroke-dasharray="5,4" marker-end="url(#flGris)"/>
+  <rect x="450" y="230" width="160" height="46" rx="8" fill="#64748b"/>
+  <text x="530" y="259" text-anchor="middle" fill="#fff" font-size="14" font-weight="600">Abandonnée</text>
+  <g font-size="11" fill="#64748b">
+    <text x="450" y="294">« Abandonner le dossier »,</text>
+    <text x="450" y="309">de « À traiter » jusqu'à</text>
+    <text x="450" y="324">« Remis au comptable ».</text>
+    <text x="450" y="339">Irréversible.</text>
+  </g>
+  <g font-size="11" fill="#94a3b8" font-style="italic">
+    <text x="450" y="366">Rejetée et Abandonnée :</text>
+    <text x="450" y="381">états inactifs, grisés</text>
+    <text x="450" y="396">dans le suivi.</text>
+  </g>
+</svg>

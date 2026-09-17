@@ -16,3 +16,16 @@ AUDIT-DIAGRAMME.md
 NOTES-infra.md
 SCENARIOS.md
 VERIFICATION-DEPLOIEMENT.md
+# instances clients preparees avec le skill installer-client (secrets, pieces)
+clients/
+
+# chaine de fabrication des PDF de documentation (captures, scripts) : hors git,
+# seuls les .md et .pdf sont versionnes. Exception : les diagrammes, sources
+# texte de 10 Ko qu'on retouche a la main et qui seraient irrecuperables sinon.
+docs/pdf/*
+!docs/pdf/img/
+docs/pdf/img/*
+!docs/pdf/img/diagram-*.svg
+
+# skills personnalises et configuration Claude Code locale
+.claude/

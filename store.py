@@ -468,7 +468,10 @@ def creer_soumission(champs, fichiers_recus):
     d = config.DONNEES / "soumissions" / uid
     d.mkdir(parents=True)
     _carte[uid] = d              # les pieces partent avant soumission.json
-    item = {"schema_version": config.formulaire()["version"], "id": uid,
+    # Version du FORMULAIRE client au moment de la soumission (pas un schema de
+    # stockage : rien ne le relit, c'est une trace pour comprendre un vieux
+    # dossier si le formulaire a change depuis).
+    item = {"formulaire_version": config.formulaire()["version"], "id": uid,
             "champs": champs, "link_epoch": 0,
             "journal": [{"de": None, "vers": "Soumise", "le": maintenant(),
                          "par": "formulaire"}]}

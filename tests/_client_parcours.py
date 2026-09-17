@@ -53,8 +53,15 @@ def couloir(c, etab, mode, poste, attendus):
     item = store.lire(uid)
     # Contrat généré dès la validation (couloir « genere ») ; le couloir
     # « depose » reste à ATraiter en attendant le dépôt du PDF myrhis.
-    assert store.etat(item) == ("ContratPret" if mode == "genere" else "ATraiter"), \
-        store.etat(item)
+    # Avec une saisie_rh, la validation attend la RH : on génère avec ses valeurs.
+    saisie_rh = mode == "genere" and config.saisie_rh()
+    assert store.etat(item) == ("ContratPret" if mode == "genere" and not saisie_rh
+                                else "ATraiter"), store.etat(item)
+    if saisie_rh:
+        valeurs = {p: SPEC.get("saisie_rh", {}).get(p, f"essai {p}") for p in saisie_rh}
+        c.post(f"/dossier/{uid}/contrat", data=valeurs)
+        item = store.lire(uid)
+        assert store.etat(item) == "ContratPret", f"saisie RH : {store.etat(item)}"
 
     # Les ECRANS aussi doivent lire par role : chez un client qui renomme ses
     # champs, « item.champs.poste » en dur sortait une colonne VIDE, en silence.

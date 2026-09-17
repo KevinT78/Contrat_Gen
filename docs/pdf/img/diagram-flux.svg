@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 676" font-family="Segoe UI, Arial, sans-serif">
+  <!-- Les chemins longs sont coupes en deux lignes : sur une seule, le texte
+       depassait des deux cotes de sa boite (mesure : 527u pour 508u utiles).
+       Les acteurs sont alignes sur le CENTRE de leur boite et rattaches par un
+       filet pointille, sinon ils flottent sans qu'on sache ce qu'ils designent. -->
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#475569"/>
+    </marker>
+  </defs>
+
+  <!-- acteurs -->
+  <g font-size="12.5" fill="#64748b" font-style="italic" text-anchor="end">
+    <text x="110" y="41">Manager</text>
+    <text x="110" y="146">Système</text>
+    <text x="110" y="306">RH</text>
+    <text x="110" y="484">RH</text>
+    <text x="110" y="607">Cron hebdo</text>
+  </g>
+  <g stroke="#cbd5e1" stroke-width="1" stroke-dasharray="2,3">
+    <line x1="118" y1="37"  x2="200" y2="37"/>
+    <line x1="118" y1="142" x2="200" y2="142"/>
+    <line x1="118" y1="302" x2="150" y2="302"/>
+    <line x1="118" y1="480" x2="150" y2="480"/>
+    <line x1="118" y1="603" x2="200" y2="603"/>
+  </g>
+
+  <rect x="200" y="10" width="420" height="54" rx="8" fill="#0d4437"/>
+  <text x="410" y="43" text-anchor="middle" fill="#fff" font-size="16" font-weight="600">Formulaire public + pièces jointes</text>
+  <line x1="410" y1="64" x2="410" y2="108" stroke="#475569" stroke-width="2" marker-end="url(#a)"/>
+  <text x="420" y="92" font-size="12.5" fill="#475569">mail « nouvelle_soumission » au service RH</text>
+
+  <rect x="200" y="112" width="420" height="60" rx="8" fill="#1e293b"/>
+  <text x="410" y="136" text-anchor="middle" fill="#fff" font-size="14" font-weight="600">data/soumissions/&lt;ULID&gt;/</text>
+  <text x="410" y="158" text-anchor="middle" fill="#cbd5e1" font-size="12.5" font-family="Consolas, monospace">soumission.json · FICHE PERSONNELLE/</text>
+  <line x1="410" y1="172" x2="410" y2="216" stroke="#475569" stroke-width="2" marker-end="url(#a)"/>
+  <text x="420" y="200" font-size="12.5" fill="#475569">« Accepter » : déplacement du répertoire, même ULID</text>
+
+  <rect x="150" y="220" width="520" height="165" rx="8" fill="#1e293b"/>
+  <text x="410" y="245" text-anchor="middle" fill="#fff" font-size="14" font-weight="600">data/DOSSIERS SALARIES/</text>
+  <text x="410" y="266" text-anchor="middle" fill="#a7c4ba" font-size="12.5" font-family="Consolas, monospace">&lt;Société&gt;/&lt;Établissement&gt;/&lt;Poste&gt;/&lt;NOM Prénom&gt;/</text>
+  <g font-size="12.5" fill="#cbd5e1" font-family="Consolas, monospace">
+    <text x="180" y="296">dossier.json         journal append-only, état courant</text>
+    <text x="180" y="318">FICHE PERSONNELLE/   pièces du candidat, fiche salarié</text>
+    <text x="180" y="340">CONTRAT/             contrat .docx, contrat signé, accusé DPAE</text>
+    <text x="180" y="362">_versions/           anciennes versions d'un fichier remplacé</text>
+  </g>
+  <line x1="410" y1="385" x2="410" y2="429" stroke="#475569" stroke-width="2" marker-end="url(#a)"/>
+  <text x="420" y="413" font-size="12.5" fill="#475569">« Remettre au cabinet comptable » : copie, noms lisibles</text>
+
+  <rect x="150" y="433" width="520" height="95" rx="8" fill="#1e293b"/>
+  <text x="410" y="458" text-anchor="middle" fill="#fff" font-size="14" font-weight="600">data/COMPTA/</text>
+  <text x="410" y="479" text-anchor="middle" fill="#a7c4ba" font-size="12.5" font-family="Consolas, monospace">&lt;SOCIÉTÉ&gt;/&lt;ÉTABLISSEMENT&gt;/&lt;POSTE&gt;/&lt;NOM Prénom - ULID&gt;/</text>
+  <text x="410" y="501" text-anchor="middle" fill="#cbd5e1" font-size="12.5" font-family="Consolas, monospace">FICHE PERSONNELLE/ · CONTRAT/</text>
+  <text x="410" y="519" text-anchor="middle" fill="#cbd5e1" font-size="12.5">copie de travail du cabinet, le dossier d'origine reste intact</text>
+  <line x1="410" y1="528" x2="410" y2="572" stroke="#475569" stroke-width="2" marker-end="url(#a)"/>
+  <text x="420" y="556" font-size="12.5" fill="#475569">recap.py, une fois par semaine</text>
+
+  <rect x="200" y="576" width="420" height="54" rx="8" fill="#b45309"/>
+  <text x="410" y="598" text-anchor="middle" fill="#fff" font-size="15" font-weight="600">Mail au cabinet comptable</text>
+  <text x="410" y="618" text-anchor="middle" fill="#fde68a" font-size="12.5">un lien signé par dossier (/lot/…), valable 30 jours</text>
+
+  <text x="410" y="658" font-size="12.5" fill="#64748b" text-anchor="middle" font-style="italic">Aucune base de données : le disque est la base, dossier.json fait foi sur l'état.</text>
+</svg>
