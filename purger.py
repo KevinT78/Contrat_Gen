@@ -20,8 +20,9 @@ sys.stdout.reconfigure(encoding="utf-8")
 
 def orphelins():
     """Répertoires portant un dossier.json mais hors de portée de store._scan()
-    (glob à profondeur fixe 4) : invisibles à l'app, donc à toute purge. Une
-    purge qui dit « tout est propre » en en laissant un ment."""
+    (glob à profondeur fixe 4, sous DOSSIERS SALARIES/ et LEAVERS/) : invisibles
+    à l'app, donc à toute purge. Une purge qui dit « tout est propre » en en
+    laissant un ment."""
     vus = {str(p) for p in store._scan().values()}
     return sorted(str(f.parent) for f in config.DONNEES.rglob("dossier.json")
                   if str(f.parent) not in vus)
