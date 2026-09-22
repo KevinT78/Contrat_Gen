@@ -153,11 +153,11 @@ LIBELLES_ETAT = {"Soumise": "Soumise", "Rejetee": "Rejetée",
                  "ATraiter": "À traiter", "ContratPret": "Contrat prêt",
                  "ContratSigne": "Contrat signé",
                  "DpaeFaite": "DPAE faite", "RemisComptable": "Remis au comptable",
-                 "Abandonnee": "Abandonnée"}
+                 "Abandonnee": "Abandonnée", "Parti": "Ancien salarié"}
 TONS_ETAT = {"Soumise": "attente", "ATraiter": "attente", "Rejetee": "ko",
              "ContratPret": "actif", "ContratSigne": "actif",
              "DpaeFaite": "actif",
-             "RemisComptable": "fini", "Abandonnee": ""}
+             "RemisComptable": "fini", "Abandonnee": "", "Parti": ""}
 
 
 def _depuis(iso):
@@ -397,8 +397,8 @@ def suivi():
     items = store.tout()
     etab = request.args.get("etablissement") or ""
     etat_f = request.args.get("etat") or ""
-    # RemisComptable = procedure terminee -> vue /salaries, plus /suivi.
-    en_cours = [i for i in items if store.etat(i) != "RemisComptable"]
+    # RemisComptable/Parti = procedure terminee -> vue /salaries, plus /suivi.
+    en_cours = [i for i in items if store.etat(i) not in store.TERMINES]
     visibles = [i for i in en_cours
                 if (not etab or config.valeur(i["champs"], "etablissement") == etab)
                 and (not etat_f or store.etat(i) == etat_f)]
@@ -407,7 +407,7 @@ def suivi():
                            purge_active=bool(config.conservation()),
                            a_purger=len(store.eligibles(items)),
                            etab=etab, etat_f=etat_f, libelles=LIBELLES_ETAT,
-                           etats=[e for e in store.ETATS if e != "RemisComptable"],
+                           etats=[e for e in store.ETATS if e not in store.TERMINES],
                            manquantes=store.manquantes,
                            aujourdhui=date.today().isoformat(),
                            a_traiter=sum(store.etat(i) in ("Soumise", "ATraiter")
@@ -417,9 +417,12 @@ def suivi():
 @app.get("/salaries")
 @rh
 def salaries():
-    """Les salaries dont la procedure est allee au bout (RemisComptable),
-    groupes par etablissement. Complement de /suivi (demandes en cours)."""
-    tous = [i for i in store.tout() if store.etat(i) == "RemisComptable"]
+    """Les salaries dont la procedure est allee au bout (RemisComptable), ou
+    ceux partis (Parti), groupes par etablissement. Complement de /suivi
+    (demandes en cours)."""
+    anciens = request.args.get("anciens")
+    cible = "Parti" if anciens else "RemisComptable"
+    tous = [i for i in store.tout() if store.etat(i) == cible]
     etab = request.args.get("etablissement") or ""
     visibles = [i for i in tous
                 if not etab or config.valeur(i["champs"], "etablissement") == etab]
@@ -433,9 +436,9 @@ def salaries():
         except KeyError:                    # etablissement retire de la config
             return ""
     return render_template("salaries.html", groupes=sorted(groupes.items()),
-                           total=len(tous), etab=etab,
-                           remis_le=store.date_remise, cabinet=cabinet,
-                           aujourdhui=date.today().isoformat())
+                           total=len(tous), etab=etab, anciens=anciens,
+                           remis_le=store.date_remise, date_sortie=store.date_sortie,
+                           cabinet=cabinet, aujourdhui=date.today().isoformat())
 
 
 @app.get("/dossier/<uid>")
@@ -453,6 +456,7 @@ def detail(uid):
                            produits=[(f, "contrat") for f in store.fichiers(item, "contrat")]
                                    + [(f, "pieces") for f in fiche],
                            manquantes=store.manquantes(item),
+                           date_sortie=store.date_sortie(item),
                            motifs=config.instance()["motifs_ko"],
                            champ=config.champ, saisie_rh=config.saisie_rh_champs(),
                            nom_affiche=_nom(item["champs"]),
@@ -843,6 +847,25 @@ def renvoyer(uid):
     store.copier_compta(store.lire(uid))
     flash("Copie refaite, l'ancien lien est révoqué ; le dossier repartira dans "
           "le prochain mail hebdomadaire.", "ok")
+    return redirect(url_for("detail", uid=uid))
+
+
+@app.post("/dossier/<uid>/archiver")
+@rh
+def archiver(uid):
+    """Depart du salarie : deplace le dossier vers LEAVERS/ (onglet « Anciens
+    salariés »). Terminal, comme abandonner()."""
+    date_sortie = (request.form.get("date_sortie") or "").strip()
+    if not date_sortie:
+        flash("La date de sortie est obligatoire.", "erreur")
+        return redirect(url_for("detail", uid=uid))
+    try:
+        store.archiver(uid, session["utilisateur"], date_sortie,
+                       (request.form.get("motif") or "").strip())
+    except ValueError as e:
+        flash(str(e), "erreur")
+        return redirect(url_for("detail", uid=uid))
+    flash("Départ enregistré, dossier archivé dans LEAVERS.", "ok")
     return redirect(url_for("detail", uid=uid))
 
 

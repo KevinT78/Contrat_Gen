@@ -120,6 +120,11 @@ def main():
     jeton = store.signer("lot_comptable", uid, item.get("lien_comptable_epoch", 0))
     ecran(app.test_client(), f"/lot/{jeton}")                       # écran comptable
 
+    c.post(f"/dossier/{uid}/archiver", data={"date_sortie": "2026-09-30"})
+    voir()                                                          # Parti
+    assert lien not in ecran(c, "/salaries"), "Parti encore dans « En poste »"
+    assert lien in ecran(c, "/salaries?anciens=1"), "Parti absent de « Anciens salariés »"
+
     uid = soumettre(c)
     c.post(f"/dossier/{uid}/valider")
     c.post(f"/dossier/{uid}/abandonner")
