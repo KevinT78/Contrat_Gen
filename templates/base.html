@@ -244,6 +244,20 @@
   .msg.erreur { background:var(--alerte-clair); border-color:#e8d2cb;
                 border-left-color:var(--alerte); color:var(--alerte) }
 
+  /* --- pop-up de validation --- */
+  dialog.popup-validation { max-width:440px; width:calc(100% - 40px); padding:28px 32px;
+           background:var(--surface); border:1px solid var(--bord); border-radius:var(--r);
+           box-shadow:none }
+  dialog.popup-validation::backdrop { background:rgba(20,20,15,.35) }
+  dialog.popup-validation ul { list-style:none; margin:0 0 24px; padding:0;
+           font-size:13.5px; display:flex; flex-direction:column; gap:10px }
+  dialog.popup-validation li { padding-left:18px; position:relative }
+  dialog.popup-validation li::before { content:"\2713"; position:absolute; left:0;
+           color:var(--accent); font-weight:700 }
+  dialog.popup-validation li.ko::before { content:"\26A0"; color:var(--alerte) }
+  dialog.popup-validation li.ko { color:var(--alerte) }
+  dialog.popup-validation .actions { justify-content:flex-end }
+
   /* --- listes --- */
   ul.docs { list-style:none; padding:0; margin:0; font-size:13.5px }
   ul.docs li { padding:13px 0; border-bottom:1px solid var(--bord) }
@@ -297,11 +311,26 @@
   {% endif %}
 </header>
 <main class="{% block classe_main %}{% endblock %}">
-  {% for cat, m in get_flashed_messages(with_categories=true) %}
+  {% set msgs = get_flashed_messages(with_categories=true) %}
+  {% for cat, m in msgs if not cat.startswith('popup') %}
     <p class="msg {{ 'erreur' if cat == 'erreur' }}">{{ m }}</p>
   {% endfor %}
   {% block corps %}{% endblock %}
 </main>
+{% set popups = msgs|selectattr('0', 'in', ('popup', 'popup-erreur'))|list %}
+{% if popups %}
+<dialog class="popup-validation" open>
+  <ul>
+    {% for cat, m in popups %}
+      <li class="{{ 'ko' if cat == 'popup-erreur' }}">{{ m }}</li>
+    {% endfor %}
+  </ul>
+  <div class="actions">
+    <a class="bouton discret voir-docs" href="#produits">Voir les documents</a>
+    <button type="button" class="fermer-popup">Fermer</button>
+  </div>
+</dialog>
+{% endif %}
 <script>
   /* francise chaque <input type=file> : bouton « Parcourir » + nom du/des fichier(s) */
   for (const inp of document.querySelectorAll('input[type=file]')) {
@@ -324,6 +353,13 @@
         : n + ' fichiers sélectionnés';
     });
   }
+
+  // pop-up de validation : <dialog open> en repli sans JS, promu en vraie
+  // modale (focus trap, Esc) quand JS tourne
+  const popup = document.querySelector('.popup-validation');
+  if (popup) { popup.removeAttribute('open'); popup.showModal(); }
+  popup?.querySelector('.fermer-popup')?.addEventListener('click', () => popup.close());
+  popup?.querySelector('.voir-docs')?.addEventListener('click', () => popup.close());
 </script>
 </body>
 </html>
