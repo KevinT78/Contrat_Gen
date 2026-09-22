@@ -445,9 +445,16 @@ def salaries():
 @rh
 def detail(uid):
     item = store.lire(uid) or abort(404)
+    # La fiche salarié est stockée dans le bucket "pieces" (FICHE PERSONNELLE,
+    # cf. _fiche_salarie), mais c'est un document PRODUIT par l'app : elle
+    # s'affiche donc avec le contrat, pas avec les pièces jointes par le
+    # candidat -- affichage seul, le stockage disque ne bouge pas.
+    fiche = store.fichiers_role(item, "pieces", "fiche-salarie")
     return render_template("dossier.html", item=item, etat=store.etat(item),
-                           pieces=store.fichiers(item, "pieces"),
-                           produits=store.fichiers(item, "contrat"),
+                           pieces=[f for f in store.fichiers(item, "pieces")
+                                  if f not in fiche],
+                           produits=[(f, "contrat") for f in store.fichiers(item, "contrat")]
+                                   + [(f, "pieces") for f in fiche],
                            manquantes=store.manquantes(item),
                            date_sortie=store.date_sortie(item),
                            motifs=config.instance()["motifs_ko"],
@@ -522,7 +529,7 @@ def _fiche_salarie(item):
     échec n'annule pas la validation : on note et on continue."""
     def echec(motif):
         store.noter(item["id"], type="fiche_echouee", par="systeme", motif=motif)
-        flash(f"Fiche salarié non générée : {motif}", "erreur")
+        return False
 
     # KeyError attrape SEUL config.mentions(), et rien d'autre : l'etablissement
     # du dossier peut avoir ete retire de societes.json depuis la soumission, et
@@ -543,8 +550,9 @@ def _fiche_salarie(item):
                            store.nom_piece(item, "fiche-salarie", ".docx"),
                            contrat.generer(modele, vals, elaguer_lignes=generique))
         store.noter(item["id"], type="fiche_salarie", par="systeme")
+        return True
     except (ValueError, OSError) as e:
-        echec(str(e))
+        return echec(str(e))
 
 
 @app.post("/dossier/<uid>/valider")
@@ -556,20 +564,30 @@ def valider(uid):
         flash(str(e), "erreur")
         return redirect(url_for("detail", uid=uid))
     item = store.lire(uid)
-    _fiche_salarie(item)
+    ok_fiche = _fiche_salarie(item)
     ok_dpae = _rappel_dpae(item)
-    bouts = ["Soumission acceptée : dossier salarié ouvert",
-             "rappel DPAE envoyé" if ok_dpae else "rappel DPAE NON parti (voir le journal)"]
-    ok = ok_dpae
+
+    flash("Dossier salarié ouvert.", "popup")
+    flash("Fiche salarié générée → section « Documents produits »" if ok_fiche
+          else "Fiche salarié NON générée (voir le journal)",
+          "popup" if ok_fiche else "popup-erreur")
+
     # Contrat produit dès la validation — plus de bouton « Générer » à part.
     # Sauf couloir « déposé » (contrat fait sur myrhis) ou config qui réclame
-    # une saisie RH avant génération : l'écran ATraiter garde alors son bouton.
+    # une saisie RH avant génération : l'écran ATraiter garde alors son bouton,
+    # et la pop-up ne doit pas prétendre qu'un contrat est sorti.
     if (config.mode_contrat(config.valeur(item["champs"], "etablissement")) == "genere"
             and not config.saisie_rh()):
         ok_c, msg = _produire_contrat(uid)
-        bouts.append("contrat généré" if ok_c else f"contrat NON généré ({msg})")
-        ok = ok and ok_c
-    flash(", ".join(bouts) + ".", "ok" if ok else "erreur")
+        flash("Contrat généré → section « Documents produits »" if ok_c
+              else f"Contrat NON généré ({msg})",
+              "popup" if ok_c else "popup-erreur")
+    else:
+        flash("Contrat à déposer → section « Documents produits »", "popup")
+
+    flash("Rappel DPAE envoyé" if ok_dpae else "Rappel DPAE NON parti (voir le journal)",
+          "popup" if ok_dpae else "popup-erreur")
+
     return redirect(url_for("detail", uid=uid))
 
 

@@ -198,7 +198,7 @@
   </div>
 
   <div>
-    <h2>Pièces du candidat</h2>
+    <h2 id="pieces">Pièces du dossier</h2>
     <div class="carte"><ul class="docs">
       {% for f in pieces %}
         <li><a href="{{ url_for('fichier', uid=item.id, bucket='pieces', nom=f) }}">{{ f }}</a></li>
@@ -207,10 +207,10 @@
       {% if not pieces and not manquantes %}<li class="vide">Aucune.</li>{% endif %}
     </ul></div>
 
-    <h2>Documents produits</h2>
+    <h2 id="produits">Documents produits</h2>
     <div class="carte"><ul class="docs">
-      {% for f in produits %}
-        <li><a href="{{ url_for('fichier', uid=item.id, bucket='contrat', nom=f) }}">{{ f }}</a></li>
+      {% for f, bucket in produits %}
+        <li><a href="{{ url_for('fichier', uid=item.id, bucket=bucket, nom=f) }}">{{ f }}</a></li>
       {% else %}<li class="vide">Aucun pour l'instant.</li>{% endfor %}
     </ul></div>
   </div>
