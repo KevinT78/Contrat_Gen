@@ -44,8 +44,8 @@ from pathlib import Path
 import config
 
 ETATS = ["Soumise", "Rejetee", "ATraiter", "ContratPret", "ContratSigne",
-         "DpaeFaite", "RemisComptable", "Abandonnee"]
-INACTIFS = {"Rejetee", "Abandonnee", "RemisComptable"}   # grises dans le suivi
+         "DpaeFaite", "RemisComptable", "Abandonnee", "Parti"]
+INACTIFS = {"Rejetee", "Abandonnee", "RemisComptable", "Parti"}   # grises dans le suivi
 
 # Transitions permises via transition() -- le point de passage unique de tous
 # les appelants. Le gating vivait dans le template ; un POST direct pouvait
@@ -58,8 +58,13 @@ TRANSITIONS = {
     "ContratPret":    {"ContratSigne", "Abandonnee"},
     "ContratSigne":   {"DpaeFaite", "Abandonnee"},
     "DpaeFaite":      {"RemisComptable", "Abandonnee"},
-    "RemisComptable": {"Abandonnee"},
+    "RemisComptable": {"Parti", "Abandonnee"},
+    "Parti":          set(),                  # vraiment terminal
 }
+
+# Etats terminaux "procedure allee au bout" -- remplace les comparaisons en
+# dur a "RemisComptable" (suivi/salaries doivent aussi savoir masquer Parti).
+TERMINES = {"RemisComptable", "Parti"}
 
 _B32 = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"          # Crockford, sans I L O U
 _verrous, _garde = {}, threading.Lock()
@@ -96,6 +101,7 @@ def _verrou(uid):
 
 DOSSIERS = "DOSSIERS SALARIES"
 COMPTA = "COMPTA"
+LEAVERS = "LEAVERS"
 BUCKETS = {"pieces": "FICHE PERSONNELLE", "contrat": "CONTRAT"}  # _versions non traduit
 BUCKETS_COMPTA = BUCKETS                       # meme vocabulaire humain cote compta
 _ILLEGAL = re.compile(r'[<>:"/\\|?*\x00-\x1f]+')
@@ -117,10 +123,11 @@ def _scan():
     _scan_items = {}
     carte = {f.parent.name: f.parent
              for f in (config.DONNEES / "soumissions").glob("*/soumission.json")}
-    for f in (config.DONNEES / DOSSIERS).glob("*/*/*/*/dossier.json"):
-        item = json.loads(f.read_text(encoding="utf-8"))
-        carte[item["id"]] = f.parent
-        _scan_items[item["id"]] = item
+    for zone in (DOSSIERS, LEAVERS):
+        for f in (config.DONNEES / zone).glob("*/*/*/*/dossier.json"):
+            item = json.loads(f.read_text(encoding="utf-8"))
+            carte[item["id"]] = f.parent
+            _scan_items[item["id"]] = item
     return carte
 
 
@@ -300,6 +307,14 @@ LIBELLES_PIECE = {"contrat": "Contrat", "contrat-signe": "Contrat signé",
                   "accuse-dpae": "Accusé DPAE", "fiche-salarie": "Fiche salarié",
                   "identite": "Identité", "carte-vitale": "Carte vitale",
                   "rib": "RIB"}
+
+
+def date_sortie(item):
+    """Date de sortie saisie a l'archivage LEAVERS ('' si le dossier n'est pas
+    Parti). Meme forme que date_remise : la date vit dans le journal, pas un
+    champ a part."""
+    return next((e.get("date_sortie", "") for e in reversed(item["journal"])
+                if e.get("vers") == "Parti"), "")
 
 
 def date_remise(item):
@@ -525,6 +540,38 @@ def valider(uid, par):
         item["lien_comptable_epoch"] = 0
         item["journal"].append({"de": "Soumise", "vers": "ATraiter",
                                 "le": maintenant(), "par": par})
+        _ecrire(dst, item)
+
+
+def archiver(uid, par, date_sortie, motif=""):
+    """Depart du salarie : deplace le dossier de DOSSIERS SALARIES vers LEAVERS/,
+    meme sous-chemin (etablissement/poste/nom) -- la RH ouvre cette arborescence
+    a la main, un simple marquage logique ne lui donnerait pas le dossier
+    LEAVERS qu'elle demande."""
+    with _verrou(uid):
+        item = lire(uid)
+        if etat(item) != "RemisComptable":
+            raise ValueError("seul un dossier remis au comptable peut être archivé")
+        d = _rep(item)
+        if d.is_relative_to(config.DONNEES / LEAVERS):
+            # Rejouable : un echec d'ecriture apres un premier move laisse le
+            # dossier deja sous LEAVERS/ mais encore a RemisComptable -- un
+            # second clic ne redeplace rien, il rejoue juste l'ecriture.
+            dst = d
+        else:
+            try:
+                rel = d.relative_to(config.DONNEES / DOSSIERS)
+            except ValueError:
+                raise ValueError("dossier hors de DOSSIERS SALARIES (déplacé à la main)")
+            dst = config.DONNEES / LEAVERS / rel
+            if dst.exists():                 # homonyme, comme _dossier_cible
+                dst = dst.parent / f"{dst.name} ({uid[-4:]})"
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(d), str(dst))
+            _carte[uid] = dst
+        item["journal"].append({"de": "RemisComptable", "vers": "Parti",
+                                "le": maintenant(), "par": par,
+                                "date_sortie": date_sortie, "motif": motif})
         _ecrire(dst, item)
 
 

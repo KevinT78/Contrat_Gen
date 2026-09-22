@@ -482,13 +482,18 @@ Où vit `data/` se décide à l'installation (`stockage` dans `instance.json`,
 voir plus haut) ; `DONNEES` reste surchargeable par variable d'environnement et
 l'emporte sur le bloc (c'est ce dont les tests se servent). `dossier.json` porte un **journal append-only** qui fait foi
 sur l'état ; un fichier présent est une preuve corroborante, jamais décisive.
-Écritures temp-puis-rename avec verrou par id. 8 états :
+Écritures temp-puis-rename avec verrou par id. 9 états :
 `Soumise → Rejetee / ATraiter → ContratPret → ContratSigne →
-DpaeFaite → RemisComptable`, plus `Abandonnee`. Le rappel DPAE n'est pas un
+DpaeFaite → RemisComptable → Parti`, plus `Abandonnee`. Le rappel DPAE n'est pas un
 état : c'est un effet de la validation, tracé dans le journal seulement s'il
 échoue (`mail_echoue`). Les transitions permises sont
 dans `store.TRANSITIONS` — un `POST` hors séquence est refusé côté serveur, pas
-seulement caché dans le template.
+seulement caché dans le template. `Parti` est terminal (aucune transition
+sortante) : le départ d'un salarié (bouton « Archiver dans LEAVERS », onglet
+« Anciens salariés » de `/salaries`) déplace réellement son dossier de
+`DOSSIERS SALARIES/` vers `LEAVERS/`, même sous-chemin établissement / poste /
+nom — c'est l'arborescence que la RH ouvre à la main, un marquage logique seul
+ne lui donnerait pas le dossier LEAVERS qu'elle demande.
 
 **Refus de démarrer à deux.** En production (waitress), `demarrer()` pose
 `<data>/.serveur-actif.json` (`{hote, pid, le}`, rafraîchi toutes les 60 s par
@@ -506,7 +511,9 @@ mode `DEBUG` (dev local) ne pose pas de verrou.
                  "apres": ["RemisComptable", "Rejetee", "Abandonnee"]}
 ```
 
-Un dossier dont l'état courant est dans `apres` depuis plus de `jours` (ou
+Ajouter `"Parti"` à `apres` purge aussi les anciens salariés N jours après leur
+archivage (le décompte part du clic d'archivage, pas de la date de sortie
+saisie) ; non activé par défaut. Un dossier dont l'état courant est dans `apres` depuis plus de `jours` (ou
 `jours_candidature` si l'état est `Soumise`) devient éligible à la purge :
 `/suivi` l'affiche, le bouton *Purger les dossiers terminés* (RH) efface les
 pièces (CNI, RIB, contrats, copies comptables), réduit `dossier.json` à

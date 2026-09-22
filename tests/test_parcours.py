@@ -243,6 +243,55 @@ def couloir_restaurant(c):
     return uid
 
 
+def depart_leaver(c, uid):
+    """Départ d'un salarié remis au comptable : déplacement réel vers LEAVERS/,
+    rejouable si l'écriture du journal échoue APRÈS le move (disque plein...),
+    visible seulement dans /salaries?anciens=1, écran détail sans 500, et un
+    second archivage refusé proprement une fois Parti (pas de 500)."""
+    item = store.lire(uid)
+    avant = Path(item["_dir"])
+    rel = avant.relative_to(config.DONNEES / store.DOSSIERS)
+
+    # Rejouable (store.archiver) : un echec d'ecriture apres le move laisse le
+    # dossier sous LEAVERS/ mais encore a RemisComptable -- le second appel ne
+    # doit pas re-deplacer, seulement rejouer l'ecriture.
+    reel_ecrire = store._ecrire
+    store._ecrire = lambda *a: (_ for _ in ()).throw(OSError("disque plein (test)"))
+    try:
+        try:
+            store.archiver(uid, "test", "2026-09-30")
+            assert False, "l'échec d'écriture simulé n'a pas levé"
+        except OSError:
+            pass
+    finally:
+        store._ecrire = reel_ecrire
+    store._carte.clear()
+    item = store.lire(uid)
+    assert store.etat(item) == "RemisComptable", "état changé malgré l'échec d'écriture"
+    assert Path(item["_dir"]) == config.DONNEES / store.LEAVERS / rel, \
+        "dossier non déplacé malgré l'échec d'écriture"
+    assert not avant.exists(), "ancien répertoire encore présent"
+
+    c.post(f"/dossier/{uid}/archiver", data={"date_sortie": "2026-09-30"})
+    item = store.lire(uid)
+    assert store.etat(item) == "Parti", item["journal"][-1]
+    assert not avant.exists(), "ancien répertoire encore sous DOSSIERS SALARIES"
+    apres = Path(item["_dir"])
+    assert apres == config.DONNEES / store.LEAVERS / rel, apres
+
+    assert c.get("/suivi").text.find(uid) == -1, "encore visible dans /suivi"
+    assert uid not in c.get("/salaries").text, "encore dans les salariés en poste"
+    assert uid in c.get("/salaries?anciens=1").text, "absent de /salaries?anciens=1"
+
+    r = c.get(f"/dossier/{uid}")
+    assert r.status_code == 200, "500 sur l'écran détail (garde flux.index)"
+
+    r = c.post(f"/dossier/{uid}/archiver", data={"date_sortie": "2026-10-01"},
+               follow_redirects=True)
+    assert r.status_code == 200, "second archivage : 500 au lieu d'un refus propre"
+    assert store.etat(store.lire(uid)) == "Parti"
+
+
 def fiche_generique_sans_cle(c):
     """Sans "fiche_salarie" dans instance.json, la fiche générique (modèle
     versé au dépôt, hors config/) est quand même produite."""
@@ -388,6 +437,7 @@ def main():
     valider_survit_a_un_etablissement_retire(c)
     rejet_part_au_manager_de_l_etablissement(c)
     recap_liste_la_semaine([dk, resto])
+    depart_leaver(c, dk)               # apres recap : Parti sort de remis_depuis()
 
     # lien forgé
     anonyme = app.test_client()

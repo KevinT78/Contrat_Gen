@@ -7,12 +7,20 @@
     <h1>Salariés</h1>
     <p class="sous">
       <span class="badge">{{ total }} salarié{{ 's' if total > 1 }} au total</span>
-      <span class="filet"></span>procédure terminée (remis au comptable)
+      <span class="filet"></span>{{ 'sorti de la société' if anciens else 'procédure terminée (remis au comptable)' }}
     </p>
   </div>
 </div>
 
+<nav class="sous-onglets">
+  <a href="{{ url_for('salaries', etablissement=etab) }}"
+     {{ 'aria-current=page'|safe if not anciens }}>En poste</a>
+  <a href="{{ url_for('salaries', etablissement=etab, anciens=1) }}"
+     {{ 'aria-current=page'|safe if anciens }}>Anciens salariés</a>
+</nav>
+
 <form method="get" action="{{ url_for('salaries') }}" class="barre-filtres">
+  {% if anciens %}<input type="hidden" name="anciens" value="1">{% endif %}
   <div class="champ">
     <label for="f-etab">Établissement</label>
     <select id="f-etab" name="etablissement">
@@ -25,7 +33,7 @@
   <div class="fin">
     <button type="submit">Filtrer</button>
     {% if etab %}
-      <a class="bouton discret" href="{{ url_for('salaries') }}">Tout afficher</a>
+      <a class="bouton discret" href="{{ url_for('salaries', anciens=1 if anciens else none) }}">Tout afficher</a>
     {% endif %}
   </div>
 </form>
@@ -36,7 +44,7 @@
   <table>
     <thead>
       <tr><th>Salarié</th><th>Poste</th><th>Contrat</th><th>Début</th>
-          <th>Ancienneté</th><th>Cabinet</th><th>Remis le</th></tr>
+          <th>Ancienneté</th><th>Cabinet</th><th>{{ 'Sorti le' if anciens else 'Remis le' }}</th></tr>
     </thead>
     <tbody>
     {% for i in salaries %}
@@ -53,14 +61,16 @@
           {% elif j >= 60 %}{{ j // 30 }} mois
           {% else %}{{ j }} j{% endif %}</td>
         <td class="secondaire">{{ cabinet(valeur(i.champs, 'etablissement')) or '—' }}</td>
-        <td class="secondaire">{{ date_fr(remis_le(i)) }}</td>
+        <td class="secondaire">{{ date_fr(date_sortie(i)) if anciens else date_fr(remis_le(i)) }}</td>
       </tr>
     {% endfor %}
     </tbody>
   </table>
   </div>
 {% else %}
-  <p class="vide">{% if etab %}Aucun salarié pour cet établissement.
+  <p class="vide">{% if etab and anciens %}Aucun ancien salarié pour cet établissement.
+  {% elif anciens %}Aucun ancien salarié : personne n'a encore quitté la société.
+  {% elif etab %}Aucun salarié pour cet établissement.
   {% else %}Aucun salarié : aucune procédure n'est encore allée jusqu'à la remise
   au comptable.{% endif %}</p>
 {% endfor %}
