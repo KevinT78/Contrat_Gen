@@ -46,7 +46,7 @@ import config
 
 ETATS = ["Soumise", "Rejetee", "ATraiter", "ContratPret", "ContratSigne",
          "DpaeFaite", "RemisComptable", "Abandonnee", "Parti"]
-INACTIFS = {"Rejetee", "Abandonnee", "RemisComptable", "Parti"}   # grises dans le suivi
+INACTIFS = {"Rejetee", "Abandonnee", "RemisComptable", "Parti"}   # grises dans le suivi, sans frise sur la fiche
 
 # Transitions permises via transition() -- le point de passage unique de tous
 # les appelants. Le gating vivait dans le template ; un POST direct pouvait
@@ -59,7 +59,7 @@ TRANSITIONS = {
     "ContratPret":    {"ContratSigne", "Abandonnee"},
     "ContratSigne":   {"DpaeFaite", "Abandonnee"},
     "DpaeFaite":      {"RemisComptable", "Abandonnee"},
-    "RemisComptable": {"Parti", "Abandonnee"},
+    "RemisComptable": {"Parti"},
     "Parti":          set(),                  # vraiment terminal
 }
 

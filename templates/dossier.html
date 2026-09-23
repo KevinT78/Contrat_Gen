@@ -7,7 +7,11 @@
                  'ContratPret': 'Contrat prêt', 'ContratSigne': 'Contrat signé',
                  'DpaeFaite': 'DPAE faite', 'RemisComptable': 'Remis au comptable'} %}
 
+{% if vue == 'salaries' %}
+<a class="retour" href="{{ url_for('salaries', anciens=1 if etat == 'Parti' else None) }}">← Tous les salariés</a>
+{% else %}
 <a class="retour" href="{{ url_for('suivi') }}">← Toutes les demandes</a>
+{% endif %}
 <h1>{{ nom_affiche or item.id }}</h1>
 <p class="sous">
   <span class="badge {{ ton_etat(etat) }}">{{ libelle_etat(etat) }}</span>
@@ -19,7 +23,7 @@
   {% endif %}
   <span class="filet"></span><code>{{ item.id }}</code></p>
 
-{% if etat not in ('Rejetee', 'Abandonnee', 'Parti') and not item.purge %}
+{% if etat not in inactifs and not item.purge %}
   {% set ici = flux.index(etat) %}
   <ul class="etapes">
     {% for e in flux %}
@@ -148,14 +152,6 @@
       recevra son lien de téléchargement (valable 30 jours) dans le prochain mail hebdomadaire.</p>
 
   {% elif etat == 'RemisComptable' %}
-    <p class="titre-carte">Lien comptable</p>
-    <div class="actions">
-      <form method="post" action="{{ url_for('renvoyer', uid=item.id) }}">
-        <button class="discret">Refaire la copie et le lien</button></form>
-    </div>
-    <p class="indice">Cela révoquera le lien précédent ; le dossier repartira dans le
-      prochain mail hebdomadaire.</p>
-
     <p class="titre-carte">Départ du salarié</p>
     <form method="post" action="{{ url_for('archiver', uid=item.id) }}" class="actions">
       <label>Date de sortie
@@ -166,6 +162,14 @@
     </form>
     <p class="indice">Le dossier sera déplacé dans <code>LEAVERS/</code>, au même
       sous-chemin établissement/poste/nom, et rejoindra l'onglet « Anciens salariés ».</p>
+    <hr class="sep">
+    <p class="titre-carte">Lien comptable</p>
+    <div class="actions">
+      <form method="post" action="{{ url_for('renvoyer', uid=item.id) }}">
+        <button class="discret">Refaire la copie et le lien</button></form>
+    </div>
+    <p class="indice">Cela révoquera le lien précédent ; le dossier repartira dans le
+      prochain mail hebdomadaire.</p>
 
   {% elif etat == 'Parti' %}
     <p class="titre-carte">Ancien salarié</p>
@@ -178,7 +182,9 @@
   {% endif %}
 </div>
 
-{% if etat not in ('Soumise', 'Rejetee', 'Abandonnee', 'Parti') and not item.purge %}
+{# Soumise et Rejetee peuvent être abandonnées mais ont leur propre carte de décision #}
+{% if 'Abandonnee' in transitions.get(etat, ()) and etat not in ('Soumise', 'Rejetee')
+      and not item.purge %}
 <div class="pied-actions">
   <form method="post" action="{{ url_for('abandonner', uid=item.id) }}">
     <button class="danger">Abandonner le dossier</button></form>
