@@ -281,6 +281,10 @@ def _saisie(item=None):
             if c.get("requis") and not liste and c["role"] not in deja:
                 erreurs.append(f"« {c['libelle']} » est obligatoire"
                                + (f" ({max_f} fichiers attendus)." if max_f > 1 else "."))
+            elif (c.get("requis") and c["role"] not in deja
+                  and 0 < len(liste) < max_f):
+                erreurs.append(f"« {c['libelle']} » : {max_f} fichiers attendus "
+                                "(recto + verso).")
             elif len(liste) > max_f:
                 erreurs.append(f"« {c['libelle']} » : maximum {max_f} fichiers.")
             # Format verifie ICI, avant toute ecriture : sinon store.deposer leve

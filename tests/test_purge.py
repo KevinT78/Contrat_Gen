@@ -53,8 +53,9 @@ def saisie(etab="ACME Restauration / Lille Grand Place", poste="Manager"):
 
 
 def soumettre(c, s):
-    r = c.post("/", data={**s, "identite": piece(), "carte_vitale": piece(),
-                          "rib": piece()}, content_type="multipart/form-data")
+    r = c.post("/", data={**s, "identite": [piece(), piece()],
+                          "carte_vitale": piece(), "rib": piece()},
+               content_type="multipart/form-data")
     assert r.status_code == 200 and "Demande envoyée" in r.text, r.status_code
     return max(i["id"] for i in store.tout())
 
