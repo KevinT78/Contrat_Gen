@@ -4,7 +4,7 @@
 
 Ecrit dans un dossier temporaire, ne touche jamais data/.
 Couvre : nommage indexe (1er = nom nu, retro-compatible), fichiers_role,
-_extraire_role, manquantes (max_fichiers = plafond, pas minimum), et le
+_extraire_role, manquantes (max_fichiers = nombre exige), et le
 chemin dict simple (import myrhis / tests) qui n'a pas .getlist.
 """
 import os
@@ -59,25 +59,27 @@ def test_premier_fichier_garde_le_nom_nu():
     assert len(store.fichiers_role(item, "pieces", ident["role"])) == 2
 
 
-def test_un_seul_fichier_suffit_manquantes_vide():
+def test_un_seul_fichier_ne_suffit_pas_manquantes():
     recus = MultiDict({c["id"]: fichier() for c in config.pieces()})
     recus[ident["id"]] = [fichier()]          # une seule face
     uid = store.creer_soumission(dict(champs), recus)
     item = store.lire(uid)
     role = store.SAIN.sub("-", ident["role"])
     assert store.fichiers_role(item, "pieces", ident["role"]) == [f"{role}.pdf"]
-    assert store.manquantes(item) == [], "max_fichiers est un plafond, pas un minimum"
+    manquantes = {m["champ"]["role"] for m in store.manquantes(item)}
+    assert ident["role"] in manquantes, "max_fichiers est un nombre exige, pas un plafond"
 
 
 def test_chemin_dict_simple_sans_getlist():
     recus = {c["id"]: fichier() for c in config.pieces()}   # dict nu, pas de .getlist
     uid = store.creer_soumission(dict(champs), recus)
     item = store.lire(uid)
-    assert store.manquantes(item) == []
+    manquantes = {m["champ"]["role"] for m in store.manquantes(item)}
+    assert ident["role"] in manquantes, "un seul fichier depose pour une piece a 2 faces doit manquer"
     assert len(store.fichiers_role(item, "pieces", ident["role"])) == 1
 
 
 cas("1er fichier = nom nu, 2e = _2, fichiers_role en compte 2", test_premier_fichier_garde_le_nom_nu)
-cas("une seule face depose -> manquantes() vide", test_un_seul_fichier_suffit_manquantes_vide)
+cas("une seule face depose -> manquantes() signale l'identite", test_un_seul_fichier_ne_suffit_pas_manquantes)
 cas("dict nu (sans getlist) accepte par creer_soumission", test_chemin_dict_simple_sans_getlist)
-print("\nPieces multi-fichiers OK — nommage indexe retro-compatible, plafond, dict et MultiDict.")
+print("\nPieces multi-fichiers OK — nommage indexe retro-compatible, nombre exige, dict et MultiDict.")

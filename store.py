@@ -38,6 +38,7 @@ import re
 import shutil
 import threading
 import time
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -404,8 +405,9 @@ def fichiers_role(item, bucket, role):
 def manquantes(item):
     """Pieces requises par le schema et absentes du disque.
 
-    Retourne une liste de dicts {'champ': config}.  `max_fichiers` est un
-    plafond, pas un minimum : un role avec au moins un fichier est satisfait.
+    Retourne une liste de dicts {'champ': config}.  `max_fichiers` est le
+    nombre exigé : une piece est satisfaite quand son role compte au moins
+    ce nombre de fichiers (1 par defaut).
     Compatible bool : [] == tout est la.
     """
     # Un dossier purge n'a plus ses pieces (effacees expres) : sans ce garde,
@@ -414,9 +416,10 @@ def manquantes(item):
     # (suivi, detail, _saisie, _fiche_salarie).
     if item.get("purge"):
         return []
-    presents = {_extraire_role(f) for f in fichiers(item, "pieces")}
+    comptes = Counter(_extraire_role(f) for f in fichiers(item, "pieces"))
     return [{"champ": c} for c in config.pieces()
-            if c.get("requis") and SAIN.sub("-", c["role"]) not in presents]
+            if c.get("requis")
+            and comptes[SAIN.sub("-", c["role"])] < c.get("max_fichiers", 1)]
 
 
 # --- cycle de vie --------------------------------------------------------

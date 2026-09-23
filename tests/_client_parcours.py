@@ -60,7 +60,7 @@ def saisie(etab, poste):
 
 def couloir(c, etab, mode, poste, attendus):
     r = c.post("/", data={**saisie(etab, poste),
-                          **{p["id"]: f() for p in config.pieces()}},
+                          **{p["id"]: [f() for _ in range(p.get("max_fichiers", 1))] for p in config.pieces()}},
                content_type="multipart/form-data")
     assert "Demande envoyée" in r.text, r.text[:300]
     uid = max(i["id"] for i in store.tout())
@@ -161,7 +161,7 @@ def refuser_et_corriger(c, etab, poste):
     dossier repart dans le parcours normal (retour à Soumise, cf. store.etat)."""
     kw = {"base_url": BASE_URL} if BASE_URL else {}
     r = c.post("/", data={**saisie(etab, poste),
-                          **{p["id"]: f() for p in config.pieces()}},
+                          **{p["id"]: [f() for _ in range(p.get("max_fichiers", 1))] for p in config.pieces()}},
                content_type="multipart/form-data", **kw)
     assert "Demande envoyée" in r.text, r.text[:300]
     uid = max(i["id"] for i in store.tout())
@@ -177,7 +177,7 @@ def refuser_et_corriger(c, etab, poste):
     lien = lien_dans(dernier_mail("rejet"), "corriger")
 
     r = c.post(lien, data={**saisie(etab, poste),
-                           **{p["id"]: f() for p in config.pieces()}},
+                           **{p["id"]: [f() for _ in range(p.get("max_fichiers", 1))] for p in config.pieces()}},
                content_type="multipart/form-data")
     assert "Correction envoyée" in r.text, r.text[:300]
     assert c.get(lien).status_code == 410, "lien de correction encore vivant"

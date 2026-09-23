@@ -55,8 +55,9 @@ def ecran(c, url, attendu=200):
 
 
 def soumettre(c, etab=ETAB):
-    c.post("/", data={**saisie(etab), "identite": piece(), "carte_vitale": piece(),
-                      "rib": piece()}, content_type="multipart/form-data")
+    c.post("/", data={**saisie(etab), "identite": [piece(), piece()],
+                      "carte_vitale": piece(), "rib": piece()},
+           content_type="multipart/form-data")
     return max(i["id"] for i in store.tout())
 
 
