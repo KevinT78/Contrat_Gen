@@ -308,9 +308,9 @@
   {% if session.utilisateur %}
     <nav>
       <a href="{{ url_for('suivi') }}"
-         {{ 'aria-current=page'|safe if request.endpoint in ('suivi', 'detail') }}>Suivi d'embauche</a>
+         {{ 'aria-current=page'|safe if request.endpoint == 'suivi' or vue == 'suivi' }}>Suivi d'embauche</a>
       <a href="{{ url_for('salaries') }}"
-         {{ 'aria-current=page'|safe if request.endpoint == 'salaries' }}>Salariés</a>
+         {{ 'aria-current=page'|safe if request.endpoint == 'salaries' or vue == 'salaries' }}>Salariés</a>
     </nav>
     <span class="utilisateur">{{ session.utilisateur }} —
       <a href="{{ url_for('logout') }}">quitter</a></span>

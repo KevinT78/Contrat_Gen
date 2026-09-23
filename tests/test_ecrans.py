@@ -84,6 +84,7 @@ def main():
         vus.add(e)
         texte = ecran(c, f"/dossier/{uid}")
         assert libelle(e) in texte, f"état « {e} » absent de l'écran"
+        return texte
 
     def libelle(e):
         from app import LIBELLES_ETAT
@@ -105,13 +106,30 @@ def main():
     c.post(f"/dossier/{uid}/dpae-faite", data={"accuse": piece()}, **fichier)
     voir()                                                          # DpaeFaite
     c.post(f"/dossier/{uid}/remettre")
-    voir()                                                          # RemisComptable
+    texte = voir()                                                  # RemisComptable
 
     # Un dossier au bout du parcours quitte /suivi (demandes en cours) et
     # apparaît sur /salaries (procédure terminée).
     lien = f"/dossier/{uid}"
     assert lien not in ecran(c, "/suivi"), "RemisComptable devrait avoir quitté /suivi"
     assert lien in ecran(c, "/salaries"), "RemisComptable absent de /salaries"
+
+    import re
+    menu = re.search(r'<a href="[^"]*"\s*(aria-current=page)?>Suivi d\'embauche</a>\s*'
+                     r'<a href="[^"]*"\s*(aria-current=page)?>Salariés</a>', texte)
+    assert menu and not menu.group(1) and menu.group(2), \
+        "RemisComptable : le menu devrait surligner « Salariés », pas « Suivi d'embauche »"
+    assert "Abandonner le dossier" not in texte, \
+        "RemisComptable ne devrait plus proposer d'abandon"
+    assert f'action="/dossier/{uid}/archiver"' in texte, \
+        "RemisComptable devrait proposer le formulaire d'archivage"
+    assert 'class="etapes"' not in texte, \
+        "RemisComptable ne devrait plus afficher la frise du recrutement"
+    assert texte.index("Départ du salarié") < texte.index("Lien comptable"), \
+        "RemisComptable : le départ doit précéder le lien comptable"
+    c.post(f"/dossier/{uid}/abandonner")
+    assert store.etat(store.lire(uid)) == "RemisComptable", \
+        "RemisComptable : un POST direct sur /abandonner devrait être refusé"
     autre = config.etablissements()[1][0]
     assert lien not in ecran(c, f"/salaries?etablissement={autre}"), \
         "filtre établissement inopérant sur /salaries"

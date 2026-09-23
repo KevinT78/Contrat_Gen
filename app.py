@@ -450,7 +450,10 @@ def detail(uid):
     # s'affiche donc avec le contrat, pas avec les pièces jointes par le
     # candidat -- affichage seul, le stockage disque ne bouge pas.
     fiche = store.fichiers_role(item, "pieces", "fiche-salarie")
-    return render_template("dossier.html", item=item, etat=store.etat(item),
+    etat = store.etat(item)
+    return render_template("dossier.html", item=item, etat=etat,
+                           vue="salaries" if etat in store.TERMINES else "suivi",
+                           inactifs=store.INACTIFS, transitions=store.TRANSITIONS,
                            pieces=[f for f in store.fichiers(item, "pieces")
                                   if f not in fiche],
                            produits=[(f, "contrat") for f in store.fichiers(item, "contrat")]
