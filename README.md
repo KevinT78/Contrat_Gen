@@ -343,13 +343,14 @@ Les deux voies mènent à `ContratPret`, d'où la DPAE se déclare directement.
 
 - **`"signature": {"mode": "manuel"}`** (défaut) : la RH télécharge le contrat, le
   fait signer hors app, dépose le PDF signé. `"mode": "yousign"` ajoute « Envoyer à
-  la signature » aux mêmes endroits que le dépôt manuel.
-- Le contrat signé est **facultatif** : il ne bloque ni la DPAE ni la remise. Il se
-  dépose une seule fois, de `ContratPret` jusqu'à `RemisComptable` (fiche salarié
-  comprise), noté au journal (`contrat_signe`) sans changer d'état ; pas en `Parti`
-  ni après une purge. Tant qu'il manque, un badge **« signé manquant »** le rappelle
-  dans le suivi et dans « En poste ». Arrivé après la remise, il ne part au cabinet
-  qu'avec « Refaire la copie et le lien ».
+  la signature » au même endroit que le dépôt manuel.
+- Le contrat signé **ne bloque pas** la DPAE ni la remise, mais reste à recueillir. Il se
+  dépose une seule fois, **uniquement en `RemisComptable`**, depuis la fiche salarié
+  (vue « Salariés ») où son bloc reste en haut tant qu'il manque ; noté au journal
+  (`contrat_signe`) sans changer d'état ; pas en `Parti` ni après une purge. Tant
+  qu'il manque, un badge **« signé manquant »** le rappelle dans « Salariés ». Il
+  reste côté RH : ni la copie `COMPTA/` ni le lot du cabinet ne le contiennent
+  (`store.fichiers_compta`).
 - L'ancienne clé `signature.avant_dpae` (et l'état `ContratSigne`) n'existe plus :
   `doctor` la signale comme obsolète sans bloquer. Les dossiers déjà écrits à
   `ContratSigne` restent lisibles et passent à la DPAE.
@@ -380,7 +381,7 @@ Le déroulé ci-dessous vaut aussi pour la fixture `config/` (`rh` / `fixture`).
    **Générer** seulement si la config réclame une saisie RH, ou pour reprendre
    après un échec). Établissement en contrat « depose » : **Déposer le contrat**.
 5. **DPAE** : dépôt de l'accusé (refusé sans pièce), dès le contrat prêt. Le
-   **contrat signé** se dépose à côté, quand il arrive, sans changer d'état.
+   **contrat signé** se dépose plus tard, depuis la fiche salarié, sans changer d'état.
 6. **Remettre au comptable** → le dossier est **dupliqué** dans
    `data/COMPTA/<GROUPE>/<ETABLISSEMENT>/<POSTE>/<NOM PRENOM - id>/`
    (`FICHE PERSONNELLE/` + `CONTRAT/`, segments en capitales sans accents,

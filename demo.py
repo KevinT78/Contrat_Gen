@@ -107,11 +107,11 @@ def amorcer():
         lundi="11h-15h / 18h-23h", jeudi="11h-15h / 18h-23h", samedi="12h-23h"))
     c.post(f"/dossier/{uid}/valider")
     c.post(f"/dossier/{uid}/contrat")
-    c.post(f"/dossier/{uid}/contrat-signe", data={"signe": piece()},
-           content_type="multipart/form-data")
     c.post(f"/dossier/{uid}/dpae-faite", data={"accuse": piece()},
            content_type="multipart/form-data")
     c.post(f"/dossier/{uid}/remettre")
+    c.post(f"/dossier/{uid}/contrat-signe", data={"signe": piece()},
+           content_type="multipart/form-data")
     assert store.etat(store.lire(uid)) == "RemisComptable"
 
     # 2. contrat prêt : manager, DPAE à faire, contrat signé pas encore reçu
@@ -146,9 +146,9 @@ Suivi vide : à toi de jouer, du formulaire public à la remise au cabinet.
   3. « Accepter — ouvrir le dossier »
         -> mail « rappel DPAE » dans data_demo/mails/
   4. « Générer le contrat » -> aucun champ à saisir -> ouvre contrat.docx
-  5. « Déposer le contrat signé » -> un des PDF
-  6. « DPAE créée et stockée » -> dépose l'accusé (un des PDF)  <- la DPAE dans le dossier
-  7. « Remettre au cabinet comptable » -> copie data_demo/compta/ + lien de lot
+  5. « DPAE créée et stockée » -> dépose l'accusé (un des PDF)  <- la DPAE dans le dossier
+  6. « Remettre au cabinet comptable » -> copie data_demo/compta/ + lien de lot
+  7. Salariés -> fiche du salarié -> « Déposer le contrat signé » (en haut) -> un des PDF
 
 Fiche candidat (parcours « contrat généré ») :
   Établissement ......... {etab}
