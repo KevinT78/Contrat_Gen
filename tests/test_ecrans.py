@@ -106,7 +106,8 @@ def main():
     voir()                                                          # ContratSigne
     c.post(f"/dossier/{uid}/dpae-faite", data={"accuse": piece()}, **fichier)
     voir()                                                          # DpaeFaite
-    c.post(f"/dossier/{uid}/remettre")
+    r = c.post(f"/dossier/{uid}/remettre")
+    assert r.headers["Location"].endswith("/salaries"), "la remise doit atterrir sur /salaries"
     texte = voir()                                                  # RemisComptable
 
     # Un dossier au bout du parcours quitte /suivi (demandes en cours) et
