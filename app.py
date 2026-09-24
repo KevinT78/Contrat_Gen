@@ -977,8 +977,8 @@ def lot(jeton):
                                      "service RH de vous en renvoyer un."), 410
     store.noter(item["id"], type="acces_lot", par=None, ip=request.remote_addr)
     return render_template("lot.html", item=item, jeton=jeton,
-                           pieces=store.fichiers(item, "pieces"),
-                           produits=store.fichiers(item, "contrat"),
+                           pieces=store.fichiers_compta(item, "pieces"),
+                           produits=store.fichiers_compta(item, "contrat"),
                            nom_export=store.nom_export)
 
 
@@ -994,7 +994,7 @@ def lot_zip(jeton):
     tampon = io.BytesIO()
     with zipfile.ZipFile(tampon, "w", zipfile.ZIP_DEFLATED) as z:
         for bucket in ("pieces", "contrat"):        # jamais _versions
-            for nom in store.fichiers(item, bucket):
+            for nom in store.fichiers_compta(item, bucket):
                 z.writestr(f"{store.BUCKETS_COMPTA[bucket]}/{store.nom_export(item, bucket, nom)}",
                            store.ouvrir(item["id"], bucket, nom))
     tampon.seek(0)
@@ -1005,7 +1005,7 @@ def lot_zip(jeton):
 @app.get("/lot/<jeton>/fichier/<bucket>/<nom>")
 def lot_fichier(jeton, bucket, nom):
     item = store.verifier_lien(jeton, "lot_comptable") or abort(410)
-    if bucket not in ("pieces", "contrat"):
+    if bucket not in ("pieces", "contrat") or nom not in store.fichiers_compta(item, bucket):
         abort(404)
     return _servir(store.ouvrir(item["id"], bucket, nom),
                    store.nom_export(item, bucket, nom), bucket)

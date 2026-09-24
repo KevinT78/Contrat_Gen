@@ -20,8 +20,8 @@
       <button {{ 'class=discret'|safe if discret }}>Déposer le contrat signé</button>
     </form>
 {% endmacro %}
-{% macro bloc_signe(apres_remise=false, indice='Facultatif') %}
-    <hr class="sep">
+{% macro bloc_signe(sep=true) %}
+    {% if sep %}<hr class="sep">{% endif %}
     <p class="titre-carte">Contrat signé</p>
     {% if contrat_signe %}
     <p style="margin:0" class="vide">Déposé le {{ date_fr(signe_le) }}.</p>
@@ -37,8 +37,6 @@
     </div>
     {% endif %}
     {{ form_signe(true) }}
-    <p class="indice">{{ indice }}{% if apres_remise %} — déposé après la remise, il partira au
-      cabinet avec « Refaire la copie et le lien »{% endif %}.</p>
     {% endif %}
 {% endmacro %}
 {% set etapes = {'Soumise': 'Demande reçue', 'ATraiter': 'À traiter',
@@ -77,6 +75,10 @@
 
 {# Salarié remis au cabinet : ses actions (lien, départ) sont sous la fiche #}
 {% set sous_fiche = etat == 'RemisComptable' and not item.purge %}
+{# Contrat signé attendu : en haut de la fiche jusqu'au dépôt #}
+{% if sous_fiche and not contrat_signe %}
+<div class="carte">{{ bloc_signe(false) }}</div>
+{% endif %}
 {% if not sous_fiche %}
 <div class="carte">
   {% if item.purge %}
@@ -156,7 +158,6 @@
     <p class="titre-carte">Déclaration préalable à l'embauche</p>
     <p class="indice">Faites la DPAE, puis déposez l'accusé ici pour passer à la transmission.</p>
     {{ form_dpae() }}
-    {{ bloc_signe(indice='Facultatif — il ne bloque ni la DPAE ni la remise : déposez-le quand il arrive') }}
 
   {% elif etat == 'DpaeFaite' %}
     <p class="titre-carte">Transmission</p>
@@ -166,7 +167,6 @@
     </div>
     <p class="indice">Remettre copiera le dossier dans <code>data/compta/</code> ; le cabinet
       recevra son lien de téléchargement (valable 30 jours) dans le prochain mail hebdomadaire.</p>
-    {{ bloc_signe() }}
 
   {% elif etat == 'Parti' %}
     <p class="titre-carte">Ancien salarié</p>
@@ -229,7 +229,7 @@
   </div>
   <p class="indice">Cela révoquera le lien précédent ; le dossier repartira dans le
     prochain mail hebdomadaire.</p>
-  {{ bloc_signe(true) }}
+  {% if contrat_signe %}{{ bloc_signe() }}{% endif %}
 </div>
 
 <h2>Départ du salarié</h2>

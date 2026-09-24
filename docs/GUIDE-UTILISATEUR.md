@@ -11,7 +11,7 @@
 3. [Le suivi RH](#3-le-suivi-rh)
 4. [Accepter la demande](#4-accepter-la-demande)
 5. [Le contrat](#5-le-contrat)
-6. [Le contrat signé (facultatif)](#6-le-contrat-signé-facultatif)
+6. [Le contrat signé](#6-le-contrat-signé)
 7. [La déclaration DPAE](#7-la-déclaration-dpae)
 8. [La remise au cabinet comptable](#8-la-remise-au-cabinet-comptable)
 9. [Rejeter une demande et la faire corriger](#9-rejeter-une-demande-et-la-faire-corriger)
@@ -113,7 +113,7 @@ Colonnes du tableau :
 | **Salarié** | Nom du candidat ; cliquer dessus ouvre le dossier. |
 | **Établissement**, **Poste** | Tels que saisis dans le formulaire. |
 | **Début** | Date de début de contrat. En **rouge** avec la mention « en retard » si elle est dépassée alors que le dossier n'est pas terminé. |
-| **État** | Étape en cours (Soumise, À traiter, Contrat prêt, DPAE faite, Rejetée, Abandonnée). Un badge **« signé manquant »** s'y ajoute tant que le contrat signé n'est pas déposé. |
+| **État** | Étape en cours (Soumise, À traiter, Contrat prêt, DPAE faite, Rejetée, Abandonnée). |
 | **Dernière activité** | Depuis quand le dossier n'a pas bougé. En rouge au-delà de 7 jours. |
 | **Pièces manquantes** | Nombre de pièces attendues et absentes, ou « — ». |
 
@@ -194,19 +194,19 @@ Le dossier est à l'état **« Contrat prêt »**. Le contrat apparaît dans **�
 
 ---
 
-## 6. Le contrat signé (facultatif)
+## 6. Le contrat signé
 
-Le contrat signé ne bloque rien : ni la DPAE, ni la remise au cabinet. À partir de l'état **« Contrat prêt »**, la carte d'action propose la DPAE et, en dessous, le dépôt du contrat signé.
+Le contrat signé ne bloque ni la DPAE, ni la remise au cabinet, mais il doit être recueilli. Il se dépose **uniquement depuis la fiche du salarié** (vue « Salariés »), une fois le dossier remis au cabinet : tant qu'il manque, le bloc « Contrat signé » s'affiche en haut de la fiche.
 
-![La carte à l'état « Contrat prêt »](pdf/img/09-contratpret-signature.png)
+![Le bloc « Contrat signé » en haut de la fiche salarié](pdf/img/11-salarie-signe.png)
 
 1. Téléchargez le contrat depuis « Documents produits ».
 2. Faites-le signer hors application (impression et signature, ou votre outil de signature habituel).
-3. Choisissez le fichier signé (PDF ou .docx) et cliquez sur **« Déposer le contrat signé »**.
+3. Ouvrez la fiche du salarié dans « Salariés », choisissez le fichier signé (PDF ou .docx) et cliquez sur **« Déposer le contrat signé »**.
 
-Le dossier ne change pas d'état : la carte affiche « Déposé le … ». Le dépôt se fait une seule fois, quand le contrat arrive : à « Contrat prêt », à « DPAE faite », ou plus tard sur la fiche du salarié (vue « Salariés »). Tant qu'il manque, le badge **« signé manquant »** le rappelle dans le suivi et dans « Salariés ». Déposé après la remise, il ne part au cabinet qu'avec **« Refaire la copie et le lien »**. Il n'est plus possible de le déposer une fois le salarié parti.
+Le dossier ne change pas d'état : le bloc quitte le haut de la fiche et « Déposé le … » s'affiche sous « Lien comptable ». Le dépôt se fait une seule fois. Tant qu'il manque, le badge **« signé manquant »** le rappelle dans « Salariés ». Il reste au dossier RH : il n'est **pas transmis au cabinet comptable**, ni dans la copie, ni dans le lien de téléchargement. Il n'est plus possible de le déposer une fois le salarié parti.
 
-> **Note :** une signature électronique intégrée (Yousign) existe en option. Si elle est activée dans la configuration, la carte propose en plus **« Envoyer à la signature »** puis **« Vérifier la signature »**, aux mêmes endroits que le dépôt manuel ; le contrat signé est alors récupéré automatiquement.
+> **Note :** une signature électronique intégrée (Yousign) existe en option. Si elle est activée dans la configuration, le bloc propose en plus **« Envoyer à la signature »** puis **« Vérifier la signature »**, au même endroit que le dépôt manuel ; le contrat signé est alors récupéré automatiquement.
 
 ---
 
@@ -214,7 +214,7 @@ Le dossier ne change pas d'état : la carte affiche « Déposé le … ». Le d�
 
 La DPAE (déclaration préalable à l'embauche) se fait sur le site de l'URSSAF, hors application, avec les informations du mail de rappel reçu à l'acceptation.
 
-![La carte « Déclaration préalable à l'embauche », contrat signé déjà déposé](pdf/img/11-contratsigne-dpae.png)
+![La carte « Déclaration préalable à l'embauche »](pdf/img/09-contratpret-dpae.png)
 
 1. Faites la déclaration et récupérez l'accusé de réception.
 2. Choisissez le fichier de l'accusé (PDF, JPG ou PNG) et cliquez sur **« Enregistrer l'accusé DPAE »**.
@@ -239,7 +239,6 @@ Le dossier passe à **« DPAE faite »**. L'accusé rejoint les documents produi
    COMPTA/BASILIC CAFE/PARIS BASTILLE/EQUIPIER POLYVALENT/BENALI SARAH - 01M2N3D8…/
        CONTRAT/
            Contrat - BENALI SARAH - 2026-09-16.docx
-           Contrat signé - BENALI SARAH - 2026-09-16.pdf
            Accusé DPAE - BENALI SARAH - 2026-09-16.pdf
        FICHE PERSONNELLE/
            Carte vitale - BENALI SARAH - 2026-09-16.pdf

@@ -5,7 +5,7 @@
 Écrit dans un dossier temporaire, ne touche jamais data/.
   - couloir Dark Kitchen : Lille Grand Place, contrat généré
   - couloir Restaurant   : Marseille Prado, contrat déposé (myrhis)
-Contrat signé facultatif, sans changer d'état. Fiche salarié générée dans contrat/ dès la
+Contrat signé non bloquant, déposé après la remise sans changer d'état. Fiche salarié générée dans contrat/ dès la
 validation. recap.py liste le salarié de la semaine. Plus les refus attendus.
 """
 import email
@@ -148,11 +148,6 @@ def couloir_dark_kitchen(c):
                     "ACME RESTAURATION SAS", "884 512 336 00027", "Lille Grand Place"):
         assert attendu in texte, f"« {attendu} » absent du contrat"
 
-    # signature manuelle : dépôt du PDF signé, sans changer d'état
-    c.post(f"/dossier/{uid}/contrat-signe", data={"signe": piece()},
-           content_type="multipart/form-data")
-    assert store.etat(store.lire(uid)) == "ContratPret", "le signé a changé l'état"
-
     # DPAE faite (accusé obligatoire)
     c.post(f"/dossier/{uid}/dpae-faite", data={}, content_type="multipart/form-data")
     assert store.etat(store.lire(uid)) == "ContratPret", "DPAE validée sans accusé"
@@ -161,7 +156,7 @@ def couloir_dark_kitchen(c):
     assert store.etat(store.lire(uid)) == "DpaeFaite"
 
     # remise : plus de mail par dossier -- copie dans data/compta/, lien dans
-    # le mail hebdo. Le lot porte contrat, contrat signé, fiche salarié, accusé.
+    # le mail hebdo. Le lot porte contrat, fiche salarié, accusé.
     c.post(f"/dossier/{uid}/remettre")
     item = store.lire(uid)
     assert store.etat(item) == "RemisComptable"
@@ -225,10 +220,7 @@ def couloir_restaurant(c):
     assert store.fichiers_role(item, "contrat", "contrat") == \
         ["Contrat - MARTIN Camille.pdf"], store.fichiers(item, "contrat")
 
-    # signature manuelle puis DPAE directe (sans rappel)
-    c.post(f"/dossier/{uid}/contrat-signe", data={"signe": piece()},
-           content_type="multipart/form-data")
-    assert store.etat(store.lire(uid)) == "ContratPret"
+    # DPAE directe (sans rappel)
     c.post(f"/dossier/{uid}/dpae-faite", data={"accuse": piece()},
            content_type="multipart/form-data")
     assert store.etat(store.lire(uid)) == "DpaeFaite"
@@ -240,11 +232,11 @@ def couloir_restaurant(c):
 
 
 def dpae_sans_signature(c):
-    """DPAE directe depuis ContratPret, contrat signé facultatif (déposé
+    """DPAE directe depuis ContratPret, contrat signé non bloquant (déposé
     après, sans changer d'état), remise sans lui."""
     uid = soumettre(c, base_saisie("ACME Sud / Marseille Prado",
                                    poste="Équipier polyvalent"))
-    # refus : pas de contrat signé avant que le contrat soit prêt
+    # refus : pas de contrat signé avant la remise
     c.post(f"/dossier/{uid}/contrat-signe", data={"signe": piece()},
            content_type="multipart/form-data")
     assert not store.fichiers_role(store.lire(uid), "contrat", "contrat-signe")
@@ -261,10 +253,17 @@ def dpae_sans_signature(c):
                content_type="multipart/form-data", follow_redirects=True)
     assert "La DPAE est déjà enregistrée." in r.text, "DPAE rejouée : mauvais message"
     assert len(store.lire(uid)["journal"]) == n
+    # refus : le signé ne se dépose qu'une fois remis (vue Salarié)
+    c.post(f"/dossier/{uid}/contrat-signe", data={"signe": piece()},
+           content_type="multipart/form-data")
+    assert not store.fichiers_role(store.lire(uid), "contrat", "contrat-signe"), \
+        "signé accepté en DPAE faite"
+    c.post(f"/dossier/{uid}/remettre")
+    assert store.etat(store.lire(uid)) == "RemisComptable"
     c.post(f"/dossier/{uid}/contrat-signe", data={"signe": piece()},
            content_type="multipart/form-data")
     item = store.lire(uid)
-    assert store.etat(item) == "DpaeFaite", "le dépôt du contrat signé a changé l'état"
+    assert store.etat(item) == "RemisComptable", "le dépôt du contrat signé a changé l'état"
     assert store.fichiers_role(item, "contrat", "contrat-signe"), store.fichiers(item, "contrat")
     assert item["journal"][-1]["type"] == "contrat_signe", item["journal"][-1]
     # un second reçu est refusé : ni écrasement, ni seconde entrée de journal
@@ -273,8 +272,6 @@ def dpae_sans_signature(c):
     apres = store.lire(uid)
     assert len(apres["journal"]) == len(item["journal"]), apres["journal"][-1]
     assert store.fichiers(apres, "contrat") == store.fichiers(item, "contrat")
-    c.post(f"/dossier/{uid}/remettre")
-    assert store.etat(store.lire(uid)) == "RemisComptable"
 
     # remise sans aucun contrat signé
     uid = soumettre(c, base_saisie("ACME Sud / Marseille Prado",

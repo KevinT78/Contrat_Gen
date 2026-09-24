@@ -365,6 +365,13 @@ def nom_export(item, bucket, nom):
     return f"{libelle}{suff} - {_qui(item)} - {date_remise(item)}{ext}"
 
 
+def fichiers_compta(item, bucket):
+    """Fichiers d'un bucket partages avec le cabinet (copie COMPTA/, lot) : tout
+    sauf le contrat signe, garde cote RH pour l'instant."""
+    return [f for f in fichiers(item, bucket)
+            if not (bucket == "contrat" and _extraire_role(f) == "contrat-signe")]
+
+
 def copier_compta(item):
     """Duplique les pieces dans data/COMPTA/<GROUPE>/<ETABLISSEMENT>/<POSTE>/
     <NOM PRENOM - id>/{FICHE PERSONNELLE,CONTRAT}/, le dossier que le cabinet
@@ -380,7 +387,7 @@ def copier_compta(item):
     for bucket in ("pieces", "contrat"):           # jamais _versions
         sous = dest / BUCKETS_COMPTA[bucket]
         sous.mkdir(parents=True, exist_ok=True)
-        for nom_f in fichiers(item, bucket):
+        for nom_f in fichiers_compta(item, bucket):
             (sous / nom_export(item, bucket, nom_f)).write_bytes(
                 ouvrir(item["id"], bucket, nom_f))
     return dest
@@ -403,13 +410,13 @@ def fichiers_role(item, bucket, role):
     return [f for f in fichiers(item, bucket) if _extraire_role(f) == role_propre]
 
 
-# Etats ou le contrat signe peut se deposer (ou partir en signature) : des le
-# contrat pret, sans bloquer la suite. ContratSigne = dossiers herites.
-SIGNE_DEPOSABLE = {"ContratPret", "ContratSigne", "DpaeFaite", "RemisComptable"}
+# Etat ou le contrat signe peut se deposer (ou partir en signature) : une fois
+# le salarie remis au cabinet, depuis sa fiche dans la vue Salaries.
+SIGNE_DEPOSABLE = {"RemisComptable"}
 
 
 def signe_manquant(item):
-    """Contrat signe attendu mais pas encore depose (badge suivi/salaries,
+    """Contrat signe attendu mais pas encore depose (badge salaries,
     garde du depot et de l'envoi en signature)."""
     return (etat(item) in SIGNE_DEPOSABLE and not item.get("purge")
             and not fichiers_role(item, "contrat", "contrat-signe"))

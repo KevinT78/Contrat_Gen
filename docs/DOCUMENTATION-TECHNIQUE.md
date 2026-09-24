@@ -166,17 +166,17 @@ Chaque entrée porte au minimum `de`, `vers`, `le` (ISO 8601 UTC) et `par`. Une 
     {"de": "Soumise", "vers": "ATraiter", "le": "2026-09-16T12:35:20+00:00", "par": "rh"},
     {"de": "ATraiter", "vers": "ContratPret", "le": "2026-09-16T12:35:20+00:00", "par": "rh",
      "modele": "Equipier.html"},
-    {"de": "ContratPret", "vers": "ContratPret", "le": "2026-09-16T12:35:23+00:00", "par": "rh",
-     "type": "contrat_signe"},
     {"de": "ContratPret", "vers": "DpaeFaite", "le": "2026-09-16T12:35:24+00:00", "par": "rh"},
     {"de": "DpaeFaite", "vers": "RemisComptable", "le": "2026-09-16T12:35:25+00:00", "par": "rh"},
+    {"de": "RemisComptable", "vers": "RemisComptable", "le": "2026-09-16T12:35:27+00:00", "par": "rh",
+     "type": "contrat_signe"},
     {"de": "RemisComptable", "vers": "RemisComptable", "le": "2026-09-16T12:35:29+00:00",
      "type": "acces_lot", "par": null, "ip": "127.0.0.1"}
   ]
 }
 ```
 
-Types d'événements écrits par `store.noter()` : `fiche_salarie`, `fiche_echouee`, `mail_echoue`, `signature_envoyee`, `contrat_signe` (contrat signé déposé, facultatif, sans changer d'état), `renvoi_comptable`, `acces_lot`. S'y ajoute `purge`, posé par `store.purger()` au moment où il allège le journal. Un rejet ajoute `motif` et `commentaire` ; une correction ajoute `motif: "correction"`.
+Types d'événements écrits par `store.noter()` : `fiche_salarie`, `fiche_echouee`, `mail_echoue`, `signature_envoyee`, `contrat_signe` (contrat signé déposé, non bloquant, seulement en `RemisComptable`, sans changer d'état ; exclu de la copie `COMPTA/` et du lot par `store.fichiers_compta()`), `renvoi_comptable`, `acces_lot`. S'y ajoute `purge`, posé par `store.purger()` au moment où il allège le journal. Un rejet ajoute `motif` et `commentaire` ; une correction ajoute `motif: "correction"`.
 
 ![Le journal tel qu'affiché dans la fiche du dossier](pdf/img/15-journal.png)
 
@@ -196,7 +196,7 @@ data/
 │   └── <Société>/<Établissement>/<Poste>/<NOM Prénom>/
 │       ├── dossier.json                # journal append-only
 │       ├── FICHE PERSONNELLE/          # pièces renommées, fiche salarié
-│       ├── CONTRAT/                    # contrat .docx, contrat signé, accusé DPAE
+│       ├── CONTRAT/                    # contrat .docx, accusé DPAE (jamais le contrat signé)
 │       └── _versions/                  # fichiers remplacés, horodatés
 ├── COMPTA/
 │   └── <SOCIÉTÉ>/<ÉTABLISSEMENT>/<POSTE>/<NOM Prénom - ULID>/
@@ -284,7 +284,7 @@ Notes :
 - `templates` accepte aussi la forme simple `{"Manager": "Manager.docx"}`. En forme liste, la **première** règle dont tous les `quand` correspondent aux champs du dossier l'emporte : mettre les cas particuliers avant le cas général. Une règle `{"quand": {...}, "modele": null}` marque une **exclusion volontaire** (croisement identifié, mais sans contrat à produire) plutôt que d'omettre la règle ; `doctor` l'affiche « exclu (volontaire) », distinct d'un cas oublié (`✗`). Les deux formes lisent `null` pareil : en forme simple, `{"Manager": null}` exclut le poste de la même façon.
 - Le garde-fou de démarrage (`_verifier_regles`) refuse une règle `templates` en liste dont une clé de `quand` n'est pas un champ du formulaire, dont la valeur ne correspond à aucune option du champ visé, ou — pour le champ `etablissement` — qui écrit le nom d'un site seul au lieu de la clé complète « Société / Établissement » (il propose alors la bonne clé). Une règle ou un `quand` qui n'est pas un objet est refusé sans faire planter le garde-fou lui-même.
 - `stockage.mode` vaut `local` (répertoire `data/` de l'instance) ou `dossier` avec une clé `chemin` (répertoire synchronisé).
-- Le contrat signé est facultatif : la DPAE se déclare dès `ContratPret`. `store.signe_manquant()` décide à la fois du badge « signé manquant » (suivi, « En poste ») et de l'autorisation du dépôt manuel ou de l'envoi Yousign : état dans `store.SIGNE_DEPOSABLE` (`ContratPret` à `RemisComptable`), dossier non purgé, aucun signé déjà déposé. L'ancienne clé `signature.avant_dpae` est ignorée ; `doctor` la signale comme obsolète sans changer son verdict. Les dossiers déjà écrits à `ContratSigne` s'affichent sur l'étape « Contrat prêt » et passent à la DPAE.
+- Le contrat signé ne bloque rien (à recueillir tout de même) : la DPAE se déclare dès `ContratPret`. `store.signe_manquant()` décide à la fois du badge « signé manquant » (« Salariés ») et de l'autorisation du dépôt manuel ou de l'envoi Yousign : état dans `store.SIGNE_DEPOSABLE` (`RemisComptable` seulement : dépôt depuis la fiche salarié), dossier non purgé, aucun signé déjà déposé. L'ancienne clé `signature.avant_dpae` est ignorée ; `doctor` la signale comme obsolète sans changer son verdict. Les dossiers déjà écrits à `ContratSigne` s'affichent sur l'étape « Contrat prêt » et passent à la DPAE.
 - `conservation` absent = aucune purge. `jours` et `jours_candidature` sont des entiers strictement positifs ; `apres` liste des états de `store.ETATS`.
 - `critiques` : jetons qui doivent avoir une valeur non vide à la génération, en plus des champs requis du formulaire.
 - `saisie_rh` : jetons qu'aucun champ ne fournit ; la RH les saisit sur l'écran « À traiter » avant de générer.

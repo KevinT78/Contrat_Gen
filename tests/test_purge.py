@@ -82,11 +82,11 @@ def parcours_jusqua_remis(c):
 
     c.post(f"/dossier/{uid}/valider")
     assert store.etat(store.lire(uid)) == "ContratPret"
-    c.post(f"/dossier/{uid}/contrat-signe", data={"signe": piece()},
-           content_type="multipart/form-data")
     c.post(f"/dossier/{uid}/dpae-faite", data={"accuse": piece()},
            content_type="multipart/form-data")
     c.post(f"/dossier/{uid}/remettre")
+    c.post(f"/dossier/{uid}/contrat-signe", data={"signe": piece()},
+           content_type="multipart/form-data")
     item = store.lire(uid)
     assert store.etat(item) == "RemisComptable", item["journal"][-1]
     # une note récente APRÈS l'entrée dans l'état : _entree_etat_courant ne doit
@@ -138,11 +138,11 @@ def main():
     recent = soumettre(c, {**saisie(poste="Assistant manager"), **temoin,
                            "nom_naissance": "Recent", "prenom": "Max"})
     c.post(f"/dossier/{recent}/valider")
-    c.post(f"/dossier/{recent}/contrat-signe", data={"signe": piece()},
-           content_type="multipart/form-data")
     c.post(f"/dossier/{recent}/dpae-faite", data={"accuse": piece()},
            content_type="multipart/form-data")
     c.post(f"/dossier/{recent}/remettre")
+    c.post(f"/dossier/{recent}/contrat-signe", data={"signe": piece()},
+           content_type="multipart/form-data")
 
     config.instance()["conservation"] = {
         "jours": 30, "jours_candidature": 10,

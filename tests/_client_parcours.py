@@ -120,22 +120,34 @@ def couloir(c, etab, mode, poste, attendus):
                content_type="multipart/form-data")
         assert store.etat(store.lire(uid)) == "ContratPret"
 
-    c.post(f"/dossier/{uid}/contrat-signe", data={"signe": f()},
-           content_type="multipart/form-data")
-    assert store.etat(store.lire(uid)) == "ContratPret", "le signé a changé l'état"
     c.post(f"/dossier/{uid}/dpae-faite", data={"accuse": f()},
            content_type="multipart/form-data")
     assert store.etat(store.lire(uid)) == "DpaeFaite"
     c.post(f"/dossier/{uid}/remettre")
+    assert store.etat(store.lire(uid)) == "RemisComptable"
+    # signé déposé depuis la fiche salarié : reste côté RH, même après un renvoi
+    c.post(f"/dossier/{uid}/contrat-signe", data={"signe": f()},
+           content_type="multipart/form-data")
+    assert store.etat(store.lire(uid)) == "RemisComptable", "le signé a changé l'état"
+    c.post(f"/dossier/{uid}/renvoyer")
     item = store.lire(uid)
-    assert store.etat(item) == "RemisComptable"
+    signe = store.fichiers_role(item, "contrat", "contrat-signe")
+    assert signe, store.fichiers(item, "contrat")
+    export = store.nom_export(item, "contrat", signe[0])
 
     jeton = store.signer("lot_comptable", uid, item.get("lien_comptable_epoch", 0))
-    z = zipfile.ZipFile(io.BytesIO(app.test_client().get(f"/lot/{jeton}/zip").data))
-    assert f"CONTRAT/{store.nom_export(item, 'contrat', 'contrat-signe.pdf')}" \
-        in z.namelist(), z.namelist()
-    lot = html.unescape(app.test_client().get(f"/lot/{jeton}").text)
+    anonyme = app.test_client()
+    z = zipfile.ZipFile(io.BytesIO(anonyme.get(f"/lot/{jeton}/zip").data))
+    assert f"CONTRAT/{export}" not in z.namelist(), "contrat signé dans le zip du cabinet"
+    assert any(n.startswith("CONTRAT/Contrat - ") for n in z.namelist()), z.namelist()
+    from urllib.parse import quote
+    assert anonyme.get(f"/lot/{jeton}/fichier/contrat/{quote(signe[0])}").status_code == 404, \
+        "contrat signé téléchargeable par le lien du cabinet"
+    copie = store.copier_compta(item)
+    assert not (copie / "CONTRAT" / export).exists(), "contrat signé copié dans COMPTA/"
+    lot = html.unescape(anonyme.get(f"/lot/{jeton}").text)
     assert poste in lot and etab in lot, "page du lot comptable : champ lu en dur"
+    assert "Contrat signé" not in lot, "contrat signé listé sur la page du lot"
     return uid
 
 
