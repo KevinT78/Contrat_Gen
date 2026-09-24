@@ -149,6 +149,65 @@ def main():
     c.post(f"/dossier/{uid}/abandonner")
     voir()                                                          # Abandonnee
 
+    # DPAE sans attendre la signature : pas d'étape « Contrat signé » dans la
+    # frise, formulaire DPAE dès ContratPret, dépôt du signé en secondaire.
+    sig = config.instance().setdefault("signature", {})
+    # Dossier déjà à ContratSigne quand le client passe en mode sans attente :
+    # la frise garde son étape (sinon pas d'étape courante), la DPAE reste possible.
+    ancien = soumettre(c, ETAB_DEPOSE)
+    c.post(f"/dossier/{ancien}/valider")
+    c.post(f"/dossier/{ancien}/contrat-depose", data={"contrat": piece()}, **fichier)
+    c.post(f"/dossier/{ancien}/contrat-signe", data={"signe": piece()}, **fichier)
+    assert store.etat(store.lire(ancien)) == "ContratSigne"
+    sig["avant_dpae"] = False
+    try:
+        texte = ecran(c, f"/dossier/{ancien}")
+        frise = texte[texte.index('class="etapes"'):]
+        assert "Contrat signé" in frise[:frise.index("</ul>")], "étape perdue"
+        assert f'action="/dossier/{ancien}/dpae-faite"' in texte, "DPAE absente après bascule"
+        c.post(f"/dossier/{ancien}/dpae-faite", data={"accuse": piece()}, **fichier)
+        assert store.etat(store.lire(ancien)) == "DpaeFaite", "DPAE refusée après bascule"
+
+        uid = soumettre(c, ETAB_DEPOSE)
+        c.post(f"/dossier/{uid}/valider")
+        c.post(f"/dossier/{uid}/contrat-depose", data={"contrat": piece()}, **fichier)
+        texte = voir()                                              # ContratPret
+        frise = texte[texte.index('class="etapes"'):]
+        frise = frise[:frise.index("</ul>")]
+        assert "Contrat signé" not in frise, frise
+        assert f'action="/dossier/{uid}/dpae-faite"' in texte, "formulaire DPAE absent"
+        assert f'action="/dossier/{uid}/contrat-signe"' in texte, "dépôt du signé absent"
+        # Yousign : boutons présents tant que le signé manque, masqués ensuite
+        # (sur un dossier jetable, pour garder l'autre sans contrat signé)
+        sig["mode"] = "yousign"
+        try:
+            autre = soumettre(c, ETAB_DEPOSE)
+            c.post(f"/dossier/{autre}/valider")
+            c.post(f"/dossier/{autre}/contrat-depose", data={"contrat": piece()}, **fichier)
+            envoi = f'action="/dossier/{autre}/signature-envoyer"'
+            assert envoi in ecran(c, f"/dossier/{autre}"), "Yousign absent avant le signé"
+            c.post(f"/dossier/{autre}/contrat-signe", data={"signe": piece()}, **fichier)
+            texte = ecran(c, f"/dossier/{autre}")
+            assert envoi not in texte and "Déposé le" in texte, "Yousign encore proposé après le signé"
+        finally:
+            sig["mode"] = "manuel"
+        c.post(f"/dossier/{uid}/dpae-faite", data={"accuse": piece()}, **fichier)
+        texte = voir()                                              # DpaeFaite
+        assert f'action="/dossier/{uid}/contrat-signe"' in texte, "dépôt tardif absent"
+        verif = f'action="/dossier/{uid}/signature-verifier"'
+        assert verif not in texte, "Vérifier sans envoi à la signature"
+        # envoyé à Yousign avant la DPAE : la vérification reste possible après
+        sig["mode"] = "yousign"
+        store.noter(uid, type="signature_envoyee", par="rh", procedure="p-test")
+        try:
+            assert verif in voir(), "Vérifier la signature absent après la DPAE"
+        finally:
+            sig["mode"] = "manuel"
+        c.post(f"/dossier/{uid}/contrat-signe", data={"signe": piece()}, **fichier)
+        assert "Déposé le" in voir(), "date de dépôt du signé absente"
+    finally:
+        del sig["avant_dpae"]
+
     manque = set(store.ETATS) - vus
     assert not manque, f"états jamais rendus : {sorted(manque)}"
     print(f"ÉCRANS OK — {len(vus)} états rendus, {config.DONNEES}")

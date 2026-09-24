@@ -174,7 +174,7 @@ Chaque entrée porte au minimum `de`, `vers`, `le` (ISO 8601 UTC) et `par`. Une 
 }
 ```
 
-Types d'événements écrits par `store.noter()` : `fiche_salarie`, `fiche_echouee`, `mail_echoue`, `signature_envoyee`, `renvoi_comptable`, `acces_lot`. S'y ajoute `purge`, posé par `store.purger()` au moment où il allège le journal. Un rejet ajoute `motif` et `commentaire` ; une correction ajoute `motif: "correction"`.
+Types d'événements écrits par `store.noter()` : `fiche_salarie`, `fiche_echouee`, `mail_echoue`, `signature_envoyee`, `contrat_signe` (contrat signé déposé quand `signature.avant_dpae` vaut `false`), `renvoi_comptable`, `acces_lot`. S'y ajoute `purge`, posé par `store.purger()` au moment où il allège le journal. Un rejet ajoute `motif` et `commentaire` ; une correction ajoute `motif: "correction"`.
 
 ![Le journal tel qu'affiché dans la fiche du dossier](pdf/img/15-journal.png)
 
@@ -282,6 +282,7 @@ Notes :
 - `templates` accepte aussi la forme simple `{"Manager": "Manager.docx"}`. En forme liste, la **première** règle dont tous les `quand` correspondent aux champs du dossier l'emporte : mettre les cas particuliers avant le cas général. Une règle `{"quand": {...}, "modele": null}` marque une **exclusion volontaire** (croisement identifié, mais sans contrat à produire) plutôt que d'omettre la règle ; `doctor` l'affiche « exclu (volontaire) », distinct d'un cas oublié (`✗`). Les deux formes lisent `null` pareil : en forme simple, `{"Manager": null}` exclut le poste de la même façon.
 - Le garde-fou de démarrage (`_verifier_regles`) refuse une règle `templates` en liste dont une clé de `quand` n'est pas un champ du formulaire, dont la valeur ne correspond à aucune option du champ visé, ou — pour le champ `etablissement` — qui écrit le nom d'un site seul au lieu de la clé complète « Société / Établissement » (il propose alors la bonne clé). Une règle ou un `quand` qui n'est pas un objet est refusé sans faire planter le garde-fou lui-même.
 - `stockage.mode` vaut `local` (répertoire `data/` de l'instance) ou `dossier` avec une clé `chemin` (répertoire synchronisé).
+- `signature.avant_dpae` : `true` par défaut (clé absente). `false` = la DPAE se déclare dès `ContratPret` (`store.permises()` ajoute `ContratPret → DpaeFaite`) ; `ContratSigne` n'est alors jamais atteint et le contrat signé se dépose à tout moment, sans changer d'état. Une valeur non booléenne refuse le démarrage.
 - `conservation` absent = aucune purge. `jours` et `jours_candidature` sont des entiers strictement positifs ; `apres` liste des états de `store.ETATS`.
 - `critiques` : jetons qui doivent avoir une valeur non vide à la génération, en plus des champs requis du formulaire.
 - `saisie_rh` : jetons qu'aucun champ ne fournit ; la RH les saisit sur l'écran « À traiter » avant de générer.

@@ -455,9 +455,17 @@ def detail(uid):
     # candidat -- affichage seul, le stockage disque ne bouge pas.
     fiche = store.fichiers_role(item, "pieces", "fiche-salarie")
     etat = store.etat(item)
+    signe_le = next((e["le"][:10] for e in reversed(item["journal"])
+                     if e.get("type") == "contrat_signe" or e.get("vers") == "ContratSigne"), None)
     return render_template("dossier.html", item=item, etat=etat,
                            vue="salaries" if etat in store.TERMINES else "suivi",
-                           inactifs=store.INACTIFS, transitions=store.TRANSITIONS,
+                           inactifs=store.INACTIFS,
+                           transitions={e: store.permises(e) for e in store.TRANSITIONS},
+                           avant_dpae=config.signature_avant_dpae(),
+                           contrat_signe=store.fichiers_role(item, "contrat", "contrat-signe"),
+                           signe_le=signe_le,
+                           signature_envoyee=any(e.get("type") == "signature_envoyee"
+                                                 for e in item["journal"]),
                            pieces=[f for f in store.fichiers(item, "pieces")
                                   if f not in fiche],
                            produits=[(f, "contrat") for f in store.fichiers(item, "contrat")]
@@ -511,6 +519,35 @@ def _transition(uid, vers, **extra):
     except ValueError as e:
         flash(str(e), "erreur")
         return None
+
+
+# Sans signature avant DPAE, le contrat signe se depose a tout moment une fois
+# le contrat pret -- ContratSigne reste pour les dossiers passes par l'autre mode.
+_SIGNE_DEPOSABLE = {"ContratPret", "ContratSigne", "DpaeFaite", "RemisComptable"}
+
+
+def _contrat_signe_recu(item, ecrire, **extra):
+    """Contrat signe recu (depot manuel ou Yousign) ; `ecrire` pose le fichier.
+    Signature avant DPAE : transition ContratSigne, comme toujours. Sinon :
+    depot facultatif note au journal, sans changer d'etat. True si enregistre."""
+    avant = config.signature_avant_dpae()
+    if not avant and (item.get("purge") or store.etat(item) not in _SIGNE_DEPOSABLE):
+        flash("Pas de contrat signé à déposer à ce stade du dossier.", "erreur")
+        return False
+    # Un seul recu : un second clic (Yousign) ecraserait le fichier, archiverait
+    # l'ancien et deplacerait la date « Deposé le ».
+    if not avant and store.fichiers_role(item, "contrat", "contrat-signe"):
+        flash("Le contrat signé est déjà déposé.", "erreur")
+        return False
+    try:
+        ecrire()
+    except ValueError as e:
+        flash(str(e), "erreur")
+        return False
+    if avant:
+        return _transition(item["id"], "ContratSigne", **extra) is not None
+    store.noter(item["id"], type="contrat_signe", par=session["utilisateur"], **extra)
+    return True
 
 
 def _pieces_du_dossier(item):
@@ -745,18 +782,14 @@ def contrat_depose(uid):
 @rh
 def contrat_signe(uid):
     """Signature manuelle : la RH dépose le contrat signé hors app."""
-    store.lire(uid) or abort(404)
+    item = store.lire(uid) or abort(404)
     f = request.files.get("signe")
     if not (f and f.filename):
         flash("Le contrat signé est obligatoire.", "erreur")
         return redirect(url_for("detail", uid=uid))
-    try:
-        store.deposer(uid, "contrat", "contrat-signe", f, extensions=CONTRAT_EXT)
-    except ValueError as e:
-        flash(str(e), "erreur")
-        return redirect(url_for("detail", uid=uid))
-    _transition(uid, "ContratSigne")
-    flash("Contrat signé enregistré.", "ok")
+    if _contrat_signe_recu(item, lambda: store.deposer(uid, "contrat", "contrat-signe", f,
+                                                       extensions=CONTRAT_EXT)):
+        flash("Contrat signé enregistré.", "ok")
     return redirect(url_for("detail", uid=uid))
 
 
@@ -802,10 +835,10 @@ def signature_verifier(uid):
     if not pdf:
         flash("La signature n'est pas encore terminée.", "ok")
         return redirect(url_for("detail", uid=uid))
-    store.poser_octets(item["id"], "contrat",
-                       store.nom_piece(item, "contrat-signe", ".pdf"), pdf)
-    _transition(uid, "ContratSigne", procedure=pid)
-    flash("Contrat signé récupéré.", "ok")
+    if _contrat_signe_recu(item, lambda: store.poser_octets(
+            item["id"], "contrat", store.nom_piece(item, "contrat-signe", ".pdf"), pdf),
+            procedure=pid):
+        flash("Contrat signé récupéré.", "ok")
     return redirect(url_for("detail", uid=uid))
 
 
@@ -813,8 +846,13 @@ def signature_verifier(uid):
 @rh
 def dpae_faite(uid):
     item = store.lire(uid) or abort(404)
-    if "DpaeFaite" not in store.TRANSITIONS.get(store.etat(item), set()):
-        flash("La DPAE ne peut être déclarée qu'une fois le contrat signé.", "erreur")
+    if any(e.get("vers") == "DpaeFaite" for e in item["journal"]):
+        # POST rejoué (double clic, second onglet) : dire la vraie raison
+        flash("La DPAE est déjà enregistrée.", "erreur")
+        return redirect(url_for("detail", uid=uid))
+    if "DpaeFaite" not in store.permises(store.etat(item)):
+        flash("La DPAE ne peut être déclarée qu'une fois le contrat "
+              + ("signé." if config.signature_avant_dpae() else "prêt."), "erreur")
         return redirect(url_for("detail", uid=uid))
     accuse = request.files.get("accuse")
     if not (accuse and accuse.filename):

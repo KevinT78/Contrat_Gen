@@ -244,6 +244,63 @@ def couloir_restaurant(c):
     return uid
 
 
+def dpae_sans_signature(c):
+    """`signature.avant_dpae: false` : DPAE directe depuis ContratPret, contrat
+    signé facultatif (déposé après, sans changer d'état), remise sans lui.
+    Le défaut (clé absente) reste couvert par les deux couloirs ci-dessus."""
+    sig = config.instance().setdefault("signature", {})
+    sig["avant_dpae"] = False
+    try:
+        uid = soumettre(c, base_saisie("ACME Sud / Marseille Prado",
+                                       poste="Équipier polyvalent"))
+        # refus : pas de contrat signé avant que le contrat soit prêt
+        c.post(f"/dossier/{uid}/contrat-signe", data={"signe": piece()},
+               content_type="multipart/form-data")
+        assert not store.fichiers_role(store.lire(uid), "contrat", "contrat-signe")
+        c.post(f"/dossier/{uid}/valider")
+        c.post(f"/dossier/{uid}/contrat-depose", data={"contrat": piece()},
+               content_type="multipart/form-data")
+        assert store.etat(store.lire(uid)) == "ContratPret"
+        c.post(f"/dossier/{uid}/dpae-faite", data={"accuse": piece()},
+               content_type="multipart/form-data")
+        assert store.etat(store.lire(uid)) == "DpaeFaite", "DPAE refusée sans signature"
+        # POST rejoué (second onglet) : la vraie raison, pas « contrat prêt »
+        n = len(store.lire(uid)["journal"])
+        r = c.post(f"/dossier/{uid}/dpae-faite", data={"accuse": piece()},
+                   content_type="multipart/form-data", follow_redirects=True)
+        assert "La DPAE est déjà enregistrée." in r.text, "DPAE rejouée : mauvais message"
+        assert len(store.lire(uid)["journal"]) == n
+        c.post(f"/dossier/{uid}/contrat-signe", data={"signe": piece()},
+               content_type="multipart/form-data")
+        item = store.lire(uid)
+        assert store.etat(item) == "DpaeFaite", "le dépôt du contrat signé a changé l'état"
+        assert store.fichiers_role(item, "contrat", "contrat-signe"), store.fichiers(item, "contrat")
+        assert item["journal"][-1]["type"] == "contrat_signe", item["journal"][-1]
+        # un second reçu est refusé : ni écrasement, ni seconde entrée de journal
+        c.post(f"/dossier/{uid}/contrat-signe", data={"signe": piece()},
+               content_type="multipart/form-data")
+        apres = store.lire(uid)
+        assert len(apres["journal"]) == len(item["journal"]), apres["journal"][-1]
+        assert store.fichiers(apres, "contrat") == store.fichiers(item, "contrat")
+        c.post(f"/dossier/{uid}/remettre")
+        assert store.etat(store.lire(uid)) == "RemisComptable"
+
+        # remise sans aucun contrat signé
+        uid = soumettre(c, base_saisie("ACME Sud / Marseille Prado",
+                                       poste="Équipier polyvalent"))
+        c.post(f"/dossier/{uid}/valider")
+        c.post(f"/dossier/{uid}/contrat-depose", data={"contrat": piece()},
+               content_type="multipart/form-data")
+        c.post(f"/dossier/{uid}/dpae-faite", data={"accuse": piece()},
+               content_type="multipart/form-data")
+        c.post(f"/dossier/{uid}/remettre")
+        item = store.lire(uid)
+        assert store.etat(item) == "RemisComptable", item["journal"][-1]
+        assert not store.fichiers_role(item, "contrat", "contrat-signe")
+    finally:
+        del sig["avant_dpae"]
+
+
 def depart_leaver(c, uid):
     """Départ d'un salarié remis au comptable : déplacement réel vers LEAVERS/,
     rejouable si l'écriture du journal échoue APRÈS le move (disque plein...),
@@ -437,6 +494,7 @@ def main():
     contrat_peut_citer_les_pieces_jointes(c)
     valider_survit_a_un_etablissement_retire(c)
     rejet_part_au_manager_de_l_etablissement(c)
+    dpae_sans_signature(c)
     recap_liste_la_semaine([dk, resto])
     depart_leaver(c, dk)               # apres recap : Parti sort de remis_depuis()
 

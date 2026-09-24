@@ -3,6 +3,43 @@
 {% block corps %}
 {% set flux = ['Soumise', 'ATraiter', 'ContratPret', 'ContratSigne', 'DpaeFaite',
                'RemisComptable'] %}
+{# DPAE sans attendre la signature : pas d'étape « Contrat signé » (sauf dossier déjà dedans) #}
+{% if not avant_dpae and etat != 'ContratSigne' %}{% set flux = flux|reject('eq', 'ContratSigne')|list %}{% endif %}
+{% macro form_dpae() %}
+    <form method="post" action="{{ url_for('dpae_faite', uid=item.id) }}"
+          enctype="multipart/form-data" class="actions">
+      <div class="champ" style="flex:1 1 320px">
+        <label for="accuse">Accusé DPAE (PDF)</label>
+        <input type="file" name="accuse" id="accuse" accept=".pdf,.jpg,.jpeg,.png"></div>
+      <button>Enregistrer l'accusé DPAE</button>
+    </form>
+{% endmacro %}
+{% macro form_signe(discret) %}
+    <form method="post" action="{{ url_for('contrat_signe', uid=item.id) }}"
+          enctype="multipart/form-data" class="actions">
+      <div class="champ" style="flex:1 1 320px">
+        <label for="signe">Contrat signé (PDF ou .docx)</label>
+        <input type="file" name="signe" id="signe" accept=".pdf,.docx"></div>
+      <button {{ 'class=discret'|safe if discret }}>Déposer le contrat signé</button>
+    </form>
+{% endmacro %}
+{% macro bloc_signe(apres_remise=false) %}
+    {% if not avant_dpae %}
+    <hr class="sep">
+    <p class="titre-carte">Contrat signé</p>
+    {% if contrat_signe %}
+    <p style="margin:0" class="vide">Déposé le {{ date_fr(signe_le) }}.</p>
+    {% else %}
+    {% if signature_esign and signature_envoyee %}
+    <form method="post" action="{{ url_for('signature_verifier', uid=item.id) }}" class="actions">
+      <button class="discret">Vérifier la signature</button></form>
+    {% endif %}
+    {{ form_signe(true) }}
+    <p class="indice">Facultatif{% if apres_remise %} — déposé après la remise, il partira au
+      cabinet avec « Refaire la copie et le lien »{% endif %}.</p>
+    {% endif %}
+    {% endif %}
+{% endmacro %}
 {% set etapes = {'Soumise': 'Demande reçue', 'ATraiter': 'À traiter',
                  'ContratPret': 'Contrat prêt', 'ContratSigne': 'Contrat signé',
                  'DpaeFaite': 'DPAE faite', 'RemisComptable': 'Remis au comptable'} %}
@@ -110,6 +147,27 @@
       avec les informations saisies ci-dessus{% endif %}.</p>
     {% endif %}
 
+  {% elif etat == 'ContratPret' and not avant_dpae %}
+    <p class="titre-carte">Déclaration préalable à l'embauche</p>
+    <p class="indice">Faites la DPAE, puis déposez l'accusé ici pour passer à la transmission.</p>
+    {{ form_dpae() }}
+    <hr class="sep">
+    <p class="titre-carte">Contrat signé (facultatif)</p>
+    {% if contrat_signe %}
+    <p style="margin:0" class="vide">Déposé le {{ date_fr(signe_le) }}.</p>
+    {% else %}
+    {% if signature_esign %}
+    <div class="actions">
+      <form method="post" action="{{ url_for('signature_envoyer', uid=item.id) }}">
+        <button class="discret">Envoyer à la signature</button></form>
+      <form method="post" action="{{ url_for('signature_verifier', uid=item.id) }}">
+        <button class="discret">Vérifier la signature</button></form>
+    </div>
+    {% endif %}
+    {{ form_signe(true) }}
+    <p class="indice">Il ne bloque ni la DPAE ni la remise : déposez-le quand il arrive.</p>
+    {% endif %}
+
   {% elif etat == 'ContratPret' %}
     <p class="titre-carte">Signature</p>
     {% if signature_esign %}
@@ -121,26 +179,14 @@
     </div>
     <hr class="sep">
     {% endif %}
-    <form method="post" action="{{ url_for('contrat_signe', uid=item.id) }}"
-          enctype="multipart/form-data" class="actions">
-      <div class="champ" style="flex:1 1 320px">
-        <label for="signe">Contrat signé (PDF ou .docx)</label>
-        <input type="file" name="signe" id="signe" accept=".pdf,.docx"></div>
-      <button {{ 'class=discret'|safe if signature_esign }}>Déposer le contrat signé</button>
-    </form>
+    {{ form_signe(signature_esign) }}
     <p class="indice">Une fois le contrat signé déposé, le dossier passera à l'étape DPAE.</p>
 
   {% elif etat == 'ContratSigne' %}
     <p class="titre-carte">Déclaration préalable à l'embauche</p>
     <p class="indice">Un rappel DPAE a été envoyé par mail lors de l'acceptation de la
       demande. Faites la DPAE, puis déposez l'accusé ici pour passer à la transmission.</p>
-    <form method="post" action="{{ url_for('dpae_faite', uid=item.id) }}"
-          enctype="multipart/form-data" class="actions">
-      <div class="champ" style="flex:1 1 320px">
-        <label for="accuse">Accusé DPAE (PDF)</label>
-        <input type="file" name="accuse" id="accuse" accept=".pdf,.jpg,.jpeg,.png"></div>
-      <button>Enregistrer l'accusé DPAE</button>
-    </form>
+    {{ form_dpae() }}
 
   {% elif etat == 'DpaeFaite' %}
     <p class="titre-carte">Transmission</p>
@@ -150,6 +196,7 @@
     </div>
     <p class="indice">Remettre copiera le dossier dans <code>data/compta/</code> ; le cabinet
       recevra son lien de téléchargement (valable 30 jours) dans le prochain mail hebdomadaire.</p>
+    {{ bloc_signe() }}
 
   {% elif etat == 'RemisComptable' %}
     <p class="titre-carte">Départ du salarié</p>
@@ -170,6 +217,7 @@
     </div>
     <p class="indice">Cela révoquera le lien précédent ; le dossier repartira dans le
       prochain mail hebdomadaire.</p>
+    {{ bloc_signe(true) }}
 
   {% elif etat == 'Parti' %}
     <p class="titre-carte">Ancien salarié</p>

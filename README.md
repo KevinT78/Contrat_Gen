@@ -343,6 +343,11 @@ Les deux voies mènent à `ContratPret`, puis à `ContratSigne`.
 
 - **`"signature": {"mode": "manuel"}`** (défaut) : la RH télécharge le contrat, le
   fait signer hors app, dépose le PDF signé → `ContratSigne`.
+- **`"avant_dpae": false`** (dans le même bloc ; absent = `true`) : pour un client qui
+  déclare la DPAE sans attendre la signature. La DPAE se fait dès `ContratPret` ;
+  le contrat signé devient un dépôt facultatif, possible à tout moment ensuite, noté
+  au journal (`contrat_signe`) sans changer d'état — il ne bloque ni la DPAE ni la
+  remise. Arrivé après la remise, il part avec « Refaire la copie et le lien ».
 
 ## La démo en 5 minutes
 

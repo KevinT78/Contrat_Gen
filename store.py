@@ -589,11 +589,21 @@ def rejeter(uid, motif, commentaire, par):
         _ecrire(d, item)
 
 
+def permises(de):
+    """Transitions permises depuis `de` pour CETTE instance : TRANSITIONS,
+    plus le raccourci ContratPret -> DpaeFaite quand le client declare la DPAE
+    sans attendre le contrat signe (ContratSigne n'est alors jamais atteint)."""
+    t = TRANSITIONS.get(de, set())
+    if de == "ContratPret" and not config.signature_avant_dpae():
+        t = t | {"DpaeFaite"}
+    return t
+
+
 def transition(uid, vers, par, **extra):
     with _verrou(uid):
         item = lire(uid)
         de = etat(item)
-        if vers not in TRANSITIONS.get(de, set()):
+        if vers not in permises(de):
             raise ValueError(f"transition interdite : {de} -> {vers}")
         d = _rep(item)
         item["journal"].append({"de": de, "vers": vers,
