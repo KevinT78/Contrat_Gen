@@ -121,7 +121,10 @@ def main():
     c.post(f"/dossier/{uid}/dpae-faite", data={"accuse": piece()}, **fichier)
     voir()                                                          # DpaeFaite
     r = c.post(f"/dossier/{uid}/remettre")
-    assert r.headers["Location"].endswith("/salaries"), "la remise doit atterrir sur /salaries"
+    assert r.headers["Location"].endswith("/suivi"), "la remise doit atterrir sur /suivi"
+    atterri = ecran(c, "/suivi")                                    # consomme les flashs
+    assert "popup-validation" in atterri and "mail hebdomadaire" in atterri, \
+        "la remise doit afficher la pop-up sur /suivi"
     texte = voir()                                                  # RemisComptable
 
     # Un dossier au bout du parcours quitte /suivi (demandes en cours) et

@@ -879,9 +879,11 @@ def remettre(uid):
     if not item:
         return redirect(url_for("detail", uid=uid))
     dest = store.copier_compta(item)
-    flash(f"Remis au cabinet comptable — copie dans {dest.relative_to(config.DONNEES)}. "
-          "Le lien partira dans le mail hebdomadaire.", "ok")
-    return redirect(url_for("salaries"))            # procedure terminee -> vue /salaries
+    flash(f"Dossier remis au cabinet comptable — copie dans "
+          f"{dest.relative_to(config.DONNEES)}.", "popup")
+    flash("Le cabinet recevra le lien dans le mail hebdomadaire ; le salarié est "
+          "désormais dans « Salariés ».", "popup")
+    return redirect(url_for("suivi"))               # pop-up par-dessus le Suivi d'embauche
 
 
 @app.post("/dossier/<uid>/renvoyer")
