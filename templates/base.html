@@ -364,6 +364,8 @@
   // modale (focus trap, Esc) quand JS tourne
   const popup = document.querySelector('.popup-validation');
   if (popup) { popup.removeAttribute('open'); popup.showModal(); }
+  // « Voir les documents » vise #produits, qui n'existe que sur le détail d'un dossier
+  if (!document.getElementById('produits')) popup?.querySelector('.voir-docs')?.remove();
   popup?.querySelector('.fermer-popup')?.addEventListener('click', () => popup.close());
   popup?.querySelector('.voir-docs')?.addEventListener('click', () => popup.close());
 </script>
