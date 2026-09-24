@@ -44,7 +44,7 @@ from pathlib import Path
 
 import config
 
-ETATS = ["Soumise", "Rejetee", "ATraiter", "ContratPret", "ContratSigne",
+ETATS = ["Soumise", "Rejetee", "ATraiter", "ContratPret",
          "DpaeFaite", "RemisComptable", "Abandonnee", "Parti"]
 INACTIFS = {"Rejetee", "Abandonnee", "RemisComptable", "Parti"}   # grises dans le suivi, sans frise sur la fiche
 
@@ -56,7 +56,8 @@ TRANSITIONS = {
     "Soumise":        {"Abandonnee"},
     "Rejetee":        {"Abandonnee"},
     "ATraiter":       {"ContratPret", "Abandonnee"},
-    "ContratPret":    {"ContratSigne", "Abandonnee"},
+    "ContratPret":    {"DpaeFaite", "Abandonnee"},
+    # etat herite : dossiers ecrits avant la suppression de l'etape, jamais atteint
     "ContratSigne":   {"DpaeFaite", "Abandonnee"},
     "DpaeFaite":      {"RemisComptable", "Abandonnee"},
     "RemisComptable": {"Parti"},
@@ -402,6 +403,18 @@ def fichiers_role(item, bucket, role):
     return [f for f in fichiers(item, bucket) if _extraire_role(f) == role_propre]
 
 
+# Etats ou le contrat signe peut se deposer (ou partir en signature) : des le
+# contrat pret, sans bloquer la suite. ContratSigne = dossiers herites.
+SIGNE_DEPOSABLE = {"ContratPret", "ContratSigne", "DpaeFaite", "RemisComptable"}
+
+
+def signe_manquant(item):
+    """Contrat signe attendu mais pas encore depose (badge suivi/salaries,
+    garde du depot et de l'envoi en signature)."""
+    return (etat(item) in SIGNE_DEPOSABLE and not item.get("purge")
+            and not fichiers_role(item, "contrat", "contrat-signe"))
+
+
 def manquantes(item):
     """Pieces requises par le schema et absentes du disque.
 
@@ -589,21 +602,11 @@ def rejeter(uid, motif, commentaire, par):
         _ecrire(d, item)
 
 
-def permises(de):
-    """Transitions permises depuis `de` pour CETTE instance : TRANSITIONS,
-    plus le raccourci ContratPret -> DpaeFaite quand le client declare la DPAE
-    sans attendre le contrat signe (ContratSigne n'est alors jamais atteint)."""
-    t = TRANSITIONS.get(de, set())
-    if de == "ContratPret" and not config.signature_avant_dpae():
-        t = t | {"DpaeFaite"}
-    return t
-
-
 def transition(uid, vers, par, **extra):
     with _verrou(uid):
         item = lire(uid)
         de = etat(item)
-        if vers not in permises(de):
+        if vers not in TRANSITIONS.get(de, set()):
             raise ValueError(f"transition interdite : {de} -> {vers}")
         d = _rep(item)
         item["journal"].append({"de": de, "vers": vers,

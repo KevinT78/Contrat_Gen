@@ -125,8 +125,8 @@ Contrat_Gen/
 ### États
 
 ```python
-ETATS = ["Soumise", "Rejetee", "ATraiter", "ContratPret", "ContratSigne",
-         "DpaeFaite", "RemisComptable", "Abandonnee"]
+ETATS = ["Soumise", "Rejetee", "ATraiter", "ContratPret",
+         "DpaeFaite", "RemisComptable", "Abandonnee", "Parti"]
 INACTIFS = {"Rejetee", "Abandonnee", "RemisComptable"}   # grisés dans le suivi
 ```
 
@@ -139,7 +139,8 @@ TRANSITIONS = {
     "Soumise":        {"Abandonnee"},
     "Rejetee":        {"Abandonnee"},
     "ATraiter":       {"ContratPret", "Abandonnee"},
-    "ContratPret":    {"ContratSigne", "Abandonnee"},
+    "ContratPret":    {"DpaeFaite", "Abandonnee"},
+    # etat herite : dossiers ecrits avant la suppression de l'etape, jamais atteint
     "ContratSigne":   {"DpaeFaite", "Abandonnee"},
     "DpaeFaite":      {"RemisComptable", "Abandonnee"},
     "RemisComptable": {"Abandonnee"},
@@ -165,8 +166,9 @@ Chaque entrée porte au minimum `de`, `vers`, `le` (ISO 8601 UTC) et `par`. Une 
     {"de": "Soumise", "vers": "ATraiter", "le": "2026-09-16T12:35:20+00:00", "par": "rh"},
     {"de": "ATraiter", "vers": "ContratPret", "le": "2026-09-16T12:35:20+00:00", "par": "rh",
      "modele": "Equipier.html"},
-    {"de": "ContratPret", "vers": "ContratSigne", "le": "2026-09-16T12:35:23+00:00", "par": "rh"},
-    {"de": "ContratSigne", "vers": "DpaeFaite", "le": "2026-09-16T12:35:24+00:00", "par": "rh"},
+    {"de": "ContratPret", "vers": "ContratPret", "le": "2026-09-16T12:35:23+00:00", "par": "rh",
+     "type": "contrat_signe"},
+    {"de": "ContratPret", "vers": "DpaeFaite", "le": "2026-09-16T12:35:24+00:00", "par": "rh"},
     {"de": "DpaeFaite", "vers": "RemisComptable", "le": "2026-09-16T12:35:25+00:00", "par": "rh"},
     {"de": "RemisComptable", "vers": "RemisComptable", "le": "2026-09-16T12:35:29+00:00",
      "type": "acces_lot", "par": null, "ip": "127.0.0.1"}
@@ -174,7 +176,7 @@ Chaque entrée porte au minimum `de`, `vers`, `le` (ISO 8601 UTC) et `par`. Une 
 }
 ```
 
-Types d'événements écrits par `store.noter()` : `fiche_salarie`, `fiche_echouee`, `mail_echoue`, `signature_envoyee`, `contrat_signe` (contrat signé déposé quand `signature.avant_dpae` vaut `false`), `renvoi_comptable`, `acces_lot`. S'y ajoute `purge`, posé par `store.purger()` au moment où il allège le journal. Un rejet ajoute `motif` et `commentaire` ; une correction ajoute `motif: "correction"`.
+Types d'événements écrits par `store.noter()` : `fiche_salarie`, `fiche_echouee`, `mail_echoue`, `signature_envoyee`, `contrat_signe` (contrat signé déposé, facultatif, sans changer d'état), `renvoi_comptable`, `acces_lot`. S'y ajoute `purge`, posé par `store.purger()` au moment où il allège le journal. Un rejet ajoute `motif` et `commentaire` ; une correction ajoute `motif: "correction"`.
 
 ![Le journal tel qu'affiché dans la fiche du dossier](pdf/img/15-journal.png)
 
@@ -282,7 +284,7 @@ Notes :
 - `templates` accepte aussi la forme simple `{"Manager": "Manager.docx"}`. En forme liste, la **première** règle dont tous les `quand` correspondent aux champs du dossier l'emporte : mettre les cas particuliers avant le cas général. Une règle `{"quand": {...}, "modele": null}` marque une **exclusion volontaire** (croisement identifié, mais sans contrat à produire) plutôt que d'omettre la règle ; `doctor` l'affiche « exclu (volontaire) », distinct d'un cas oublié (`✗`). Les deux formes lisent `null` pareil : en forme simple, `{"Manager": null}` exclut le poste de la même façon.
 - Le garde-fou de démarrage (`_verifier_regles`) refuse une règle `templates` en liste dont une clé de `quand` n'est pas un champ du formulaire, dont la valeur ne correspond à aucune option du champ visé, ou — pour le champ `etablissement` — qui écrit le nom d'un site seul au lieu de la clé complète « Société / Établissement » (il propose alors la bonne clé). Une règle ou un `quand` qui n'est pas un objet est refusé sans faire planter le garde-fou lui-même.
 - `stockage.mode` vaut `local` (répertoire `data/` de l'instance) ou `dossier` avec une clé `chemin` (répertoire synchronisé).
-- `signature.avant_dpae` : `true` par défaut (clé absente). `false` = la DPAE se déclare dès `ContratPret` (`store.permises()` ajoute `ContratPret → DpaeFaite`) ; `ContratSigne` n'est alors jamais atteint et le contrat signé se dépose à tout moment, sans changer d'état. Une valeur non booléenne refuse le démarrage.
+- Le contrat signé est facultatif : la DPAE se déclare dès `ContratPret`. `store.signe_manquant()` décide à la fois du badge « signé manquant » (suivi, « En poste ») et de l'autorisation du dépôt manuel ou de l'envoi Yousign : état dans `store.SIGNE_DEPOSABLE` (`ContratPret` à `RemisComptable`), dossier non purgé, aucun signé déjà déposé. L'ancienne clé `signature.avant_dpae` est ignorée ; `doctor` la signale comme obsolète sans changer son verdict. Les dossiers déjà écrits à `ContratSigne` s'affichent sur l'étape « Contrat prêt » et passent à la DPAE.
 - `conservation` absent = aucune purge. `jours` et `jours_candidature` sont des entiers strictement positifs ; `apres` liste des états de `store.ETATS`.
 - `critiques` : jetons qui doivent avoir une valeur non vide à la génération, en plus des champs requis du formulaire.
 - `saisie_rh` : jetons qu'aucun champ ne fournit ; la RH les saisit sur l'écran « À traiter » avant de générer.

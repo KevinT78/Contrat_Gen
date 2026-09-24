@@ -61,6 +61,21 @@ def soumettre(c, etab=ETAB):
     return max(i["id"] for i in store.tout())
 
 
+MANQUE = "signé manquant"
+
+
+def ligne(texte, uid):
+    """La ligne <tr> du dossier `uid` dans un tableau de /suivi ou /salaries."""
+    debut = texte.rindex("<tr", 0, texte.index(f"/dossier/{uid}"))
+    return texte[debut:texte.index("</tr>", debut)]
+
+
+def etapes(texte):
+    """La frise d'étapes (<ul class="etapes">) d'un écran dossier."""
+    frise = texte[texte.index('class="etapes"'):]
+    return frise[:frise.index("</ul>")]
+
+
 def main():
     anonyme = app.test_client()
     ecran(anonyme, "/")                         # formulaire candidat
@@ -102,8 +117,7 @@ def main():
     voir()                                                          # ATraiter (étab. déposé)
     c.post(f"/dossier/{uid}/contrat-depose", data={"contrat": piece()}, **fichier)
     voir()                                                          # ContratPret
-    c.post(f"/dossier/{uid}/contrat-signe", data={"signe": piece()}, **fichier)
-    voir()                                                          # ContratSigne
+    assert MANQUE in ligne(ecran(c, "/suivi"), uid), "badge « signé manquant » absent du suivi"
     c.post(f"/dossier/{uid}/dpae-faite", data={"accuse": piece()}, **fichier)
     voir()                                                          # DpaeFaite
     r = c.post(f"/dossier/{uid}/remettre")
@@ -115,6 +129,7 @@ def main():
     lien = f"/dossier/{uid}"
     assert lien not in ecran(c, "/suivi"), "RemisComptable devrait avoir quitté /suivi"
     assert lien in ecran(c, "/salaries"), "RemisComptable absent de /salaries"
+    assert MANQUE in ligne(ecran(c, "/salaries"), uid), "badge « signé manquant » absent de Salariés"
 
     import re
     menu = re.search(r'<a href="[^"]*"\s*(aria-current=page)?>Suivi d\'embauche</a>\s*'
@@ -141,8 +156,22 @@ def main():
     jeton = store.signer("lot_comptable", uid, item.get("lien_comptable_epoch", 0))
     ecran(app.test_client(), f"/lot/{jeton}")                       # écran comptable
 
+    # Yousign aux mêmes endroits que le dépôt manuel : aussi sur la fiche salarié
+    sig = config.instance().setdefault("signature", {})
+    sig["mode"] = "yousign"
+    try:
+        assert f'action="/dossier/{uid}/signature-envoyer"' in voir(), \
+            "Envoyer à la signature absent en RemisComptable"
+    finally:
+        sig["mode"] = "manuel"
+
     c.post(f"/dossier/{uid}/archiver", data={"date_sortie": "2026-09-30"})
     voir()                                                          # Parti
+    n = len(store.lire(uid)["journal"])
+    r = c.post(f"/dossier/{uid}/signature-envoyer", follow_redirects=True)
+    assert "Pas de contrat signé à déposer" in r.text, "envoi en signature accepté en Parti"
+    assert len(store.lire(uid)["journal"]) == n
+    assert MANQUE not in ecran(c, "/salaries?anciens=1"), "badge chez les anciens salariés"
     assert lien not in ecran(c, "/salaries"), "Parti encore dans « En poste »"
     assert lien in ecran(c, "/salaries?anciens=1"), "Parti absent de « Anciens salariés »"
 
@@ -151,64 +180,68 @@ def main():
     c.post(f"/dossier/{uid}/abandonner")
     voir()                                                          # Abandonnee
 
-    # DPAE sans attendre la signature : pas d'étape « Contrat signé » dans la
-    # frise, formulaire DPAE dès ContratPret, dépôt du signé en secondaire.
-    sig = config.instance().setdefault("signature", {})
-    # Dossier déjà à ContratSigne quand le client passe en mode sans attente :
-    # la frise garde son étape (sinon pas d'étape courante), la DPAE reste possible.
+    # Dossier hérité, écrit à ContratSigne avant la suppression de l'étape :
+    # la frise le place sur « Contrat prêt », la DPAE reste possible.
     ancien = soumettre(c, ETAB_DEPOSE)
     c.post(f"/dossier/{ancien}/valider")
     c.post(f"/dossier/{ancien}/contrat-depose", data={"contrat": piece()}, **fichier)
-    c.post(f"/dossier/{ancien}/contrat-signe", data={"signe": piece()}, **fichier)
+    item = store.lire(ancien)
+    item["journal"].append({"de": "ContratPret", "vers": "ContratSigne",
+                            "le": store.maintenant(), "par": "rh"})
+    store._ecrire(Path(item["_dir"]), item)
     assert store.etat(store.lire(ancien)) == "ContratSigne"
-    sig["avant_dpae"] = False
-    try:
-        texte = ecran(c, f"/dossier/{ancien}")
-        frise = texte[texte.index('class="etapes"'):]
-        assert "Contrat signé" in frise[:frise.index("</ul>")], "étape perdue"
-        assert f'action="/dossier/{ancien}/dpae-faite"' in texte, "DPAE absente après bascule"
-        c.post(f"/dossier/{ancien}/dpae-faite", data={"accuse": piece()}, **fichier)
-        assert store.etat(store.lire(ancien)) == "DpaeFaite", "DPAE refusée après bascule"
+    texte = ecran(c, f"/dossier/{ancien}")
+    frise = etapes(texte)
+    assert "Contrat signé" not in frise, frise
+    ici = frise[frise.index('class="ici"'):]
+    assert ici[:ici.index("</li>")].count("Contrat prêt") == 1, "état hérité hors frise"
+    assert f'action="/dossier/{ancien}/dpae-faite"' in texte, "DPAE absente sur un dossier hérité"
+    c.post(f"/dossier/{ancien}/dpae-faite", data={"accuse": piece()}, **fichier)
+    assert store.etat(store.lire(ancien)) == "DpaeFaite", "DPAE refusée sur un dossier hérité"
 
-        uid = soumettre(c, ETAB_DEPOSE)
-        c.post(f"/dossier/{uid}/valider")
-        c.post(f"/dossier/{uid}/contrat-depose", data={"contrat": piece()}, **fichier)
-        texte = voir()                                              # ContratPret
-        frise = texte[texte.index('class="etapes"'):]
-        frise = frise[:frise.index("</ul>")]
-        assert "Contrat signé" not in frise, frise
-        assert f'action="/dossier/{uid}/dpae-faite"' in texte, "formulaire DPAE absent"
-        assert f'action="/dossier/{uid}/contrat-signe"' in texte, "dépôt du signé absent"
-        # Yousign : boutons présents tant que le signé manque, masqués ensuite
-        # (sur un dossier jetable, pour garder l'autre sans contrat signé)
-        sig["mode"] = "yousign"
-        try:
-            autre = soumettre(c, ETAB_DEPOSE)
-            c.post(f"/dossier/{autre}/valider")
-            c.post(f"/dossier/{autre}/contrat-depose", data={"contrat": piece()}, **fichier)
-            envoi = f'action="/dossier/{autre}/signature-envoyer"'
-            assert envoi in ecran(c, f"/dossier/{autre}"), "Yousign absent avant le signé"
-            c.post(f"/dossier/{autre}/contrat-signe", data={"signe": piece()}, **fichier)
-            texte = ecran(c, f"/dossier/{autre}")
-            assert envoi not in texte and "Déposé le" in texte, "Yousign encore proposé après le signé"
-        finally:
-            sig["mode"] = "manuel"
-        c.post(f"/dossier/{uid}/dpae-faite", data={"accuse": piece()}, **fichier)
-        texte = voir()                                              # DpaeFaite
-        assert f'action="/dossier/{uid}/contrat-signe"' in texte, "dépôt tardif absent"
-        verif = f'action="/dossier/{uid}/signature-verifier"'
-        assert verif not in texte, "Vérifier sans envoi à la signature"
-        # envoyé à Yousign avant la DPAE : la vérification reste possible après
-        sig["mode"] = "yousign"
-        store.noter(uid, type="signature_envoyee", par="rh", procedure="p-test")
-        try:
-            assert verif in voir(), "Vérifier la signature absent après la DPAE"
-        finally:
-            sig["mode"] = "manuel"
-        c.post(f"/dossier/{uid}/contrat-signe", data={"signe": piece()}, **fichier)
-        assert "Déposé le" in voir(), "date de dépôt du signé absente"
+    # ContratPret : pas d'étape « Contrat signé » dans la frise, formulaire
+    # DPAE direct, dépôt du signé en secondaire.
+    uid = soumettre(c, ETAB_DEPOSE)
+    c.post(f"/dossier/{uid}/valider")
+    c.post(f"/dossier/{uid}/contrat-depose", data={"contrat": piece()}, **fichier)
+    texte = voir()                                                  # ContratPret
+    frise = etapes(texte)
+    assert "Contrat signé" not in frise, frise
+    assert f'action="/dossier/{uid}/dpae-faite"' in texte, "formulaire DPAE absent"
+    assert f'action="/dossier/{uid}/contrat-signe"' in texte, "dépôt du signé absent"
+    # Yousign : boutons présents tant que le signé manque, masqués ensuite ;
+    # le badge suit (sur un dossier jetable, pour garder l'autre sans signé)
+    sig["mode"] = "yousign"
+    try:
+        autre = soumettre(c, ETAB_DEPOSE)
+        c.post(f"/dossier/{autre}/valider")
+        c.post(f"/dossier/{autre}/contrat-depose", data={"contrat": piece()}, **fichier)
+        envoi = f'action="/dossier/{autre}/signature-envoyer"'
+        assert envoi in ecran(c, f"/dossier/{autre}"), "Yousign absent avant le signé"
+        c.post(f"/dossier/{autre}/contrat-signe", data={"signe": piece()}, **fichier)
+        texte = ecran(c, f"/dossier/{autre}")
+        assert envoi not in texte and "Déposé le" in texte, "Yousign encore proposé après le signé"
+        assert MANQUE not in ligne(ecran(c, "/suivi"), autre), "badge encore là après le dépôt"
     finally:
-        del sig["avant_dpae"]
+        sig["mode"] = "manuel"
+    c.post(f"/dossier/{uid}/dpae-faite", data={"accuse": piece()}, **fichier)
+    texte = voir()                                                  # DpaeFaite
+    assert f'action="/dossier/{uid}/contrat-signe"' in texte, "dépôt tardif absent"
+    verif = f'action="/dossier/{uid}/signature-verifier"'
+    assert verif not in texte, "Vérifier sans envoi à la signature"
+    # envoyé à Yousign avant la DPAE : la vérification reste possible après
+    sig["mode"] = "yousign"
+    store.noter(uid, type="signature_envoyee", par="rh", procedure="p-test")
+    try:
+        assert verif in voir(), "Vérifier la signature absent après la DPAE"
+    finally:
+        sig["mode"] = "manuel"
+    # remis sans signé : badge dans Salariés, dépôt depuis la fiche salarié
+    c.post(f"/dossier/{uid}/remettre")
+    assert MANQUE in ligne(ecran(c, "/salaries"), uid), "badge absent de Salariés"
+    c.post(f"/dossier/{uid}/contrat-signe", data={"signe": piece()}, **fichier)
+    assert "Déposé le" in voir(), "date de dépôt du signé absente"
+    assert MANQUE not in ligne(ecran(c, "/salaries"), uid), "badge encore là dans Salariés"
 
     manque = set(store.ETATS) - vus
     assert not manque, f"états jamais rendus : {sorted(manque)}"
