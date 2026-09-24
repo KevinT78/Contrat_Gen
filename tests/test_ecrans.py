@@ -127,8 +127,9 @@ def main():
         "RemisComptable devrait proposer le formulaire d'archivage"
     assert 'class="etapes"' not in texte, \
         "RemisComptable ne devrait plus afficher la frise du recrutement"
-    assert texte.index("Départ du salarié") < texte.index("Lien comptable"), \
-        "RemisComptable : le départ doit précéder le lien comptable"
+    assert (texte.index("Documents produits") < texte.index("Lien comptable")
+            < texte.index("Départ du salarié") < texte.index("<h2>Journal</h2>")), \
+        "RemisComptable : lien puis départ doivent suivre la fiche salarié, avant le journal"
     c.post(f"/dossier/{uid}/abandonner")
     assert store.etat(store.lire(uid)) == "RemisComptable", \
         "RemisComptable : un POST direct sur /abandonner devrait être refusé"
