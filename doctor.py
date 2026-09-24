@@ -258,6 +258,9 @@ if __name__ == "__main__":
         for sujet, raisons in manques.items():
             print(f"  ! {sujet} : {'; '.join(raisons)}", file=sys.stderr)
         print(file=sys.stderr)
+    if "avant_dpae" in config.instance().get("signature", {}):
+        print("  ~ signature.avant_dpae : clé obsolète, ignorée — supprimez-la\n",
+              file=sys.stderr)
     lignes = examiner() + [fiche()]
     print(rapport(lignes))
     sys.exit(verdict(lignes))

@@ -38,13 +38,6 @@ def instance():
     return _lire("instance.json")
 
 
-def signature_avant_dpae():
-    """Faut-il le contrat signe avant la DPAE ? Absent = oui (comportement
-    historique). Certains clients declarent la DPAE sans attendre : le contrat
-    signe devient alors un depot facultatif, sans changement d'etat."""
-    return instance().get("signature", {}).get("avant_dpae", True)
-
-
 def formulaire():
     return _lire("formulaire.json")
 
@@ -519,13 +512,6 @@ def _verifier_conservation():
     return {"conservation": raisons} if raisons else {}
 
 
-def _verifier_signature():
-    v = instance().get("signature", {}).get("avant_dpae", True)
-    if not isinstance(v, bool):
-        return {"signature": [f"« avant_dpae » attend true ou false (reçu : {v!r})"]}
-    return {}
-
-
 def _verifier_installation():
     from werkzeug.security import check_password_hash
     manques = {}
@@ -858,7 +844,7 @@ def verifier():
     {sujet: [raisons]} et l'instance ne sert pas."""
     manques = {}
     for check in (_verifier_version, _verifier_comptes, _verifier_stockage,
-                  _verifier_conservation, _verifier_signature, _verifier_installation,
+                  _verifier_conservation, _verifier_installation,
                   _verifier_derives, _verifier_roles, _verifier_placeholders,
                   _verifier_regles, _verifier_postes, _verifier_grille):
         manques.update(check())

@@ -122,7 +122,7 @@ def couloir(c, etab, mode, poste, attendus):
 
     c.post(f"/dossier/{uid}/contrat-signe", data={"signe": f()},
            content_type="multipart/form-data")
-    assert store.etat(store.lire(uid)) == "ContratSigne"
+    assert store.etat(store.lire(uid)) == "ContratPret", "le signé a changé l'état"
     c.post(f"/dossier/{uid}/dpae-faite", data={"accuse": f()},
            content_type="multipart/form-data")
     assert store.etat(store.lire(uid)) == "DpaeFaite"

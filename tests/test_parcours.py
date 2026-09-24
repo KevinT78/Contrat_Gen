@@ -5,7 +5,7 @@
 Écrit dans un dossier temporaire, ne touche jamais data/.
   - couloir Dark Kitchen : Lille Grand Place, contrat généré
   - couloir Restaurant   : Marseille Prado, contrat déposé (myrhis)
-Les deux passent par ContratSigne. Fiche salarié générée dans contrat/ dès la
+Contrat signé facultatif, sans changer d'état. Fiche salarié générée dans contrat/ dès la
 validation. recap.py liste le salarié de la semaine. Plus les refus attendus.
 """
 import email
@@ -148,19 +148,14 @@ def couloir_dark_kitchen(c):
                     "ACME RESTAURATION SAS", "884 512 336 00027", "Lille Grand Place"):
         assert attendu in texte, f"« {attendu} » absent du contrat"
 
-    # refus : DPAE tant que le contrat n'est pas signé
-    c.post(f"/dossier/{uid}/dpae-faite", data={"accuse": piece()},
-           content_type="multipart/form-data")
-    assert store.etat(store.lire(uid)) == "ContratPret", "DPAE acceptée avant signature"
-
-    # signature manuelle : dépôt du PDF signé
+    # signature manuelle : dépôt du PDF signé, sans changer d'état
     c.post(f"/dossier/{uid}/contrat-signe", data={"signe": piece()},
            content_type="multipart/form-data")
-    assert store.etat(store.lire(uid)) == "ContratSigne"
+    assert store.etat(store.lire(uid)) == "ContratPret", "le signé a changé l'état"
 
     # DPAE faite (accusé obligatoire)
     c.post(f"/dossier/{uid}/dpae-faite", data={}, content_type="multipart/form-data")
-    assert store.etat(store.lire(uid)) == "ContratSigne", "DPAE validée sans accusé"
+    assert store.etat(store.lire(uid)) == "ContratPret", "DPAE validée sans accusé"
     c.post(f"/dossier/{uid}/dpae-faite", data={"accuse": piece()},
            content_type="multipart/form-data")
     assert store.etat(store.lire(uid)) == "DpaeFaite"
@@ -233,7 +228,7 @@ def couloir_restaurant(c):
     # signature manuelle puis DPAE directe (sans rappel)
     c.post(f"/dossier/{uid}/contrat-signe", data={"signe": piece()},
            content_type="multipart/form-data")
-    assert store.etat(store.lire(uid)) == "ContratSigne"
+    assert store.etat(store.lire(uid)) == "ContratPret"
     c.post(f"/dossier/{uid}/dpae-faite", data={"accuse": piece()},
            content_type="multipart/form-data")
     assert store.etat(store.lire(uid)) == "DpaeFaite"
@@ -245,60 +240,54 @@ def couloir_restaurant(c):
 
 
 def dpae_sans_signature(c):
-    """`signature.avant_dpae: false` : DPAE directe depuis ContratPret, contrat
-    signé facultatif (déposé après, sans changer d'état), remise sans lui.
-    Le défaut (clé absente) reste couvert par les deux couloirs ci-dessus."""
-    sig = config.instance().setdefault("signature", {})
-    sig["avant_dpae"] = False
-    try:
-        uid = soumettre(c, base_saisie("ACME Sud / Marseille Prado",
-                                       poste="Équipier polyvalent"))
-        # refus : pas de contrat signé avant que le contrat soit prêt
-        c.post(f"/dossier/{uid}/contrat-signe", data={"signe": piece()},
-               content_type="multipart/form-data")
-        assert not store.fichiers_role(store.lire(uid), "contrat", "contrat-signe")
-        c.post(f"/dossier/{uid}/valider")
-        c.post(f"/dossier/{uid}/contrat-depose", data={"contrat": piece()},
-               content_type="multipart/form-data")
-        assert store.etat(store.lire(uid)) == "ContratPret"
-        c.post(f"/dossier/{uid}/dpae-faite", data={"accuse": piece()},
-               content_type="multipart/form-data")
-        assert store.etat(store.lire(uid)) == "DpaeFaite", "DPAE refusée sans signature"
-        # POST rejoué (second onglet) : la vraie raison, pas « contrat prêt »
-        n = len(store.lire(uid)["journal"])
-        r = c.post(f"/dossier/{uid}/dpae-faite", data={"accuse": piece()},
-                   content_type="multipart/form-data", follow_redirects=True)
-        assert "La DPAE est déjà enregistrée." in r.text, "DPAE rejouée : mauvais message"
-        assert len(store.lire(uid)["journal"]) == n
-        c.post(f"/dossier/{uid}/contrat-signe", data={"signe": piece()},
-               content_type="multipart/form-data")
-        item = store.lire(uid)
-        assert store.etat(item) == "DpaeFaite", "le dépôt du contrat signé a changé l'état"
-        assert store.fichiers_role(item, "contrat", "contrat-signe"), store.fichiers(item, "contrat")
-        assert item["journal"][-1]["type"] == "contrat_signe", item["journal"][-1]
-        # un second reçu est refusé : ni écrasement, ni seconde entrée de journal
-        c.post(f"/dossier/{uid}/contrat-signe", data={"signe": piece()},
-               content_type="multipart/form-data")
-        apres = store.lire(uid)
-        assert len(apres["journal"]) == len(item["journal"]), apres["journal"][-1]
-        assert store.fichiers(apres, "contrat") == store.fichiers(item, "contrat")
-        c.post(f"/dossier/{uid}/remettre")
-        assert store.etat(store.lire(uid)) == "RemisComptable"
+    """DPAE directe depuis ContratPret, contrat signé facultatif (déposé
+    après, sans changer d'état), remise sans lui."""
+    uid = soumettre(c, base_saisie("ACME Sud / Marseille Prado",
+                                   poste="Équipier polyvalent"))
+    # refus : pas de contrat signé avant que le contrat soit prêt
+    c.post(f"/dossier/{uid}/contrat-signe", data={"signe": piece()},
+           content_type="multipart/form-data")
+    assert not store.fichiers_role(store.lire(uid), "contrat", "contrat-signe")
+    c.post(f"/dossier/{uid}/valider")
+    c.post(f"/dossier/{uid}/contrat-depose", data={"contrat": piece()},
+           content_type="multipart/form-data")
+    assert store.etat(store.lire(uid)) == "ContratPret"
+    c.post(f"/dossier/{uid}/dpae-faite", data={"accuse": piece()},
+           content_type="multipart/form-data")
+    assert store.etat(store.lire(uid)) == "DpaeFaite", "DPAE refusée sans signature"
+    # POST rejoué (second onglet) : la vraie raison, pas « contrat prêt »
+    n = len(store.lire(uid)["journal"])
+    r = c.post(f"/dossier/{uid}/dpae-faite", data={"accuse": piece()},
+               content_type="multipart/form-data", follow_redirects=True)
+    assert "La DPAE est déjà enregistrée." in r.text, "DPAE rejouée : mauvais message"
+    assert len(store.lire(uid)["journal"]) == n
+    c.post(f"/dossier/{uid}/contrat-signe", data={"signe": piece()},
+           content_type="multipart/form-data")
+    item = store.lire(uid)
+    assert store.etat(item) == "DpaeFaite", "le dépôt du contrat signé a changé l'état"
+    assert store.fichiers_role(item, "contrat", "contrat-signe"), store.fichiers(item, "contrat")
+    assert item["journal"][-1]["type"] == "contrat_signe", item["journal"][-1]
+    # un second reçu est refusé : ni écrasement, ni seconde entrée de journal
+    c.post(f"/dossier/{uid}/contrat-signe", data={"signe": piece()},
+           content_type="multipart/form-data")
+    apres = store.lire(uid)
+    assert len(apres["journal"]) == len(item["journal"]), apres["journal"][-1]
+    assert store.fichiers(apres, "contrat") == store.fichiers(item, "contrat")
+    c.post(f"/dossier/{uid}/remettre")
+    assert store.etat(store.lire(uid)) == "RemisComptable"
 
-        # remise sans aucun contrat signé
-        uid = soumettre(c, base_saisie("ACME Sud / Marseille Prado",
-                                       poste="Équipier polyvalent"))
-        c.post(f"/dossier/{uid}/valider")
-        c.post(f"/dossier/{uid}/contrat-depose", data={"contrat": piece()},
-               content_type="multipart/form-data")
-        c.post(f"/dossier/{uid}/dpae-faite", data={"accuse": piece()},
-               content_type="multipart/form-data")
-        c.post(f"/dossier/{uid}/remettre")
-        item = store.lire(uid)
-        assert store.etat(item) == "RemisComptable", item["journal"][-1]
-        assert not store.fichiers_role(item, "contrat", "contrat-signe")
-    finally:
-        del sig["avant_dpae"]
+    # remise sans aucun contrat signé
+    uid = soumettre(c, base_saisie("ACME Sud / Marseille Prado",
+                                   poste="Équipier polyvalent"))
+    c.post(f"/dossier/{uid}/valider")
+    c.post(f"/dossier/{uid}/contrat-depose", data={"contrat": piece()},
+           content_type="multipart/form-data")
+    c.post(f"/dossier/{uid}/dpae-faite", data={"accuse": piece()},
+           content_type="multipart/form-data")
+    c.post(f"/dossier/{uid}/remettre")
+    item = store.lire(uid)
+    assert store.etat(item) == "RemisComptable", item["journal"][-1]
+    assert not store.fichiers_role(item, "contrat", "contrat-signe")
 
 
 def depart_leaver(c, uid):

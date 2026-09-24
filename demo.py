@@ -12,7 +12,7 @@ présenter, chacun arrêté à une étape différente :
   - BENALI Sarah   : demande reçue, à valider — parcours « contrat généré » à jouer en live
   - SOARES Rui     : demande validée, établissement en couloir myrhis — « contrat déposé »
                      à jouer en live : « Déposer le contrat » au lieu de « Générer »
-  - NKEMBA Awa     : contrat généré, en attente du contrat signé
+  - NKEMBA Awa     : contrat généré, DPAE à faire, badge « signé manquant »
   - DUPONT Jean    : remis au cabinet (montre le lien comptable + mail hebdo)
 """
 import contextlib
@@ -114,7 +114,7 @@ def amorcer():
     c.post(f"/dossier/{uid}/remettre")
     assert store.etat(store.lire(uid)) == "RemisComptable"
 
-    # 2. contrat prêt : manager, attend le contrat signé
+    # 2. contrat prêt : manager, DPAE à faire, contrat signé pas encore reçu
     uid = soumettre(c, saisie(
         poste="Manager", nom_prenom="NKEMBA Awa", date_naissance="1996-03-07",
         email="awa.nkemba@example.com", etablissement=GENERE[2 % len(GENERE)],

@@ -404,10 +404,10 @@ def test_fiche_client_voit_la_saisie_rh_comme_les_contrats():
     assert doctor.verdict(doctor.examiner() + [ligne]) == 0, ligne
 
 
-def test_avant_dpae_non_booleen_refuse():
+def test_avant_dpae_obsolete_ne_bloque_pas():
+    """Clé retirée avec l'étape « Contrat signé » : doctor avertit, le
+    démarrage ne la refuse plus, quelle que soit sa valeur."""
     ecrire({"signature": {"mode": "manuel", "avant_dpae": "non"}})
-    assert "signature" in config.verifier(), config.verifier()
-    ecrire({"signature": {"mode": "manuel", "avant_dpae": False}})
     assert "signature" not in config.verifier(), config.verifier()
 
 

@@ -52,7 +52,8 @@
       {% set j = depuis(dd) if dd and dd <= aujourdhui else None %}
       <tr>
         <td><a class="nom" href="{{ url_for('detail', uid=i.id) }}">
-          {{ nom_de(i.champs) or i.id }}</a></td>
+          {{ nom_de(i.champs) or i.id }}</a>
+          {% if not anciens and signe_manquant(i) %}<span class="badge attente">signé manquant</span>{% endif %}</td>
         <td class="secondaire">{{ valeur(i.champs, 'poste') }}</td>
         <td class="secondaire">{{ valeur(i.champs, 'type_contrat') or '—' }}</td>
         <td>{{ date_fr(dd) or '—' }}</td>

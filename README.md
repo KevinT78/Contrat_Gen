@@ -337,17 +337,22 @@ Chaque établissement porte `"contrat"` dans `config/societes.json` :
 | `genere` (défaut) | Dark Kitchen | **Générer le contrat** — `.docx` rempli depuis le template du poste |
 | `depose` | Restaurant | **Déposer le contrat** — fait à la main sur myrhis, PDF ou `.docx` |
 
-Les deux voies mènent à `ContratPret`, puis à `ContratSigne`.
+Les deux voies mènent à `ContratPret`, d'où la DPAE se déclare directement.
 
 ## Signature
 
 - **`"signature": {"mode": "manuel"}`** (défaut) : la RH télécharge le contrat, le
-  fait signer hors app, dépose le PDF signé → `ContratSigne`.
-- **`"avant_dpae": false`** (dans le même bloc ; absent = `true`) : pour un client qui
-  déclare la DPAE sans attendre la signature. La DPAE se fait dès `ContratPret` ;
-  le contrat signé devient un dépôt facultatif, possible à tout moment ensuite, noté
-  au journal (`contrat_signe`) sans changer d'état — il ne bloque ni la DPAE ni la
-  remise. Arrivé après la remise, il part avec « Refaire la copie et le lien ».
+  fait signer hors app, dépose le PDF signé. `"mode": "yousign"` ajoute « Envoyer à
+  la signature » aux mêmes endroits que le dépôt manuel.
+- Le contrat signé est **facultatif** : il ne bloque ni la DPAE ni la remise. Il se
+  dépose une seule fois, de `ContratPret` jusqu'à `RemisComptable` (fiche salarié
+  comprise), noté au journal (`contrat_signe`) sans changer d'état ; pas en `Parti`
+  ni après une purge. Tant qu'il manque, un badge **« signé manquant »** le rappelle
+  dans le suivi et dans « En poste ». Arrivé après la remise, il ne part au cabinet
+  qu'avec « Refaire la copie et le lien ».
+- L'ancienne clé `signature.avant_dpae` (et l'état `ContratSigne`) n'existe plus :
+  `doctor` la signale comme obsolète sans bloquer. Les dossiers déjà écrits à
+  `ContratSigne` restent lisibles et passent à la DPAE.
 
 ## La démo en 5 minutes
 
@@ -374,9 +379,9 @@ Le déroulé ci-dessous vaut aussi pour la fixture `config/` (`rh` / `fixture`).
    en contrat « genere » : le contrat est produit dans la foulée (bouton
    **Générer** seulement si la config réclame une saisie RH, ou pour reprendre
    après un échec). Établissement en contrat « depose » : **Déposer le contrat**.
-5. **Déposer le contrat signé** → `ContratSigne` (dépôt manuel du PDF signé).
-6. **DPAE** : dépôt de l'accusé (refusé sans pièce, refusé avant
-   signature). **Remettre au comptable** → le dossier est **dupliqué** dans
+5. **DPAE** : dépôt de l'accusé (refusé sans pièce), dès le contrat prêt. Le
+   **contrat signé** se dépose à côté, quand il arrive, sans changer d'état.
+6. **Remettre au comptable** → le dossier est **dupliqué** dans
    `data/COMPTA/<GROUPE>/<ETABLISSEMENT>/<POSTE>/<NOM PRENOM - id>/`
    (`FICHE PERSONNELLE/` + `CONTRAT/`, segments en capitales sans accents,
    fichiers renommés lisiblement), miroitable sur un Drive. Aucun mail à ce moment : le cabinet
@@ -487,9 +492,10 @@ Où vit `data/` se décide à l'installation (`stockage` dans `instance.json`,
 voir plus haut) ; `DONNEES` reste surchargeable par variable d'environnement et
 l'emporte sur le bloc (c'est ce dont les tests se servent). `dossier.json` porte un **journal append-only** qui fait foi
 sur l'état ; un fichier présent est une preuve corroborante, jamais décisive.
-Écritures temp-puis-rename avec verrou par id. 9 états :
-`Soumise → Rejetee / ATraiter → ContratPret → ContratSigne →
-DpaeFaite → RemisComptable → Parti`, plus `Abandonnee`. Le rappel DPAE n'est pas un
+Écritures temp-puis-rename avec verrou par id. 8 états :
+`Soumise → Rejetee / ATraiter → ContratPret →
+DpaeFaite → RemisComptable → Parti`, plus `Abandonnee` (`ContratSigne` ne subsiste
+que dans `TRANSITIONS`, pour les dossiers écrits avant la suppression de l'étape). Le rappel DPAE n'est pas un
 état : c'est un effet de la validation, tracé dans le journal seulement s'il
 échoue (`mail_echoue`). Les transitions permises sont
 dans `store.TRANSITIONS` — un `POST` hors séquence est refusé côté serveur, pas
