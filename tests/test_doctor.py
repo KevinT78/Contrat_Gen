@@ -404,6 +404,13 @@ def test_fiche_client_voit_la_saisie_rh_comme_les_contrats():
     assert doctor.verdict(doctor.examiner() + [ligne]) == 0, ligne
 
 
+def test_avant_dpae_non_booleen_refuse():
+    ecrire({"signature": {"mode": "manuel", "avant_dpae": "non"}})
+    assert "signature" in config.verifier(), config.verifier()
+    ecrire({"signature": {"mode": "manuel", "avant_dpae": False}})
+    assert "signature" not in config.verifier(), config.verifier()
+
+
 def test_regle_mal_formee_ne_plante_pas_doctor():
     """doctor tourne même sur une config refusée au démarrage : une règle qui
     n'est pas un objet est sautée, pas un AttributeError dans axes()."""

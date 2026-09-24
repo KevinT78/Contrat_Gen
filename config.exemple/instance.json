@@ -4,7 +4,7 @@
   "secret": "REMPLACER-A-L-INSTALLATION",
   "url": "",
 
-  "signature": {"mode": "manuel"},
+  "signature": {"mode": "manuel", "avant_dpae": true},
   "stockage": {"mode": "local"},
 
   "mails": {
