@@ -609,6 +609,7 @@ def valider(uid):
         return redirect(url_for("detail", uid=uid))
     item = store.lire(uid)
     ok_fiche = _fiche_salarie(item)
+    ok_manager = _avis_manager_validee(item)
     ok_dpae = _rappel_dpae(item)
 
     flash("Dossier salarié ouvert.", "popup")
@@ -629,10 +630,23 @@ def valider(uid):
     else:
         flash("Contrat à déposer → section « Documents produits »", "popup")
 
+    flash("Avis manager envoyé" if ok_manager
+          else "Avis manager NON parti (voir le journal)",
+          "popup" if ok_manager else "popup-erreur")
     flash("Rappel DPAE envoyé" if ok_dpae else "Rappel DPAE NON parti (voir le journal)",
           "popup" if ok_dpae else "popup-erreur")
 
     return redirect(url_for("detail", uid=uid))
+
+
+def _avis_manager_validee(item):
+    """Confirme au manager que sa demande a été acceptée (manager_email de
+    l'établissement, sinon l'e-mail saisi dans le formulaire — même repli
+    que le mail de rejet)."""
+    champs = item["champs"]
+    a = (config.manager(config.valeur(champs, "etablissement"))
+         or _email_demandeur(champs))
+    return _mail(item["id"], "demande_validee", a, nom=_nom(champs))
 
 
 def _rappel_dpae(item):
