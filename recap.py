@@ -14,6 +14,7 @@ La fenêtre est dérivée du journal (« vers == RemisComptable », ou un
 « renvoi_comptable »). Simplification volontaire : pas d'état « déjà envoyé » —
 deux exécutions le même jour donnent le même mail, pas un doublon de contenu.
 """
+import html
 import sys
 from datetime import datetime, timedelta, timezone
 
@@ -23,6 +24,8 @@ import mails
 import store
 
 sys.stdout.reconfigure(encoding="utf-8")
+
+_PHRASE_LIEN = "Cliquer pour consulter le dossier"
 
 
 def remis_depuis(seuil):
@@ -44,12 +47,37 @@ def lien(item):
     return f"{config.url_publique()}/lot/{jeton}"
 
 
-def ligne(item):
+def resume(item):
     c = item["champs"]
     prenom, nom = config.identite(c)
-    return (f"- {prenom} {nom.upper()} — {config.valeur(c, 'poste')} — "
+    return (f"{prenom} {nom.upper()} — {config.valeur(c, 'poste')} — "
             f"{config.valeur(c, 'etablissement')} — "
-            f"début {contrat.date_fr(config.valeur(c, 'date_debut', '?'))}\n  {lien(item)}")
+            f"début {contrat.date_fr(config.valeur(c, 'date_debut', '?'))}")
+
+
+def ligne(item):
+    return f"- {resume(item)}\n  {_PHRASE_LIEN} : {lien(item)}"
+
+
+def ligne_html(item):
+    url = html.escape(lien(item), quote=True)
+    return (f"<li>{html.escape(resume(item))}<br>"
+            f'<a href="{url}">{_PHRASE_LIEN}</a></li>')
+
+
+def corps_html(periode, nombre, items):
+    """Version HTML du gabarit recap_hebdo : la phrase est le lien cliquable."""
+    return (
+        "<!DOCTYPE html><html><body>"
+        "<p>Bonjour,</p>"
+        f"<p>{nombre} dossier(s) d'embauche vous ont été remis "
+        f"sur la période {html.escape(periode)} :</p>"
+        f"<ul>{''.join(map(ligne_html, items))}</ul>"
+        "<p>Chaque lien est personnel, valable 30 jours, et donne accès aux pièces "
+        "du salarié, au contrat signé et à l'accusé DPAE (« Tout télécharger »).</p>"
+        "<p>--<br>Envoi automatique, ne pas répondre.</p>"
+        "</body></html>"
+    )
 
 
 def par_cabinet(items):
@@ -71,8 +99,10 @@ def main(jours):
           f"{len(groupes)} cabinet(s)")
     rate = False
     for cab, items in groupes.items():
-        ok, raison = mails.envoyer("recap_hebdo", cab, cc=copie, periode=periode,
-                                   nombre=len(items), liste="\n".join(map(ligne, items)))
+        ok, raison = mails.envoyer(
+            "recap_hebdo", cab, cc=copie, periode=periode,
+            nombre=len(items), liste="\n".join(map(ligne, items)),
+            html=corps_html(periode, len(items), items))
         print(f"  {cab} : {len(items)} dossier(s) — "
               + ("mail envoyé" if ok else f"mail NON envoyé : {raison}"))
         rate |= not ok
