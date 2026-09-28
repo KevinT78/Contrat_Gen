@@ -60,8 +60,13 @@
   header nav a[aria-current]::after { content:""; position:absolute; left:0; right:0; bottom:-1px;
                  height:2px; background:var(--accent) }
   .utilisateur { margin-left:auto; font-size:12px; letter-spacing:.02em; color:var(--gris-clair) }
-  .utilisateur a { color:var(--gris); text-decoration:none; border-bottom:1px solid var(--bord-fort) }
-  .utilisateur a:hover { color:var(--accent); border-color:var(--accent) }
+  /* meme voix que la nav : texte capitales grises, pas un bouton plein */
+  .utilisateur .quitter { display:inline-flex; align-items:center; gap:8px; padding:8px 0;
+           font-size:12px; font-weight:500; letter-spacing:.1em; text-transform:uppercase;
+           color:var(--gris); text-decoration:none }
+  .utilisateur .quitter:hover { color:var(--alerte) }
+  .utilisateur .quitter svg { width:14px; height:14px; fill:none; stroke:currentColor;
+           stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round }
 
   /* --- structure --- */
   main { max-width:1080px; margin:0 auto; padding:48px 40px 120px }
@@ -256,10 +261,10 @@
                 border-left-color:var(--alerte); color:var(--alerte) }
 
   /* --- pop-up de validation --- */
-  dialog.popup-validation { max-width:440px; width:calc(100% - 40px); padding:28px 32px;
+  dialog.popup-validation, dialog.popup-quitter { max-width:440px; width:calc(100% - 40px); padding:28px 32px;
            background:var(--surface); border:1px solid var(--bord); border-radius:var(--r);
            box-shadow:none }
-  dialog.popup-validation::backdrop { background:rgba(20,20,15,.35) }
+  dialog.popup-validation::backdrop, dialog.popup-quitter::backdrop { background:rgba(20,20,15,.35) }
   dialog.popup-validation ul { list-style:none; margin:0 0 24px; padding:0;
            font-size:13.5px; display:flex; flex-direction:column; gap:10px }
   dialog.popup-validation li { padding-left:18px; position:relative }
@@ -267,7 +272,8 @@
            color:var(--accent); font-weight:700 }
   dialog.popup-validation li.ko::before { content:"\26A0"; color:var(--alerte) }
   dialog.popup-validation li.ko { color:var(--alerte) }
-  dialog.popup-validation .actions { justify-content:flex-end }
+  dialog.popup-validation .actions, dialog.popup-quitter .actions { justify-content:flex-end }
+  dialog.popup-quitter p { margin:0 0 24px }
 
   /* --- listes --- */
   ul.docs { list-style:none; padding:0; margin:0; font-size:13.5px }
@@ -334,8 +340,18 @@
       <a href="{{ url_for('salaries') }}"
          {{ 'aria-current=page'|safe if request.endpoint == 'salaries' or vue == 'salaries' }}>Salariés</a>
     </nav>
-    <span class="utilisateur">{{ session.utilisateur }} —
-      <a href="{{ url_for('logout') }}">quitter</a></span>
+    <span class="utilisateur">
+      <a class="quitter" id="quitter" href="{{ url_for('logout') }}"
+         title="Se déconnecter ({{ session.utilisateur }})">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 2H3v12h3M10 5l3 3-3 3M13 8H6"/></svg>
+        Quitter</a></span>
+    <dialog class="popup-quitter" id="popup-quitter" aria-labelledby="quitter-titre">
+      <p id="quitter-titre">Quitter la session ? Vous devrez vous reconnecter pour revenir au suivi.</p>
+      <div class="actions">
+        <button type="button" class="discret" id="quitter-annuler">Rester</button>
+        <a class="bouton" href="{{ url_for('logout') }}">Quitter</a>
+      </div>
+    </dialog>
   {% endif %}
 </header>
 <main class="{% block classe_main %}{% endblock %}">
@@ -381,6 +397,15 @@
         : n + ' fichiers sélectionnés';
     });
   }
+
+  // Quitter : sans JS le lien deconnecte directement ; avec JS il ouvre d'abord
+  // la confirmation -- meme repli progressif que la pop-up de validation.
+  const popupQuitter = document.getElementById('popup-quitter');
+  document.getElementById('quitter')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    popupQuitter.showModal();
+  });
+  document.getElementById('quitter-annuler')?.addEventListener('click', () => popupQuitter.close());
 
   // pop-up de validation : <dialog open> en repli sans JS, promu en vraie
   // modale (focus trap, Esc) quand JS tourne
