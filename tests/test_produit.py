@@ -15,6 +15,7 @@ Trois décisions, trois vérifications :
 """
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -27,6 +28,7 @@ os.environ["DONNEES"] = str(BASE / "data")
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from werkzeug.security import generate_password_hash          # noqa: E402
+import apparence                                              # noqa: E402
 import config                                                 # noqa: E402
 import placeholders                                           # noqa: E402
 
@@ -591,6 +593,134 @@ def test_verifier_conservation_refuse_les_formes_invalides():
         "jours": 1095, "jours_candidature": 730,
         "apres": ["RemisComptable", "Rejetee", "Abandonnee"]}})
     assert "conservation" not in config.verifier(), config.verifier()
+
+
+def _marque(**fichiers):
+    """Pose un dossier marque/ dans l'instance de test et rend theme.json."""
+    m = CONF / "marque"
+    m.mkdir(exist_ok=True)
+    for nom, octets in fichiers.items():
+        (m / nom).write_bytes(octets)
+    return m
+
+
+SVG = b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"></svg>'
+
+
+def _theme(t):
+    """Ecrit theme.json a cote d'instance.json et vide le cache."""
+    (CONF / "theme.json").write_text(json.dumps(t, ensure_ascii=False), encoding="utf-8")
+    config._CACHE.clear()
+
+
+def test_palette_de_base_suit_base_html():
+    """_PALETTE_ORIGINE recopie les couleurs de base.html pour calculer le
+    contraste des couples REELS. Si la palette du design bouge et pas cette
+    copie, le garde-fou valide une DA contre des couleurs qui n'existent plus
+    -- en silence. Ce test est la pour que ca crie."""
+    racine = Path(__file__).resolve().parent.parent / "templates" / "base.html"
+    texte = racine.read_text(encoding="utf-8")
+    bloc = texte[texte.index(":root"):texte.index("* { box-sizing")]
+    for cle, attendu in apparence._PALETTE_ORIGINE.items():
+        m = re.search(rf"--{cle}:(#[0-9a-fA-F]{{3,6}})", bloc)
+        assert m, f"--{cle} introuvable dans le :root de base.html"
+        trouve = m.group(1).lower()
+        if len(trouve) == 4:                      # #fff -> #ffffff
+            trouve = "#" + "".join(c * 2 for c in trouve[1:])
+        assert trouve == attendu, (
+            f"base.html dit --{cle}:{trouve}, apparence._PALETTE_ORIGINE dit {attendu} "
+            "— le calcul de contraste porte sur une couleur périmée")
+
+
+def test_verifier_theme_refuse_ce_qui_serait_illisible_ou_absent():
+    """La DA du client. Deux familles de refus : ce qui serait illisible
+    (contraste CALCULE, pas supposé) et ce qui est déclaré mais absent du
+    dossier marque/ — le mode d'échec courant, le fichier que le graphiste a
+    envoyé et que personne n'a copié."""
+    ecrire()
+    (CONF / "theme.json").unlink(missing_ok=True)
+    config._CACHE.clear()
+    assert "theme.json" not in config.verifier(), "fichier absent doit passer"
+
+    # Fichier ABSENT = la DA d'origine, mais fichier CASSE = refus : un JSON
+    # avale en silence, le client ouvre son app et la voit verte sans savoir
+    # pourquoi. C'est la seule difference avec le patron de stockage().
+    (CONF / "theme.json").write_text('{"palette": {,}', encoding="utf-8")
+    config._CACHE.clear()
+    manques = config.verifier()
+    assert "theme.json" in manques, "un theme.json casse doit refuser de demarrer"
+    assert "JSON" in " ".join(manques["theme.json"]), manques["theme.json"]
+
+    _marque(**{"logo.svg": SVG})
+    for mauvais in (
+            "pas-un-objet",
+            {"couleurs": {}},                                  # clé inventée
+            {"palette": {"accent": "vert"}},                    # pas un hex
+            {"palette": {"rose": "#c8102e"}},                   # couleur inconnue
+            {"palette": {"accent": "#f2c200"}},                 # jaune : illisible
+            {"palette": {"texte": "#bbbbbb"}},                  # texte trop pâle
+            {"densite": 1.1},                                   # clé retirée
+            {"logo": {"fichier": "../instance.json"}},          # échappée de marque/
+            {"logo": {"fichier": "logo.svg", "hauteur": 200}},
+            {"favicon": "absent.png"},
+    ):
+        _theme(mauvais)
+        manques = config.verifier()                             # ne doit pas lever
+        assert "theme.json" in manques, f"{mauvais!r} passe le garde-fou"
+
+    # Le refus nomme un accent de repli, et ce repli passe vraiment.
+    _theme({"palette": {"accent": "#f2c200"}})
+    raison = " ".join(config.verifier()["theme.json"])
+    repli = re.findall(r"#[0-9a-f]{6}", raison)[-1]
+    p = {**apparence._PALETTE_ORIGINE, "accent": repli}
+    assert all(apparence._contraste(a, b) >= 4.5
+               for a, b in apparence._couples(p).values()),         f"la teinte suggérée {repli} ne passe pas elle-même"
+
+    # Une DA complète et saine passe, et sort en tokens CSS.
+    _marque(**{"logo.svg": SVG, "fav.svg": SVG})
+    _theme({"palette": {"accent": "#c8102e", "fond": "#faf7f3"},
+            "logo": {"fichier": "logo.svg", "hauteur": 30, "remplace_le_nom": True},
+            "favicon": "fav.svg"})
+    assert "theme.json" not in config.verifier(), config.verifier()
+    da = config.apparence()
+    assert da["variables"]["--accent"] == "#c8102e"
+    # Les variantes sont DERIVEES, jamais demandees a l'installateur.
+    assert da["variables"]["--accent-sombre"] == "#820a1e"
+    assert da["logo"]["remplace_le_nom"] is True
+    assert da["favicon"] == "fav.svg"
+
+    (CONF / "theme.json").unlink()
+    config._CACHE.clear()
+
+
+def test_theme_atteint_la_page_et_les_fichiers_sont_servis():
+    """Le thème ne sert à rien s'il ne sort pas : la DA doit être DANS la page,
+    après la palette d'origine, et marque/ doit être servi — sans laisser
+    remonter hors du dossier."""
+    ecrire()
+    (BASE / "data" / "soumissions").mkdir(parents=True, exist_ok=True)
+    _marque(**{"logo.svg": SVG})
+    _theme({"palette": {"accent": "#c8102e"},
+            "logo": {"fichier": "logo.svg", "remplace_le_nom": True}})
+
+    import app as application
+    application.app.secret_key = config.instance()["secret"]
+    client = application.app.test_client()
+    page = client.get("/").get_data(as_text=True)
+
+    assert "--accent:#c8102e" in page, "la couleur du client n'atteint pas la page"
+    assert page.index("--accent:#c8102e") > page.index("--accent:#1f4d3f"),         "la DA du client est peinte avant la palette d'origine : elle perd"
+    assert "/marque/logo.svg" in page and "<i>" not in page,         "le logo ne remplace pas le monogramme"
+
+    assert client.get("/marque/logo.svg").status_code == 200
+    assert client.get("/marque/absent.svg").status_code == 404
+    # Flask sert marque/ : la protection de chemin est la sienne, on verifie
+    # qu'on ne s'est pas trompe de dossier en la branchant.
+    assert client.get("/marque/../instance.json").status_code == 404
+
+    (CONF / "theme.json").unlink()
+    config._CACHE.clear()
+    assert "--accent:#c8102e" not in client.get("/").get_data(as_text=True),         "sans theme.json, la page porte encore la DA du test precedent"
 
 
 def test_second_serveur_sur_le_meme_stockage_refuse():

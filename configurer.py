@@ -40,6 +40,7 @@ FICHIERS = {"secret": "config/instance.json", "compte RH": "config/instance.json
             "templates →": "config/instance.json",
             "poste «": "config/instance.json", "url": "config/instance.json",
             "stockage": "config/instance.json", "conservation": "config/instance.json",
+            "theme.json": "config/theme.json",
             "établissements": "config/societes.json",
             "roles": "config/formulaire.json", "grille": "config/grille.json",
             "fiche salarié": "modeles/fiche_salarie.docx"}

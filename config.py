@@ -10,6 +10,8 @@ import os
 import re
 from pathlib import Path
 
+from apparence import resoudre
+
 RACINE = Path(__file__).parent
 CLIENT = Path(os.environ.get("CONFIG_DIR", RACINE / "config"))
 
@@ -62,6 +64,37 @@ def stockage():
     except (OSError, ValueError, KeyError):
         return {}
     return s if isinstance(s, dict) else {}
+
+
+# --- la DA du client ------------------------------------------------------
+# Un client = un dossier d'instance ; sa direction artistique y vit comme le
+# reste (`theme.json` + un dossier `marque/` pour le logo et le favicon). Les
+# regles, elles, vivent dans apparence.py : c'est du calcul de couleur et de
+# la validation, pas de la lecture de config.
+#
+# MARQUE est servi par Flask lui-meme (static_folder), pas par une route
+# maison : mimetypes, cache et protection de chemin sont deja faits.
+MARQUE = CLIENT / "marque"
+
+
+def theme():
+    """`theme.json` de l'instance. Absent = la DA d'origine, une instance
+    installee avant ce fichier ne bouge pas.
+
+    Garde sur OSError SEULEMENT, pas sur le JSON casse comme stockage() : un
+    fichier illisible avale la DA en silence, et le client ouvre son app le
+    premier jour, la voit verte, sans que personne sache pourquoi. C'est
+    _verifier_theme() qui le dit au demarrage."""
+    try:
+        return _lire("theme.json")
+    except OSError:
+        return {}
+
+
+def apparence():
+    """La DA du client, prete a poser dans base.html. Lecture GARDEE : un
+    theme.json invalide a deja empeche l'instance de demarrer."""
+    return resoudre(theme(), MARQUE).tokens
 
 
 def conservation():
@@ -512,6 +545,25 @@ def _verifier_conservation():
     return {"conservation": raisons} if raisons else {}
 
 
+def _verifier_theme():
+    """La DA du client. Patron de _verifier_conservation : la FORME avant les
+    valeurs, et un KO propre qui nomme le sujet.
+
+    Refus au demarrage plutot qu'ignore en silence -- une couleur ignoree,
+    c'est un client qui ouvre son app le premier jour, la voit verte, et
+    personne ne sait pourquoi ; un logo absent, c'est un en-tete casse devant
+    des candidats. Fichier absent = la DA d'origine, les instances
+    installees avant theme.json demarrent sans rien changer.
+
+    Les regles vivent dans apparence.py, ici on ne fait que les rapporter."""
+    try:
+        raisons = resoudre(theme(), MARQUE).raisons
+    except ValueError as e:                     # JSON casse : theme() le laisse passer
+        raisons = [f"illisible — ce n'est pas du JSON valide : {e}"]
+    return {"theme.json": raisons} if raisons else {}
+
+
+
 def _verifier_installation():
     from werkzeug.security import check_password_hash
     manques = {}
@@ -844,7 +896,8 @@ def verifier():
     {sujet: [raisons]} et l'instance ne sert pas."""
     manques = {}
     for check in (_verifier_version, _verifier_comptes, _verifier_stockage,
-                  _verifier_conservation, _verifier_installation,
+                  _verifier_conservation, _verifier_theme,
+                  _verifier_installation,
                   _verifier_derives, _verifier_roles, _verifier_placeholders,
                   _verifier_regles, _verifier_postes, _verifier_grille):
         manques.update(check())

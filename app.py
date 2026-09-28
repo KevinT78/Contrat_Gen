@@ -88,7 +88,12 @@ def _pot_rempli():
     """Honeypot : champ invisible que les bots remplissent mais pas les humains."""
     return bool(request.form.get("website"))
 
-app = Flask(__name__)
+# La marque du client (logo, favicon) vit dans SON instance, pas dans
+# le code partage : c'est Flask lui-meme qui la sert, pas une route maison --
+# mimetypes, en-tetes de cache et protection de chemin sont deja faits, et un
+# dossier absent 404 proprement (verifie). Le /static d'origine ne servait
+# rien : il pointait vers le dossier du code, commun a toutes les instances.
+app = Flask(__name__, static_folder=config.MARQUE, static_url_path="/marque")
 # X-Forwarded-For n'est digne de confiance QUE s'il est pose par un proxy a
 # nous. Sans proxy devant, c'est un en-tete fourni par le client : le faire
 # tourner contournerait entierement les deux rate-limits ci-dessus (verifie).
@@ -189,6 +194,7 @@ def _aides():
 @app.context_processor
 def globaux():
     return {"client": config.instance()["client"],
+            "da": config.apparence(),
             "schema": config.formulaire(),
             "etablissements": config.etablissements()}
 

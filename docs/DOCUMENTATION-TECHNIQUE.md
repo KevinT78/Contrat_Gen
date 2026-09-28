@@ -73,7 +73,8 @@ Tout ce qui varie d'un client à l'autre vit dans `config/` : JSON, modèles de 
 - rôle du formulaire inconnu ou pointant un champ inexistant, règle `derives` malformée ;
 - jeton d'un modèle de contrat sans source ;
 - poste sans modèle de contrat, grille de salaire incomplète ;
-- bloc `stockage` ou `conservation` malformé, dossier de stockage inexistant ou non inscriptible.
+- bloc `stockage` ou `conservation` malformé, dossier de stockage inexistant ou non inscriptible ;
+- `theme.json` malformé : contraste insuffisant (calculé sur les couples texte/fond réels), valeur hors bornes, clé inconnue, ou fichier de `marque/` déclaré mais absent.
 
 Le même contrôle s'exécute au rechargement à chaud : une configuration invalide est refusée et l'ancienne reste active.
 
@@ -234,6 +235,8 @@ Sur la même machine, le PID est sondé (vivant ou mort). Depuis une autre machi
 | `instance.json` | Identité du client, secret HMAC, URL publique, mails, comptes, motifs de rejet, modèles par poste, règles dérivées, saisie RH, stockage, conservation |
 | `formulaire.json` | Champs du formulaire public et rôles |
 | `societes.json` | Sociétés, établissements, mentions légales, couloir de contrat, adresses du manager et du cabinet |
+| `theme.json` | **Optionnel** — direction artistique du client : palette, logo, favicon. Absent = la DA d'origine |
+| `marque/` | **Optionnel** — logo et favicon du client, servis par Flask sur `/marque/` (`static_folder` de l'instance) |
 | `grille.json` | Grille de rémunération (optionnel) |
 | `contrats/` | Modèles de contrat `.docx` ou `.html` |
 | `mails/` | Modèles de mails `.txt` |

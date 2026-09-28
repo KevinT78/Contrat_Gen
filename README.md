@@ -538,6 +538,49 @@ jamais dans un cron (invariant mono-process). `python purger.py` est le pendant
 les `dossier.json` orphelins hors profondeur de `store._scan()`, et
 l'avertissement drive.
 
+**Direction artistique du client.** Fichier optionnel `config/theme.json`, plus
+un dossier `config/marque/` pour le logo et le favicon — servi par Flask sur
+`/marque/`. Absent = la DA d'origine.
+
+```json
+{
+  "palette": {"accent": "#c8102e", "fond": "#faf7f3"},
+  "logo":    {"fichier": "logo.svg", "hauteur": 30, "remplace_le_nom": true},
+  "favicon": "favicon.svg"
+}
+```
+
+Le client ne rédige **jamais de CSS** : il pose des valeurs, l'app écrit la
+feuille. Une CSS fournie ne se validerait pas (on ne calcule pas le contraste
+d'un fichier qu'on ne comprend pas) et casserait en silence à chaque refonte de
+`base.html`.
+
+- `palette` — au choix `accent`, `fond`, `surface`, `texte`, `bord`. **Cinq
+  couleurs à poser, onze de posées** : les variantes de l'accent (survol,
+  teinte pâle) et les secondaires (`--gris`, `--gris-clair`, `--bord-fort`,
+  `--surface-2`, qui portent les libellés, les soulignements de champ et les
+  cartes) sont **dérivées** de celles-là. Le design les avait déjà construites
+  comme des mélanges — les fractions utilisées reproduisent les valeurs réglées
+  à la main à 1-4 unités RGB près. Sans ça, une DA violette gardait des
+  libellés kaki.
+  Les couleurs d'état (alerte, attente, terminé) ne suivent pas l'accent :
+  elles sont sémantiques, une alerte reste rouge chez un client bleu. Elles ne
+  sont pas dérivées non plus — vérifié, ce sont de vraies teintes réglées à la
+  main (écart de 6 à 18 unités avec un mélange), les dériver les désaturerait.
+- `logo` — remplace le monogramme ; `hauteur` de 16 à 40px (l'en-tête fait
+  60px), `remplace_le_nom` évite d'afficher le nom deux fois quand le logo est
+  un logotype.
+
+Volontairement limité aux couleurs et à la marque : polices, échelle des
+textes, densité et rayons demandaient de mettre toute la feuille de style en
+`calc()`, pour un gain que le client ne réclame pas. À rouvrir s'il le demande.
+
+Tout est refusé **au démarrage** : contraste calculé sur les couples texte/fond
+réels de `base.html` (il faut 4,5:1 partout — le message nomme un accent
+assombri qui passe), valeurs hors bornes, clés inconnues, et **fichier déclaré
+mais absent de `marque/`** — le mode d'échec courant n'est pas la faute
+de frappe, c'est le logo que personne n'a copié dans l'instance.
+
 ## Fichiers
 
 | | |
@@ -546,6 +589,7 @@ l'avertissement drive.
 | `store.py` | disque, journal, états + `TRANSITIONS`, liens signés HMAC |
 | `contrat.py` | remplissage des `.docx` (`paragraphes`/`remplacer` repris de wingstop_) |
 | `config.py` | lecture de `config/` + garde-fou de démarrage |
+| `apparence.py` | `theme.json` traduit en tokens CSS : palette, dérivées, contraste, logo ; ne connaît pas `config` |
 | `mails.py` | rendu des templates + SMTP ou console |
 | `signature.py` | e-sign Yousign, optionnel, désactivé par défaut |
 | `installer.py` | crée l'instance d'un nouveau client depuis `config.exemple/` |

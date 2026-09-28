@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{% block titre %}{{ client }}{% endblock %}</title>
+{% if da.favicon %}<link rel="icon" href="{{ url_for('static', filename=da.favicon) }}">{% endif %}
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Libre+Bodoni:wght@400;500;600&family=Public+Sans:wght@400;500;600&display=swap">
@@ -44,6 +45,9 @@
            background:var(--surface); border-bottom:1px solid var(--bord) }
   .marque { display:flex; align-items:center; gap:10px; text-decoration:none; color:var(--texte);
             font-family:var(--titre); font-size:16px; font-weight:500; letter-spacing:.01em }
+  /* Un logotype est LARGE, l'en-tete fait 60px : on borne la hauteur et on
+     laisse la largeur suivre. --logo-h vient de theme.json (16 a 40px). */
+  .marque img { display:block; height:var(--logo-h,28px); width:auto }
   .marque i { width:26px; height:26px; background:var(--accent); color:#fff; font-style:normal;
               display:grid; place-items:center; font-family:var(--corps); font-size:10px;
               font-weight:600; letter-spacing:.06em; line-height:1 }
@@ -301,10 +305,27 @@
              background:var(--accent); background-image:none; opacity:.55 }
   }
 </style>
+{#- La DA du client, APRES la palette d'origine : meme specificite, c'est
+    l'ordre du source qui tranche. Tout sort de config.apparence(), seul
+    endroit qui valide -- un <style> n'echappe rien, rien d'autre n'a le droit
+    d'ecrire ici. -#}
+{% if da.variables or da.logo %}
+<style>
+:root{ {% for var, val in da.variables.items() %}{{ var }}:{{ val }};{% endfor %}
+{%- if da.logo %}--logo-h:{{ da.logo.hauteur }}px;{% endif %} }
+</style>
+{% endif %}
 </head>
 <body>
 <header>
-  <a class="marque" href="/"><i>{{ client[:2]|upper }}</i>{{ client }}</a>
+  <a class="marque" href="/">
+    {%- if da.logo %}
+      <img src="{{ url_for('static', filename=da.logo.fichier) }}"
+           alt="{{ client }}">{% if not da.logo.remplace_le_nom %}{{ client }}{% endif %}
+    {%- else %}
+      <i>{{ client[:2]|upper }}</i>{{ client }}
+    {%- endif %}
+  </a>
   {% if session.utilisateur %}
     <nav>
       <a href="{{ url_for('suivi') }}"
