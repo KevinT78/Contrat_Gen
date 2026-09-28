@@ -76,8 +76,6 @@ Tout ce qui varie d'un client à l'autre vit dans `config/` : JSON, modèles de 
 - bloc `stockage` ou `conservation` malformé, dossier de stockage inexistant ou non inscriptible ;
 - `theme.json` malformé : contraste insuffisant (calculé sur les couples texte/fond réels), valeur hors bornes, clé inconnue, ou fichier de `marque/` déclaré mais absent.
 
-Le même contrôle s'exécute au rechargement à chaud : une configuration invalide est refusée et l'ancienne reste active.
-
 ---
 
 ## 3. Structure du projet
@@ -514,7 +512,6 @@ Liste blanche d'extensions (`.pdf`, `.jpg`, `.jpeg`, `.png` ; `.docx` en plus po
 | POST | `/dossier/<uid>/renvoyer` | Refaire la copie et révoquer le lien du cabinet |
 | POST | `/dossier/<uid>/abandonner` | Abandonner |
 | GET, POST | `/purger` | Aperçu puis exécution de la purge |
-| POST | `/recharger` | Recharger la configuration |
 
 ---
 
@@ -593,7 +590,7 @@ Restaurer = décompresser et relancer. Mettre à jour = remplacer le code (`git 
 | Tester l'envoi de mail | `python configurer.py mail votre@adresse` |
 | Ajouter un compte RH | `python configurer.py compte identifiant` |
 | Vérifier les modèles de contrat | `python doctor.py` |
-| Recharger la configuration sans redémarrer | Bouton « Recharger la configuration » du suivi (`POST /recharger`) |
+| Appliquer une modification de `config/` | Redémarrer l'application : `config/` est relu au démarrage |
 | Voir ce que la purge effacerait | `python purger.py` (lecture seule) ; `/purger` dans l'application pour exécuter |
 | Suivre ce que fait le serveur | Sortie standard : les deux lignes de démarrage et les erreurs Python. **Waitress ne journalise pas les requêtes** — l'historique métier est le journal de chaque dossier |
 | Mails en mode console | `data/mails/*.eml` |
@@ -635,7 +632,7 @@ Les tests utilisent `config/` (fixture versionnée, client fictif) ou construise
 1. Ajouter l'entrée dans `formulaire.json` → `champs` (identifiant, libellé, type, `requis` ou `requis_si`).
 2. S'il alimente un jeton : `"placeholder": "MonJeton"`, puis `{{MonJeton}}` dans les modèles.
 3. S'il joue un rôle pour le moteur (nom, email, date de début) : le déclarer dans `roles`.
-4. `python placeholders.py` puis `python doctor.py`, et « Recharger la configuration ».
+4. `python placeholders.py` puis `python doctor.py`, et redémarrer l'application.
 
 ### Ajouter un modèle de contrat
 
@@ -648,7 +645,7 @@ Les tests utilisent `config/` (fixture versionnée, client fictif) ou construise
 
 ### Ajouter un établissement, une société, un compte
 
-- Établissement : `societes.json` → `etablissements` (nom, SIRET, `contrat`, `manager_email`), puis « Recharger la configuration ».
+- Établissement : `societes.json` → `etablissements` (nom, SIRET, `contrat`, `manager_email`), puis redémarrer l'application.
 - Société : nouvel objet dans `societes.json` avec ses mentions et son `comptable_email`.
 - Compte : `python configurer.py compte identifiant`.
 

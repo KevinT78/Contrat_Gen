@@ -18,7 +18,7 @@
 10. [Abandonner un dossier](#10-abandonner-un-dossier)
 11. [Les salariés](#11-les-salariés)
 12. [La purge des anciens dossiers](#12-la-purge-des-anciens-dossiers)
-13. [Recharger la configuration](#13-recharger-la-configuration)
+13. [Appliquer une modification de configuration](#13-appliquer-une-modification-de-configuration)
 14. [Questions fréquentes](#14-questions-fréquentes)
 
 ---
@@ -102,9 +102,8 @@ Rendez-vous sur `/login` avec l'identifiant et le mot de passe remis à l'instal
 
 ![Le tableau de bord du suivi](pdf/img/04-suivi.png)
 
-1. **Filtres** par établissement et par état.
+1. **Recherche** par nom ou poste, et **filtres** par établissement et par état.
 2. **La liste des dossiers en cours**, triée par date de début. Un dossier remis au comptable n'y figure plus : il passe dans l'onglet « Salariés ».
-3. **« Recharger la configuration »** : à utiliser après une modification des fichiers de configuration (voir §13).
 
 Colonnes du tableau :
 
@@ -117,7 +116,7 @@ Colonnes du tableau :
 | **Dernière activité** | Depuis quand le dossier n'a pas bougé. En rouge au-delà de 7 jours. |
 | **Pièces manquantes** | Nombre de pièces attendues et absentes, ou « — ». |
 
-Sous le titre, le compteur **« en attente d'action »** additionne les dossiers Soumise et À traiter. Les dossiers rejetés ou abandonnés restent visibles, grisés. Quand une règle de conservation est configurée, un bandeau signale les dossiers dont les pièces peuvent être purgées et un bouton **« Purger les dossiers terminés »** apparaît (voir §12).
+Sous le titre, le compteur indique le nombre de dossiers affichés. Les dossiers rejetés ou abandonnés restent visibles, grisés. Quand une règle de conservation est configurée, un bandeau signale les dossiers dont les pièces peuvent être purgées et un bouton **« Purger les dossiers terminés »** apparaît (voir §12).
 
 ### La fiche d'un dossier
 
@@ -363,11 +362,11 @@ Un dossier est proposé à la purge quand il est dans l'un des états listés da
 
 ---
 
-## 13. Recharger la configuration
+## 13. Appliquer une modification de configuration
 
-Après une modification des fichiers de configuration (nouvel établissement, salaire revalorisé, motif de rejet ajouté), cliquez sur **« Recharger la configuration »** dans le suivi. Aucun redémarrage n'est nécessaire.
+Après une modification des fichiers de configuration (nouvel établissement, salaire revalorisé, motif de rejet ajouté), **redémarrez l'application** : c'est au démarrage qu'elle relit `config/`.
 
-Une configuration invalide n'est pas prise en compte : l'ancienne reste active et le message indique ce qui bloque.
+Une configuration invalide empêche le démarrage : l'application refuse de servir et indique ce qui bloque. `python doctor.py` permet de la vérifier avant de redémarrer.
 
 ---
 
@@ -401,7 +400,7 @@ Le message affiché après le rejet le signale (« le mail n'est pas parti ») e
 
 ### Comment ajouter un établissement ou un compte RH ?
 
-- Établissement : l'ajouter dans `societes.json`, puis « Recharger la configuration ».
+- Établissement : l'ajouter dans `societes.json`, puis redémarrer l'application.
 - Compte : `python configurer.py compte identifiant` (le mot de passe est demandé à l'écran).
 
 ---

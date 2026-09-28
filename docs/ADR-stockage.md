@@ -56,6 +56,10 @@ Le bloc `stockage` n'est **pas** rechargeable à chaud : `config.DONNEES` est fi
 continuent d'aller à l'ancien endroit tant que l'app n'a pas redémarré — faire
 semblant serait pire que ne rien faire.
 
+> **Depuis :** le rechargement à chaud a été désactivé (route `/recharger` en 404,
+> bouton retiré du suivi). Toute modification de `config/`, `stockage` compris,
+> demande désormais un redémarrage.
+
 `DONNEES` reste prioritaire sur le bloc : la ligne de lancement l'emporte
 toujours (c'est ce dont les tests se servent, et la sortie de secours d'un
 exploitant). La résolution vit dans `config._donnees()`, seul endroit qui

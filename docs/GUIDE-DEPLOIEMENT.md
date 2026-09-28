@@ -554,10 +554,9 @@ sudo systemctl restart 'contratgen@*' contratgen-demo
 - Tous les clients partagent le même code : une mise à jour s'applique à tous. Pour
   figer un client sur une version, clonez un second exemplaire du code
   (`/opt/contrat-gen-v1`) et pointez son unité dessus.
-- **Modifier la config sans redémarrer** : bouton « Recharger la configuration » dans le
-  suivi (`POST /recharger`). Si la nouvelle config est invalide, l'ancienne reste active et
-  les erreurs s'affichent. Exceptions qui exigent un redémarrage : un changement de
-  stockage, et le port.
+- **Modifier la config** : éditer les `.json`, puis redémarrer l'unité — `config/` est relu
+  au démarrage. Si la nouvelle config est invalide, l'application refuse de démarrer et
+  affiche ce qui bloque ; `python doctor.py` permet de la vérifier avant.
 
 ---
 
@@ -646,11 +645,10 @@ sur les comptes récents.
 - Les comptes sont stockés dans `instance.json`, bloc
   `"utilisateurs": {"<ident>": {"mdp_hash": "..."}}` (hash Werkzeug, scrypt).
 - **Tous les comptes ont les mêmes droits** : il n'y a pas de rôles. Tout compte connecté
-  peut valider, rejeter, purger et recharger la config.
+  peut valider, rejeter et purger.
 - **Créer un compte ou changer un mot de passe** : `cg acme configurer.py compte <ident>`
-  (saisie masquée + confirmation). Cliquer ensuite sur « Recharger la configuration »
-  ou redémarrer.
-- **Supprimer un compte** : retirer sa clé dans `instance.json`, puis recharger.
+  (saisie masquée + confirmation). Redémarrer ensuite l'unité.
+- **Supprimer un compte** : retirer sa clé dans `instance.json`, puis redémarrer l'unité.
   **Une session déjà ouverte reste valable** jusqu'à 12 h : l'app vérifie seulement la
   présence d'un utilisateur dans le cookie signé.
 - Le démarrage refuse : aucun compte, un hash absent ou invalide, un mot de passe égal à
@@ -812,8 +810,7 @@ mot de passe applicatif ne suffit plus.
 | Liens des mails en `127.0.0.1` | Proxy qui ne transmet pas `Host` | Avec nginx, `proxy_set_header Host $host` |
 | Liens vides dans le mail hebdo | `url` vide ou erronée | `instance.json` → `url` |
 | « rappel DPAE NON parti (voir le journal) » | Échec SMTP | Commande de test du §3.1, lire l'entrée `mail_echoue` |
-| Aucun mail reçu, aucune erreur | `mails.mode` encore sur `console` | `"mode": "smtp"`, puis recharger |
+| Aucun mail reçu, aucune erreur | `mails.mode` encore sur `console` | `"mode": "smtp"`, puis redémarrer l'unité |
 | `413 Request Entity Too Large` | Limite du proxy (nginx) | `client_max_body_size 40m;` |
-| « Le stockage a changé … redémarrez » après un rechargement | Le bloc `stockage` a été modifié à chaud | Déplacer les fichiers, puis redémarrer l'unité |
 | `config/ est au format X, ce code attend le format Y` | Mise à jour du code avec changement de format | Adapter `instance.json`, ou revenir à la version précédente du code |
 | Service démo : `AssertionError` au démarrage | Mot de passe `rh` de la démo modifié | Remettre `demo-rh`, ou passer en `demo.py --vide` |

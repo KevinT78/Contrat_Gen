@@ -56,10 +56,9 @@ encore répliqué ou monté en lecture seule est refusé tout de suite, pas déc
 à la première soumission d'un vrai salarié. Un bloc absent vaut `local` : les
 instances installées avant ce bloc démarrent sans rien changer. Pour le poser ou
 le corriger après coup : `configurer.py --assister`. `DONNEES=` sur la ligne de
-lancement reste **prioritaire** sur le bloc. Ce n'est pas rechargeable à chaud :
-changer `stockage` puis *Recharger la configuration* affiche un avertissement —
-les écritures continuent d'aller à l'ancien endroit jusqu'au redémarrage (et il
-faut déplacer les fichiers). L'installateur **refuse** un dossier drive non vide,
+lancement reste **prioritaire** sur le bloc. Changer `stockage` ne prend effet
+qu'au redémarrage, et les fichiers déjà écrits doivent être déplacés à la main.
+L'installateur **refuse** un dossier drive non vide,
 comme il refuse d'écraser un `config/` existant.
 
 En mode `dossier`, l'app écrit sur un système de fichiers local comme avant : elle
@@ -207,10 +206,6 @@ corriger, plutôt que de démarrer à moitié. Si le **format** de config a chan
 version majeure, `config_version` fait refuser le démarrage avec la marche à
 suivre : l'app ne réécrit jamais la config du client dans son dos.
 
-Une config peut aussi être rechargée sans redémarrer, depuis l'écran de suivi
-(bouton *Recharger la configuration*) : une config invalide ne prend pas et
-l'ancienne reste active.
-
 **Sauvegarder.** (En mode `dossier`, c'est le drive qui porte l'historique de
 `$DONNEES` ; ce qui suit ne concerne alors plus que `config/`.)
 `$DONNEES` **est** la base : soumissions, dossiers, pièces
@@ -288,9 +283,9 @@ l'embauche.
 ### Un changement plus tard
 
 Nouvel établissement, salaire revalorisé, clause modifiée : éditer les `.json`,
-puis **« Recharger la configuration »** depuis l'écran de suivi — pas de
-redémarrage, donc pas besoin d'un accès au serveur du client. Une config
-invalide ne prend pas : l'ancienne reste active et l'écran dit ce qui cloche.
+puis redémarrer l'application — `config/` est relu au démarrage. Une config
+invalide empêche le démarrage : l'application dit ce qui cloche, et
+`python doctor.py` permet de la vérifier avant.
 
 `config/societes.json` (forme attendue) :
 
@@ -602,7 +597,7 @@ de frappe, c'est le logo que personne n'a copié dans l'instance.
 | `tests/test_valeurs_contrat.py` | les VALEURS imprimées : grille (forfait et barème), mensualisation, blocs conditionnels, deux entités sans fuite — sur une config fabriquée en temp |
 | `tests/test_signature.py` | `signature.py` contre un transport factice |
 | `tests/test_clients.py` | plusieurs clients factices, une instance chacun, étanches |
-| `tests/test_produit.py` | balisage client refusé si mal écrit, fiche dérivée, config versionnée, rechargement à chaud, `conservation` malformée refusée, refus de démarrer à deux, règle `templates` dont un `quand` ne peut jamais correspondre refusée |
+| `tests/test_produit.py` | balisage client refusé si mal écrit, fiche dérivée, config versionnée, `conservation` malformée refusée, refus de démarrer à deux, règle `templates` dont un `quand` ne peut jamais correspondre refusée |
 | `tests/test_purge.py` | parcours complet → purge → nom/NIR/adresse absents partout, rejouable, jeton de lot révoqué |
 | `tests/test_mails.py` | mode console, override `MAILS_MODE`, STARTTLS+login imposés dès qu'un identifiant SMTP est présent |
 | `tests/test_configurer.py` | bilan sous cp1252 (sous-processus, pipe), avertissements non bloquants, assistant scripté, comptes, envoi de test contre un faux relais SMTP |
@@ -624,7 +619,7 @@ de frappe, c'est le logo que personne n'a copié dans l'instance.
   champ du formulaire), mais aucun délai n'est suivi — seule la date de début
   passe en rouge.
 - **Pas d'écran d'administration** : c'est l'éditeur qui édite les `.json` du
-  client. Le rechargement à chaud rend ça tenable sans accès au serveur.
+  client, ce qui suppose un accès au serveur pour redémarrer après coup.
 - **`config/` est encore versionné**, secret et hash du compte RH compris, alors
   que ce dossier est une instance et pas du produit. Le sortir du dépôt suppose
   d'abord de rendre `test_parcours`, `test_ecrans` et `test_signature`
