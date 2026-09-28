@@ -142,10 +142,12 @@ def _sans_accents(texte):
 
 def _correspond(item, q):
     """Recherche des tableaux de bord : `q` dans le nom, le poste ou l'id,
-    sans tenir compte de la casse ni des accents (« elodie » trouve « Élodie »)."""
+    sans tenir compte de la casse ni des accents (« elodie » trouve « Élodie »).
+    Plusieurs mots : tous doivent y figurer, dans n'importe quel ordre."""
     champs = item["champs"]
     cible = " ".join((_nom(champs), config.valeur(champs, "poste"), item["id"]))
-    return _sans_accents(q) in _sans_accents(cible)
+    cible = _sans_accents(cible)
+    return all(mot in cible for mot in _sans_accents(q).split())
 
 
 def _email_demandeur(champs):
