@@ -6,9 +6,6 @@
   <div>
     <h1>Demandes d'embauche</h1>
     <p class="sous" id="compteur" data-maj aria-live="polite">
-      {% if a_traiter %}<span class="badge attente">{{ a_traiter }} en attente d'action</span>
-      {% else %}<span class="badge">Rien en attente</span>{% endif %}
-      <span class="filet"></span>
       {% if etab or etat_f or q %}{{ items|length }} affichée{{ 's' if items|length > 1 }} sur {{ total }}
       {% else %}{{ items|length }} affichée{{ 's' if items|length > 1 }}{% endif %}
       <span class="filet"></span>triées par date de début</p>
@@ -19,11 +16,13 @@
          title="Effacer les pièces des dossiers ayant dépassé leur durée de conservation">
         Purger les dossiers terminés</a>
     {% endif %}
+    {# bouton Recharger la configuration désactivé (handler /recharger en 404) :
     <form method="post" action="{{ url_for('recharger') }}">
       <button class="discret" type="submit"
               title="Relire config/ après une modification (établissement, salaires, clause)">
         Recharger la configuration</button>
     </form>
+    #}
   </div>
 </div>
 

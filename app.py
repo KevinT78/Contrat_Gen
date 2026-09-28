@@ -262,7 +262,10 @@ def recharger():
     mais plus besoin d'un acces au serveur du client pour redemarrer.
 
     Une config invalide ne prend pas : l'ancienne reste active et on dit ce qui
-    cloche -- une instance qui servait continue de servir."""
+    cloche -- une instance qui servait continue de servir.
+
+    DESACTIVE : la route repond 404, le code reste pour la reactiver."""
+    abort(404)
     if manques := config.recharger():
         for sujet, quoi in manques.items():
             flash(f"{sujet} : {', '.join(quoi)}", "erreur")
@@ -438,9 +441,7 @@ def suivi():
                            etats=[e for e in store.ETATS if e not in store.TERMINES],
                            manquantes=store.manquantes,
                            signe_manquant=store.signe_manquant,
-                           aujourdhui=date.today().isoformat(),
-                           a_traiter=sum(store.etat(i) in ("Soumise", "ATraiter")
-                                         for i in en_cours))
+                           aujourdhui=date.today().isoformat())
 
 
 @app.get("/salaries")
