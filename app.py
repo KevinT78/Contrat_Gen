@@ -11,6 +11,7 @@ import os
 import socket
 import threading
 import time
+import unicodedata
 import zipfile
 from collections import defaultdict
 from datetime import date, datetime, timedelta
@@ -132,6 +133,19 @@ def _nom(champs):
     separes -> « Prenom NOM » ; formulaire a champ unique -> le champ designe
     par le role 'nom'."""
     return " ".join(p for p in config.identite(champs) if p)
+
+
+def _sans_accents(texte):
+    return "".join(c for c in unicodedata.normalize("NFD", texte.casefold())
+                   if not unicodedata.combining(c))
+
+
+def _correspond(item, q):
+    """Recherche des tableaux de bord : `q` dans le nom, le poste ou l'id,
+    sans tenir compte de la casse ni des accents (« elodie » trouve « Élodie »)."""
+    champs = item["champs"]
+    cible = " ".join((_nom(champs), config.valeur(champs, "poste"), item["id"]))
+    return _sans_accents(q) in _sans_accents(cible)
 
 
 def _email_demandeur(champs):
@@ -407,16 +421,18 @@ def suivi():
     items = store.tout()
     etab = request.args.get("etablissement") or ""
     etat_f = request.args.get("etat") or ""
+    q = (request.args.get("q") or "").strip()
     # RemisComptable/Parti = procedure terminee -> vue /salaries, plus /suivi.
     en_cours = [i for i in items if store.etat(i) not in store.TERMINES]
     visibles = [i for i in en_cours
                 if (not etab or config.valeur(i["champs"], "etablissement") == etab)
-                and (not etat_f or store.etat(i) == etat_f)]
+                and (not etat_f or store.etat(i) == etat_f)
+                and (not q or _correspond(i, q))]
     return render_template("suivi.html", items=visibles, etat=store.etat,
                            inactifs=store.INACTIFS, total=len(en_cours),
                            purge_active=bool(config.conservation()),
                            a_purger=len(store.eligibles(items)),
-                           etab=etab, etat_f=etat_f, libelles=LIBELLES_ETAT,
+                           etab=etab, etat_f=etat_f, q=q, libelles=LIBELLES_ETAT,
                            etats=[e for e in store.ETATS if e not in store.TERMINES],
                            manquantes=store.manquantes,
                            signe_manquant=store.signe_manquant,
@@ -435,8 +451,10 @@ def salaries():
     cible = "Parti" if anciens else "RemisComptable"
     tous = [i for i in store.tout() if store.etat(i) == cible]
     etab = request.args.get("etablissement") or ""
+    q = (request.args.get("q") or "").strip()
     visibles = [i for i in tous
-                if not etab or config.valeur(i["champs"], "etablissement") == etab]
+                if (not etab or config.valeur(i["champs"], "etablissement") == etab)
+                and (not q or _correspond(i, q))]
     groupes = {}
     for i in visibles:
         groupes.setdefault(config.valeur(i["champs"], "etablissement") or "—", []).append(i)
@@ -447,7 +465,7 @@ def salaries():
         except KeyError:                    # etablissement retire de la config
             return ""
     return render_template("salaries.html", groupes=sorted(groupes.items()),
-                           total=len(tous), etab=etab, anciens=anciens,
+                           total=len(tous), etab=etab, q=q, anciens=anciens,
                            remis_le=store.date_remise, date_sortie=store.date_sortie,
                            cabinet=cabinet, signe_manquant=store.signe_manquant,
                            aujourdhui=date.today().isoformat())

@@ -237,6 +237,7 @@
            margin:0 0 26px; padding:14px 0; border-top:1px solid var(--bord);
            border-bottom:1px solid var(--bord) }
   .barre-filtres .champ { margin-bottom:0; flex:0 1 240px }
+  .barre-filtres.live button[type=submit] { display:none }   /* filtrage à la saisie */
   .barre-filtres .fin { margin-left:auto; display:flex; flex-wrap:wrap; gap:12px }
   /* sous-onglets d'une page (ex. Salariés : En poste / Anciens) */
   .sous-onglets { display:flex; gap:24px; margin:0 0 20px }
@@ -389,6 +390,41 @@
   if (!document.getElementById('produits')) popup?.querySelector('.voir-docs')?.remove();
   popup?.querySelector('.fermer-popup')?.addEventListener('click', () => popup.close());
   popup?.querySelector('.voir-docs')?.addEventListener('click', () => popup.close());
+
+  // tableaux de bord : recherche et filtres appliqués pendant la saisie. Le
+  // serveur filtre toujours ; on remplace seulement les blocs [data-maj] (même
+  // id) par ceux de la nouvelle page. Sans JS, le bouton « Filtrer » reste.
+  for (const form of document.querySelectorAll('form[data-live]')) {
+    form.classList.add('live');
+    let minuteur, requete;
+    const appliquer = async () => {
+      const params = [...new FormData(form)].filter(([, v]) => v);
+      const url = form.action.split('?')[0] + (params.length ? '?' + new URLSearchParams(params) : '');
+      requete?.abort();
+      requete = new AbortController();
+      try {
+        const r = await fetch(url, { signal: requete.signal });
+        if (!r.ok || r.redirected) return location.assign(url);   // session expirée…
+        const neuf = new DOMParser().parseFromString(await r.text(), 'text/html');
+        for (const bloc of document.querySelectorAll('[data-maj]')) {
+          const remplacant = neuf.getElementById(bloc.id);
+          if (remplacant) bloc.replaceWith(remplacant);
+        }
+        history.replaceState(null, '', url);
+      } catch (e) {
+        if (e.name !== 'AbortError') location.assign(url);
+      }
+    };
+    form.addEventListener('input', e => {
+      if (e.target.type !== 'search') return;
+      clearTimeout(minuteur);
+      minuteur = setTimeout(appliquer, 250);
+    });
+    form.addEventListener('change', e => {
+      if (e.target.tagName === 'SELECT') { clearTimeout(minuteur); appliquer(); }
+    });
+    form.addEventListener('submit', e => { e.preventDefault(); clearTimeout(minuteur); appliquer(); });
+  }
 </script>
 </body>
 </html>

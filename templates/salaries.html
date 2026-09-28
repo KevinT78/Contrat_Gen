@@ -12,15 +12,19 @@
   </div>
 </div>
 
-<nav class="sous-onglets">
-  <a href="{{ url_for('salaries', etablissement=etab) }}"
+<nav class="sous-onglets" id="onglets" data-maj>
+  <a href="{{ url_for('salaries', etablissement=etab, q=q or none) }}"
      {{ 'aria-current=page'|safe if not anciens }}>En poste</a>
-  <a href="{{ url_for('salaries', etablissement=etab, anciens=1) }}"
+  <a href="{{ url_for('salaries', etablissement=etab, q=q or none, anciens=1) }}"
      {{ 'aria-current=page'|safe if anciens }}>Anciens salariés</a>
 </nav>
 
-<form method="get" action="{{ url_for('salaries') }}" class="barre-filtres">
+<form method="get" action="{{ url_for('salaries') }}" class="barre-filtres" data-live>
   {% if anciens %}<input type="hidden" name="anciens" value="1">{% endif %}
+  <div class="champ">
+    <label for="f-q">Rechercher</label>
+    <input id="f-q" type="search" name="q" value="{{ q }}" placeholder="Nom, poste…">
+  </div>
   <div class="champ">
     <label for="f-etab">Établissement</label>
     <select id="f-etab" name="etablissement">
@@ -30,14 +34,15 @@
       {% endfor %}
     </select>
   </div>
-  <div class="fin">
+  <div class="fin" id="fin-filtres" data-maj>
     <button type="submit">Filtrer</button>
-    {% if etab %}
+    {% if etab or q %}
       <a class="bouton discret" href="{{ url_for('salaries', anciens=1 if anciens else none) }}">Tout afficher</a>
     {% endif %}
   </div>
 </form>
 
+<div id="resultats" data-maj aria-live="polite">
 {% for nom_etab, salaries in groupes %}
   <h2>{{ nom_etab }} <span class="secondaire">— {{ salaries|length }}</span></h2>
   <div class="tableau">
@@ -69,10 +74,12 @@
   </table>
   </div>
 {% else %}
-  <p class="vide">{% if etab and anciens %}Aucun ancien salarié pour cet établissement.
+  <p class="vide">{% if q %}Aucun salarié ne correspond à « {{ q }} ».
+  {% elif etab and anciens %}Aucun ancien salarié pour cet établissement.
   {% elif anciens %}Aucun ancien salarié : personne n'a encore quitté la société.
   {% elif etab %}Aucun salarié pour cet établissement.
   {% else %}Aucun salarié : aucune procédure n'est encore allée jusqu'à la remise
   au comptable.{% endif %}</p>
 {% endfor %}
+</div>
 {% endblock %}

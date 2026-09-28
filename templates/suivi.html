@@ -5,11 +5,11 @@
 <div class="entete">
   <div>
     <h1>Demandes d'embauche</h1>
-    <p class="sous">
+    <p class="sous" id="compteur" data-maj aria-live="polite">
       {% if a_traiter %}<span class="badge attente">{{ a_traiter }} en attente d'action</span>
       {% else %}<span class="badge">Rien en attente</span>{% endif %}
       <span class="filet"></span>
-      {% if etab or etat_f %}{{ items|length }} affichée{{ 's' if items|length > 1 }} sur {{ total }}
+      {% if etab or etat_f or q %}{{ items|length }} affichée{{ 's' if items|length > 1 }} sur {{ total }}
       {% else %}{{ items|length }} affichée{{ 's' if items|length > 1 }}{% endif %}
       <span class="filet"></span>triées par date de début</p>
   </div>
@@ -33,7 +33,11 @@
     <a href="{{ url_for('purger_apercu') }}">Voir la purge</a>.</p>
 {% endif %}
 
-<form method="get" action="{{ url_for('suivi') }}" class="barre-filtres">
+<form method="get" action="{{ url_for('suivi') }}" class="barre-filtres" data-live>
+  <div class="champ">
+    <label for="f-q">Rechercher</label>
+    <input id="f-q" type="search" name="q" value="{{ q }}" placeholder="Nom, poste…">
+  </div>
   <div class="champ">
     <label for="f-etab">Établissement</label>
     <select id="f-etab" name="etablissement">
@@ -52,15 +56,15 @@
       {% endfor %}
     </select>
   </div>
-  <div class="fin">
+  <div class="fin" id="fin-filtres" data-maj>
     <button type="submit">Filtrer</button>
-    {% if etab or etat_f %}
+    {% if etab or etat_f or q %}
       <a class="bouton discret" href="{{ url_for('suivi') }}">Tout afficher</a>
     {% endif %}
   </div>
 </form>
 
-<div class="tableau">
+<div class="tableau" id="resultats" data-maj>
 <table>
   <thead>
     <tr><th>Salarié</th><th>Établissement</th><th>Poste</th><th>Début</th>
@@ -87,7 +91,7 @@
     </tr>
   {% else %}
     <tr><td colspan="7" class="vide">
-      {% if etab or etat_f %}Aucune demande ne correspond à ce filtre.
+      {% if etab or etat_f or q %}Aucune demande ne correspond à ce filtre.
       {% else %}Aucune demande pour l'instant.{% endif %}</td></tr>
   {% endfor %}
   </tbody>

@@ -93,6 +93,11 @@ def main():
 
     vus = set()
     uid = soumettre(c)
+    # Recherche : casse et accents ignorés, se combine aux autres filtres.
+    assert f"/dossier/{uid}" in ecran(c, "/suivi?q=  MÁRTIN "), "recherche par nom"
+    assert f"/dossier/{uid}" in ecran(c, f"/suivi?q=manager&etablissement={ETAB}")
+    assert 'class="nom"' not in ecran(c, "/suivi?q=zzz"), "recherche sans résultat"
+    assert "ne correspond" in ecran(c, "/salaries?q=zzz")
     fichier = {"content_type": "multipart/form-data"}
 
     def voir():
