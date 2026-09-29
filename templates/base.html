@@ -398,6 +398,18 @@
     });
   }
 
+  // Dates jj/mm/aaaa (input.date, champ texte : le type=date natif suit la langue
+  // du navigateur) : « 12041995 » s'écrit « 12/04/1995 » au fil de la frappe.
+  // Confort seulement, le serveur relit et refuse une date invalide.
+  for (const inp of document.querySelectorAll('input.date')) {
+    inp.addEventListener('input', (e) => {
+      if (e.inputType?.startsWith('delete')) return;
+      const c = inp.value.replace(/\D/g, '').slice(0, 8);
+      inp.value = c.length > 4 ? c.slice(0, 2) + '/' + c.slice(2, 4) + '/' + c.slice(4)
+                : c.length > 2 ? c.slice(0, 2) + '/' + c.slice(2) : c;
+    });
+  }
+
   // Quitter : sans JS le lien deconnecte directement ; avec JS il ouvre d'abord
   // la confirmation -- meme repli progressif que la pop-up de validation.
   const popupQuitter = document.getElementById('popup-quitter');

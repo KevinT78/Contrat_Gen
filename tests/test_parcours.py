@@ -320,9 +320,12 @@ def depart_leaver(c, uid):
         "dossier non déplacé malgré l'échec d'écriture"
     assert not avant.exists(), "ancien répertoire encore présent"
 
-    c.post(f"/dossier/{uid}/archiver", data={"date_sortie": "2026-09-30"})
+    c.post(f"/dossier/{uid}/archiver", data={"date_sortie": "31/02/2026"})
+    assert store.etat(store.lire(uid)) == "RemisComptable", "date de sortie impossible acceptée"
+    c.post(f"/dossier/{uid}/archiver", data={"date_sortie": "30/09/2026"})
     item = store.lire(uid)
     assert store.etat(item) == "Parti", item["journal"][-1]
+    assert store.date_sortie(item) == "2026-09-30", "date de sortie saisie jj/mm/aaaa mal stockée"
     assert not avant.exists(), "ancien répertoire encore sous DOSSIERS SALARIES"
     apres = Path(item["_dir"])
     assert apres == config.DONNEES / store.LEAVERS / rel, apres

@@ -236,7 +236,9 @@
 <div class="carte">
   <form method="post" action="{{ url_for('archiver', uid=item.id) }}" class="actions">
     <label>Date de sortie
-      <input type="date" name="date_sortie" required></label>
+      <input type="text" name="date_sortie" class="date" inputmode="numeric"
+             placeholder="jj/mm/aaaa" maxlength="10" pattern="\d{2}/\d{2}/\d{4}"
+             title="jj/mm/aaaa" autocomplete="off" required></label>
     <label>Motif (facultatif)
       <input type="text" name="motif"></label>
     <button class="discret">Archiver dans LEAVERS</button>

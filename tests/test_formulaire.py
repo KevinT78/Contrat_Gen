@@ -80,6 +80,23 @@ def test_fetch_valide_cree_la_soumission():
         store.fichiers(item, "pieces")
 
 
+def test_date_saisie_en_jj_mm_aaaa():
+    c = app.test_client()
+    page = c.get("/").text
+    assert 'name="date_naissance"' in page and 'placeholder="jj/mm/aaaa"' in page, \
+        "le champ date doit être un texte jj/mm/aaaa (le natif suit la langue du navigateur)"
+    r = c.post("/", data={**BASE, "date_naissance": "11/04/1998", **pieces()}, **FETCH)
+    assert r.get_json()["ok"] is True, r.get_json()
+    item = store.lire(max(i["id"] for i in store.tout()))
+    assert item["champs"]["date_naissance"] == "1998-04-11", item["champs"]["date_naissance"]
+    avant = compte_soumissions()
+    r = c.post("/", data={**BASE, "date_naissance": "31/02/1998", **pieces()}, **FETCH)
+    assert r.status_code == 422 and any("jj/mm/aaaa" in e for e in r.get_json()["erreurs"]), \
+        r.get_json()
+    assert compte_soumissions() == avant
+
+
 cas("POST fetch en erreur -> 422 {ok:false}, aucune soumission écrite", test_fetch_erreur_ne_cree_rien)
 cas("POST fetch valide -> {ok:true}, soumission + 2 faces de CNI", test_fetch_valide_cree_la_soumission)
-print("\nFormulaire fetch OK — erreur sans écriture, envoi valide, CNI en deux fichiers.")
+cas("date saisie jj/mm/aaaa -> stockée AAAA-MM-JJ ; 31/02 refusé", test_date_saisie_en_jj_mm_aaaa)
+print("\nFormulaire fetch OK — erreur sans écriture, envoi valide, CNI en deux fichiers, dates jj/mm/aaaa.")

@@ -49,8 +49,14 @@
         <span class="aide">{{ c.max_fichiers }} fichiers obligatoires (recto + verso),
           à joindre en une ou plusieurs fois</span>
       {% endif %}
+    {% elif c.type == 'date' %}
+      {# Champ texte et non type=date : le format du champ natif suit la langue du
+         navigateur (mm/dd/yyyy sur un téléphone en anglais). #}
+      <input type="text" name="{{ c.id }}" id="{{ c.id }}" value="{{ date_fr(v) }}"
+             class="date" inputmode="numeric" placeholder="jj/mm/aaaa" maxlength="10"
+             pattern="\d{2}/\d{2}/\d{4}" title="jj/mm/aaaa" autocomplete="off">
     {% else %}
-      {% set html = {'date':'date','nombre':'number','montant':'number',
+      {% set html = {'nombre':'number','montant':'number',
                      'email':'email','tel':'tel'}.get(c.type, 'text') %}
       <input type="{{ html }}" name="{{ c.id }}" id="{{ c.id }}" value="{{ v }}"
              {% if c.type == 'montant' %}step="0.01"{% endif %}>
@@ -71,10 +77,16 @@
 document.addEventListener('DOMContentLoaded', function () {
   // Champs conditionnels (requis_si) : masqués tant que la condition n'est pas
   // remplie. Le serveur revalide de toute façon ; ici c'est du confort.
+  // Une date masquée n'est plus contrôlée (disabled) : un reste de saisie à moitié
+  // tapé bloquerait l'envoi sur un `pattern` que personne ne voit. Les autres
+  // champs masqués restent envoyés (ex. heures_hebdo garde son défaut de 35).
   document.querySelectorAll('[data-si]').forEach(function (bloc) {
     var pilote = document.getElementById(bloc.dataset.si);
     if (!pilote) return;
-    var maj = function () { bloc.hidden = pilote.value !== bloc.dataset.vaut; };
+    var maj = function () {
+      bloc.hidden = pilote.value !== bloc.dataset.vaut;
+      bloc.querySelectorAll('input.date').forEach(function (e) { e.disabled = bloc.hidden; });
+    };
     pilote.addEventListener('change', maj);
     maj();
   });

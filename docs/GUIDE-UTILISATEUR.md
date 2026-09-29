@@ -55,7 +55,7 @@ L'adresse dépend de l'installation (en démonstration : `http://localhost:5000`
 
 ### Remplir la fiche
 
-Les champs sont définis par la configuration du client ; ils peuvent donc différer de la capture ci-dessous. Les champs marqués d'un astérisque sont obligatoires. Certains n'apparaissent que selon une réponse précédente (par exemple le titre de séjour quand la nationalité n'est pas française).
+Les champs sont définis par la configuration du client ; ils peuvent donc différer de la capture ci-dessous. Les champs marqués d'un astérisque sont obligatoires. Certains n'apparaissent que selon une réponse précédente (par exemple le titre de séjour quand la nationalité n'est pas française). Les dates se tapent au format **jj/mm/aaaa**, quelle que soit la langue du téléphone ou du navigateur : les barres obliques s'ajoutent seules (« 12041995 » devient « 12/04/1995 »).
 
 ![Le formulaire rempli, juste avant l'envoi](pdf/img/01-formulaire.png)
 

@@ -203,6 +203,17 @@ def _date_fr(iso):
         return iso or ""
 
 
+def _date_iso(saisie):
+    """JJ/MM/AAAA (saisie du formulaire) -> AAAA-MM-JJ, ou None si invalide.
+    AAAA-MM-JJ est encore accepte : ancien champ natif, clients sans JS."""
+    for fmt in ("%d/%m/%Y", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(saisie, fmt).date().isoformat()
+        except ValueError:
+            pass
+    return None
+
+
 @app.context_processor
 def _aides():
     return {"nom_de": _nom,
@@ -330,11 +341,21 @@ def _saisie(item=None):
                                    "refusé — " + ", ".join(sorted(store.EXTENSIONS)) + ".")
             continue
         v = (request.form.get(c["id"]) or "").strip()
-        champs[c["id"]] = v
         exige = c.get("requis")
         if c.get("requis_si"):
             autre, attendu = c["requis_si"]
             exige = (request.form.get(autre) or "").strip() == attendu
+        if v and c["type"] == "date":
+            # Stockage toujours en AAAA-MM-JJ : contrat, mails et recap le relisent.
+            if iso := _date_iso(v):
+                v = iso
+            elif c.get("requis_si") and not exige:
+                # Date masquée à l'écran : un reste de saisie invalide est oublié,
+                # une erreur porterait sur un champ que personne ne voit.
+                v = ""
+            else:
+                erreurs.append(f"« {c['libelle']} » : date attendue au format jj/mm/aaaa.")
+        champs[c["id"]] = v
         if exige and not v:
             erreurs.append(f"« {c['libelle']} » est obligatoire.")
         if v and c["type"] == "etablissement":
@@ -946,9 +967,9 @@ def renvoyer(uid):
 def archiver(uid):
     """Depart du salarie : deplace le dossier vers LEAVERS/ (onglet « Anciens
     salariés »). Terminal, comme abandonner()."""
-    date_sortie = (request.form.get("date_sortie") or "").strip()
+    date_sortie = _date_iso((request.form.get("date_sortie") or "").strip())
     if not date_sortie:
-        flash("La date de sortie est obligatoire.", "erreur")
+        flash("La date de sortie est obligatoire, au format jj/mm/aaaa.", "erreur")
         return redirect(url_for("detail", uid=uid))
     try:
         store.archiver(uid, session["utilisateur"], date_sortie,
