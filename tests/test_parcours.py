@@ -25,6 +25,7 @@ os.environ["DONNEES"] = TEMP
 import config          # noqa: E402
 import store           # noqa: E402
 from app import app    # noqa: E402
+from _outils import corps_texte  # noqa: E402
 
 for zone in ("soumissions",):
     (config.DONNEES / zone).mkdir(parents=True, exist_ok=True)
@@ -53,7 +54,7 @@ def dernier_mail(nom):
     fichiers = sorted((config.DONNEES / "mails").glob(f"*-{nom}.eml"))
     assert fichiers, f"aucun mail « {nom} » envoye"
     msg = email.message_from_bytes(fichiers[-1].read_bytes())
-    return msg["To"] + "\n" + msg.get_payload(decode=True).decode("utf-8")
+    return msg["To"] + "\n" + corps_texte(msg)
 
 
 def lien_dans(mail, chemin):
@@ -97,8 +98,9 @@ def couloir_dark_kitchen(c):
            data={"motif": "Pièce illisible ou manquante", "commentaire": "RIB flou"})
     assert store.etat(store.lire(uid)) == "Rejetee"
     ko = dernier_mail("rejet")
-    assert ko.startswith("manager@example.com\n"), \
-        "établissement sans manager_email : le rejet doit retomber sur l'email saisi"
+    assert ko.startswith("rh@example.com\n"), \
+        "établissement sans manager_email : le rejet doit retomber sur mails.rh, " \
+        "jamais sur l'email saisi (celui du candidat)"
     lien = lien_dans(ko, "corriger")
     r = c.post(lien, data={**base_saisie("ACME Restauration / Lille Grand Place"),
                            "rib": piece()}, content_type="multipart/form-data")
@@ -110,6 +112,8 @@ def couloir_dark_kitchen(c):
     c.post(f"/dossier/{uid}/valider")
     item = store.lire(uid)
     assert item["_zone"] == "documents" and store.etat(item) == "ContratPret"
+    assert dernier_mail("demande_validee").startswith("rh@example.com\n"), \
+        "établissement sans manager_email : l'avis de validation doit aller à mails.rh"
     assert Path(item["_dir"]).relative_to(config.DONNEES).as_posix() == \
         "DOSSIERS SALARIES/DARK KITCHENS/Lille Grand Place/Manager/MARTIN Camille", item["_dir"]
     assert store.chemin(uid, "pieces").name == "FICHE PERSONNELLE"
@@ -456,7 +460,7 @@ def recap_liste_la_semaine(uids):
     for f in fichiers:
         msg = email.message_from_bytes(f.read_bytes())
         assert msg["Cc"] == "rh@example.com", msg["Cc"]
-        par_cabinet[msg["To"]] = msg.get_payload(decode=True).decode("utf-8")
+        par_cabinet[msg["To"]] = corps_texte(msg)
     nord, sud = par_cabinet["cabinet-nord@example.com"], par_cabinet["cabinet-sud@example.com"]
     assert uids[0] in nord and uids[1] not in nord, "un cabinet voit l'autre société"
     assert uids[1] in sud and uids[0] not in sud

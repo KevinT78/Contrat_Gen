@@ -287,7 +287,7 @@ Sur un dossier **« Soumise »**, la seconde partie de la carte « Décision » 
 
 ![La carte d'un dossier rejeté](pdf/img/17-rejetee.png)
 
-**Effets :** le dossier passe à **« Rejetée »** et un mail part à l'adresse du manager de l'établissement, celle déclarée dans la configuration (`manager_email`). Si l'établissement n'en déclare aucune, le mail part à l'adresse email saisie dans le formulaire, c'est-à-dire celle du candidat : déclarez donc l'adresse de chaque manager à l'installation.
+**Effets :** le dossier passe à **« Rejetée »** et un mail part à l'adresse du manager de l'établissement, celle déclarée dans la configuration (`manager_email`). Si l'établissement n'en déclare aucune, le mail part au service RH (`mails.rh`), qui transmet le lien au manager : déclarez donc l'adresse de chaque manager à l'installation.
 
 ```text
 Objet : Demande d'embauche à corriger — MARTIN Léa
@@ -387,6 +387,8 @@ Le lien expire après 30 jours, ne sert qu'une fois, et un nouveau rejet en gén
 ### Le manager n'a pas reçu le mail de rejet
 
 Le message affiché après le rejet le signale (« le mail n'est pas parti ») et le journal du dossier porte une entrée « mail_echoue ». Vérifiez la configuration des mails avec `python configurer.py mail votre@adresse`.
+
+Si le mail est bien parti mais que le manager ne l'a pas reçu, l'établissement n'a peut-être pas d'adresse de manager dans la configuration : le mail est alors arrivé au service RH, qui doit transférer le lien de correction au manager.
 
 ### Je ne reçois aucun mail
 

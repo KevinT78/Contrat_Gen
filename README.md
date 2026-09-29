@@ -303,8 +303,9 @@ invalide empêche le démarrage : l'application dit ce qui cloche, et
 ```
 
 `manager_email` est l'adresse **fixe** du manager de l'établissement : le mail de
-rejet (lien de correction) y part, quel que soit l'email tapé dans le formulaire ;
-sans elle, il retombe sur l'email saisi.
+rejet (lien de correction) et l'avis de validation y partent, quel que soit l'email
+tapé dans le formulaire ; sans elle, ils partent à la RH (`mails.rh`), jamais à l'email
+saisi, qui est celui du candidat.
 
 ### Qui reçoit quoi
 
@@ -313,7 +314,8 @@ Expéditeur unique : `mails.expediteur`.
 | Quand | Modèle | Destinataire |
 |---|---|---|
 | Soumission ou correction du formulaire | `nouvelle_soumission` | `mails.rh` |
-| Rejet par la RH | `rejet` | `manager_email` de l'établissement, repli email saisi |
+| Rejet par la RH | `rejet` | `manager_email` de l'établissement, repli `mails.rh` |
+| Validation par la RH | `demande_validee` | `manager_email` de l'établissement, repli `mails.rh` |
 | Validation par la RH | `rappel_dpae` | `mails.dpae`, repli `mails.rh` |
 | Cron hebdomadaire (`recap.py`) | `recap_hebdo` | le cabinet de chaque société, `mails.rh` en copie |
 

@@ -27,6 +27,7 @@ os.environ["DONNEES"] = TEMP
 import config          # noqa: E402
 import store           # noqa: E402
 from app import app    # noqa: E402
+from _outils import corps_texte  # noqa: E402
 
 (config.DONNEES / "soumissions").mkdir(parents=True, exist_ok=True)
 
@@ -64,7 +65,7 @@ def dernier_mail(nom):
     fichiers = sorted((config.DONNEES / "mails").glob(f"*-{nom}.eml"))
     assert fichiers, f"aucun mail « {nom} »"
     msg = email.message_from_bytes(fichiers[-1].read_bytes())
-    return msg.get_payload(decode=True).decode("utf-8")
+    return corps_texte(msg)
 
 
 def parcours_jusqua_remis(c):

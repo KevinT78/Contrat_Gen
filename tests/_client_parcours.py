@@ -23,6 +23,7 @@ import config          # noqa: E402
 import doctor          # noqa: E402
 import store           # noqa: E402
 from app import app    # noqa: E402
+from _outils import corps_texte  # noqa: E402
 
 for zone in ("soumissions",):
     (config.DONNEES / zone).mkdir(parents=True, exist_ok=True)
@@ -157,7 +158,7 @@ def dernier_mail(nom):
     fichiers = sorted((config.DONNEES / "mails").glob(f"*-{nom}.eml"))
     assert fichiers, f"aucun mail « {nom} » envoyé"
     msg = email.message_from_bytes(fichiers[-1].read_bytes())
-    return msg["To"] + "\n" + msg.get_payload(decode=True).decode("utf-8")
+    return msg["To"] + "\n" + corps_texte(msg)
 
 
 def lien_dans(mail, chemin):
@@ -213,7 +214,7 @@ def verifier_recap(uids_attendus, nom_attendu):
     fichiers = sorted((config.DONNEES / "mails").glob("*-recap_hebdo.eml"))
     assert fichiers, "aucun mail recap_hebdo envoyé"
     corps = "\n".join(
-        email.message_from_bytes(f.read_bytes()).get_payload(decode=True).decode("utf-8")
+        corps_texte(email.message_from_bytes(f.read_bytes()))
         for f in fichiers)
     assert nom_attendu.upper() in corps, f"« {nom_attendu} » absent du récap :\n{corps}"
 

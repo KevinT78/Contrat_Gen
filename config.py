@@ -182,8 +182,13 @@ def groupe(cle):
 
 
 def manager(cle):
-    """Adresse fixe du manager de l'etablissement (societes.json), ou ""."""
-    _, e = etablissement(cle)
+    """Adresse fixe du manager de l'etablissement (societes.json), ou "" --
+    y compris quand l'etablissement a disparu de la config (meme regle que
+    mode_contrat) : valider ou rejeter un vieux dossier ne doit pas 500."""
+    try:
+        _, e = etablissement(cle)
+    except KeyError:
+        return ""
     return e.get("manager_email", "")
 
 

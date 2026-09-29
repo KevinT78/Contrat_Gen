@@ -125,8 +125,8 @@ def avertissements():
                     for e in s["etablissements"] if not e.get("manager_email")]
     if sans_manager:
         out.append(f"manager_email absent ({', '.join(sans_manager)}) : le lien de "
-                   "correction d'un rejet part à l'adresse tapée dans le formulaire "
-                   "public  [config/societes.json]")
+                   "correction d'un rejet et l'avis de validation partent à la RH "
+                   "(mails.rh), qui devra transmettre  [config/societes.json]")
     if not m.get("comptable_defaut"):
         if sans_cabinet := [s["nom"] for s in config.societes() if not s.get("comptable_email")]:
             out.append(f"aucun cabinet comptable pour {', '.join(sans_cabinet)} : le mail "

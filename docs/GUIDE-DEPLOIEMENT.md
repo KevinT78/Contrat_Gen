@@ -597,11 +597,13 @@ sudo systemctl restart 'contratgen@*' contratgen-demo
 |---|---|---|---|
 | `nouvelle_soumission` | Formulaire public, ou correction | `mails.rh` (liste) | `{nom}` `{id}` `{lien}` |
 | `rappel_dpae` | Validation par la RH | `mails.dpae`, sinon `mails.rh` | `{nom}` `{debut}` `{poste}` `{societe}` `{etablissement}` `{siret}` `{lien}` |
-| `rejet` | Rejet par la RH | `manager_email` de l'établissement, **sinon l'e-mail saisi dans le formulaire** | `{nom}` `{motif}` `{commentaire}` `{lien}` |
+| `rejet` | Rejet par la RH | `manager_email` de l'établissement, sinon `mails.rh` | `{nom}` `{motif}` `{commentaire}` `{lien}` |
+| `demande_validee` | Validation par la RH | `manager_email` de l'établissement, sinon `mails.rh` | `{nom}` |
 | `recap_hebdo` | `recap.py` (timer) | `comptable_email` de la société, sinon `mails.comptable_defaut`, avec en copie `mails.recap`, sinon `mails.rh` | `{periode}` `{nombre}` `{liste}` |
 
 - **Renseignez `manager_email` pour chaque établissement.** Sinon, le lien de correction
-  (qui donne accès à la demande) part à l'adresse tapée dans le formulaire public.
+  et l'avis de validation partent à la RH (`mails.rh`), qui doit transmettre au manager.
+  Ils ne partent jamais à l'adresse tapée dans le formulaire, qui est celle du candidat.
 - Une variable inconnue reste affichée telle quelle (`{prenom}` apparaît littéralement).
   Une accolade isolée dans un gabarit fait échouer le rendu, et donc le mail.
 

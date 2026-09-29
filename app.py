@@ -154,6 +154,14 @@ def _email_demandeur(champs):
     return config.valeur(champs, "email")
 
 
+def _destinataire_manager(champs):
+    """Adresse FIXE du manager de l'etablissement (societes.json), sinon la RH
+    (mails.rh), qui transmet. Jamais l'email saisi dans le formulaire : c'est
+    celui du candidat, et le lien de correction ouvre tout son dossier."""
+    return (config.manager(config.valeur(champs, "etablissement"))
+            or config.instance()["mails"].get("rh") or [])
+
+
 def _mail(uid, modele, a, **vals):
     """Envoie, et JOURNALISE l'echec. -> True si parti.
 
@@ -667,13 +675,11 @@ def valider(uid):
 
 
 def _avis_manager_validee(item):
-    """Confirme au manager que sa demande a été acceptée (manager_email de
-    l'établissement, sinon l'e-mail saisi dans le formulaire — même repli
+    """Confirme au manager que sa demande a été acceptée (même destinataire
     que le mail de rejet)."""
     champs = item["champs"]
-    a = (config.manager(config.valeur(champs, "etablissement"))
-         or _email_demandeur(champs))
-    return _mail(item["id"], "demande_validee", a, nom=_nom(champs))
+    return _mail(item["id"], "demande_validee", _destinataire_manager(champs),
+                 nom=_nom(champs))
 
 
 def _rappel_dpae(item):
@@ -707,12 +713,8 @@ def rejeter(uid):
     item = store.lire(uid)
     lien = url_for("corriger", jeton=store.signer("correction", uid, item["link_epoch"]),
                    _external=True)
-    # Le lien de correction part a l'adresse FIXE du manager de l'etablissement
-    # (societes.json), pas a celle tapee dans le formulaire public ; l'email
-    # saisi ne sert que de repli pour un etablissement qui n'en declare pas.
-    a = (config.manager(config.valeur(item["champs"], "etablissement"))
-         or _email_demandeur(item["champs"]))
-    ok = _mail(uid, "rejet", a, motif=motif, commentaire=commentaire, lien=lien,
+    ok = _mail(uid, "rejet", _destinataire_manager(item["champs"]),
+               motif=motif, commentaire=commentaire, lien=lien,
                nom=_nom(item["champs"]))
     flash("Demande rejetée, lien de correction envoyé." if ok
           else "Demande rejetée, mais le mail n'est pas parti : le manager n'a "
