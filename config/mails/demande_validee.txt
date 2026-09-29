@@ -1,0 +1,6 @@
+Objet: Demande d'embauche validée — {nom}
+Bonjour,
+
+Votre demande pour {nom} vient d'être validée.
+
+Cordialement

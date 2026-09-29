@@ -112,6 +112,7 @@ print("OK  destinataire vide : (False, raison), aucun envoi")
 MAILS.update(mode="smtp", hote="localhost", port=1025, utilisateur="", mot_de_passe="")
 SITES = {
     "nouvelle_soumission": dict(nom="Jean Test", id="ABC", lien="http://x/d"),
+    "demande_validee":     dict(nom="Jean Test"),
     "rejet":               dict(nom="Jean Test", motif="Autre", commentaire="RIB flou", lien="http://x/c"),
     "rappel_dpae":         dict(nom="Jean Test", debut="1er octobre 2026", poste="Manager",
                                 societe="S", etablissement="E", siret="123", lien="http://x/d"),

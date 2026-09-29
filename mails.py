@@ -44,8 +44,12 @@ def mode():
     return (os.environ.get("MAILS_MODE") or conf.get("mode") or "console").strip().lower()
 
 
-def envoyer(modele, a, cc=(), **vals):
-    """-> (True, None) ou (False, raison). Un echec n'annule jamais une transition."""
+def envoyer(modele, a, cc=(), html=None, **vals):
+    """-> (True, None) ou (False, raison). Un echec n'annule jamais une transition.
+
+    `html` : corps HTML optionnel (multipart/alternative). Les clients qui
+    l'affichent voient les liens cliquables ; le .txt reste la base texte.
+    """
     conf = config.instance()["mails"]
     destinataires = [d for d in (a if isinstance(a, list) else [a]) if d]
     if not destinataires:
@@ -62,6 +66,8 @@ def envoyer(modele, a, cc=(), **vals):
             msg["Cc"] = ", ".join(copie)
         msg["Subject"] = objet
         msg.set_content(corps)
+        if html:
+            msg.add_alternative(html, subtype="html")
 
         if mode_envoi == "console":
             d = config.DONNEES / "mails"
