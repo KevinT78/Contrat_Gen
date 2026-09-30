@@ -6,7 +6,7 @@ Bonjour,
 {liste}
 
 Chaque lien est personnel, valable 30 jours, et donne accès aux pièces du
-salarié, au contrat signé et à l'accusé DPAE (« Tout télécharger »).
+salarié, au contrat et à l'accusé DPAE (« Tout télécharger »).
 
 --
 Envoi automatique, ne pas répondre.

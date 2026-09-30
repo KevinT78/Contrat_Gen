@@ -69,7 +69,7 @@ Tout ce qui varie d'un client à l'autre vit dans `config/` : JSON, modèles de 
 - secret HMAC encore à sa valeur d'exemple ;
 - compte RH au mot de passe d'exemple, aucun compte, ou bloc `utilisateurs` malformé ;
 - aucun établissement déclaré ;
-- `mails.rh` ou `mails.expediteur` vide, `url` publique vide (les liens du mail hebdomadaire partiraient vides) ;
+- `mails.rh` ou `mails.expediteur` vide, `url` publique vide (les liens de tous les mails partiraient vides) ;
 - rôle du formulaire inconnu ou pointant un champ inexistant, règle `derives` malformée ;
 - jeton d'un modèle de contrat sans source ;
 - poste sans modèle de contrat, grille de salaire incomplète ;
@@ -175,7 +175,7 @@ Chaque entrée porte au minimum `de`, `vers`, `le` (ISO 8601 UTC) et `par`. Une 
 }
 ```
 
-Types d'événements écrits par `store.noter()` : `fiche_salarie`, `fiche_echouee`, `mail_echoue`, `signature_envoyee`, `contrat_signe` (contrat signé déposé, non bloquant, seulement en `RemisComptable`, sans changer d'état ; exclu de la copie `COMPTA/` et du lot par `store.fichiers_compta()`), `renvoi_comptable`, `acces_lot`. S'y ajoute `purge`, posé par `store.purger()` au moment où il allège le journal. Un rejet ajoute `motif` et `commentaire` ; une correction ajoute `motif: "correction"`.
+Types d'événements écrits par `store.noter()` : `fiche_salarie`, `fiche_echouee`, `mail_echoue`, `signature_envoyee`, `contrat_signe` (contrat signé déposé, non bloquant, seulement en `RemisComptable`, sans changer d'état ; exclu de la copie `COMPTA/` et du lot par `store.fichiers_compta()`), `renvoi_comptable`, `correction_renvoyee` (lien de correction renvoyé après un mail de rejet raté), `acces_lot`. S'y ajoute `purge`, posé par `store.purger()` au moment où il allège le journal. Un rejet ajoute `motif` et `commentaire` ; une correction ajoute `motif: "correction"`.
 
 ![Le journal tel qu'affiché dans la fiche du dossier](pdf/img/15-journal.png)
 
@@ -188,6 +188,7 @@ Types d'événements écrits par `store.noter()` : `fiche_salarie`, `fiche_echou
 ```text
 data/
 ├── .serveur-actif.json                 # verrou multi-machine
+├── recap.json                          # mail hebdo : dernier envoi réussi / échec par cabinet (écrit par recap.py seul)
 ├── soumissions/<ULID>/                 # demandes pas encore acceptées
 │   ├── soumission.json
 │   └── FICHE PERSONNELLE/              # pièces au nom de leur rôle (identite.pdf, rib.pdf…)
@@ -326,7 +327,7 @@ Le moteur ne lit **aucun identifiant de champ en dur** ; il passe par un vocabul
 | `etablissement` | oui | Mentions légales, cabinet, couloir de contrat, arborescence |
 | `poste` | oui | Modèle de contrat, grille de salaire, arborescence |
 | `nom` | oui | Nom du répertoire, noms de fichiers, mails |
-| `email` | oui | Email du candidat ; repli du lien de correction si l'établissement n'a pas de `manager_email` |
+| `email` | oui | Email du candidat ; jamais destinataire d'un mail (sans `manager_email`, le lien de correction part à `mails.rh`) |
 | `prenom`, `nom_usage` | non | Identité quand nom et prénom sont saisis séparément |
 | `date_debut` | non | Colonne « Début », alerte de retard, alerte CDD |
 
@@ -503,6 +504,7 @@ Liste blanche d'extensions (`.pdf`, `.jpg`, `.jpeg`, `.png` ; `.docx` en plus po
 | GET | `/dossier/<uid>/fichier/<bucket>/<nom>` | Téléchargement d'un fichier |
 | POST | `/dossier/<uid>/valider` | Accepter : ouvre le dossier, fiche salarié, rappel DPAE, contrat si couloir généré |
 | POST | `/dossier/<uid>/rejeter` | Rejeter : motif, commentaire, mail avec lien de correction |
+| POST | `/dossier/<uid>/renvoyer-correction` | Renvoyer le lien de correction (proposé seulement si le mail de rejet a échoué) |
 | POST | `/dossier/<uid>/contrat` | Générer le contrat (saisie RH, ou reprise après échec) |
 | POST | `/dossier/<uid>/contrat-depose` | Déposer le contrat (couloir déposé) |
 | POST | `/dossier/<uid>/contrat-signe` | Déposer le contrat signé |
@@ -571,6 +573,8 @@ CONFIG_DIR=/srv/basilic/config DONNEES=/srv/basilic/data python recap.py
 ```
 
 À planifier une fois par semaine (cron, tâche planifiée Windows). Sans cette tâche, les dossiers remis n'arrivent jamais au cabinet.
+
+Chaque cabinet repart de son dernier envoi réussi, noté dans `DONNEES/recap.json` (`--jours`, 7 par défaut, ne règle que le premier envoi). Un envoi raté laisse ses dossiers en attente pour le passage suivant et s'affiche en bandeau sur l'écran « Salariés » ; l'état est réécrit après chaque cabinet. `recap.py` n'écrit jamais un `dossier.json` : il tourne dans un second process, et `store._verrou` n'exclut que les threads d'un même process.
 
 ### Sauvegarde et mise à jour
 

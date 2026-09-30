@@ -92,8 +92,8 @@ où vit le journal `dossier.json`. Voir l'ADR.
 Il faut ensuite remplir `config/` puis démarrer. **Le démarrage refuse de servir**
 tant que l'installation est incomplète : secret encore par défaut, compte RH au
 mot de passe par défaut, aucun établissement déclaré, `mails.rh` /
-`mails.expediteur` vides, ou `url` (adresse publique, base des liens du mail
-hebdo) vide (`config.verifier()`). Sans destinataire RH, chaque
+`mails.expediteur` vides, ou `url` (adresse publique, base des liens de tous
+les mails) vide (`config.verifier()`). Sans destinataire RH, chaque
 demande partirait en `mail_echoue` dans le journal sans que personne ne le voie.
 
 `configurer.py` rend ce garde-fou lisible **avant** de lancer le serveur, et
@@ -401,14 +401,17 @@ sont imposés ; sans identifiant, l'envoi part en clair (catcher local type Mail
 ## Mail hebdomadaire au cabinet comptable
 
 ```bash
-python recap.py            # dossiers remis ces 7 derniers jours
-python recap.py --jours 14
+python recap.py            # dossiers remis depuis le dernier envoi réussi
+python recap.py --jours 14 # fenêtre du tout premier envoi d'un cabinet (défaut 7)
 ```
 
 **Un mail par cabinet** (`comptable_email` de la société, repli
 `mails.comptable_defaut`), la RH en copie (`mails.recap`, repli `mails.rh`) : les
-dossiers remis au comptable sur la fenêtre (journal `vers == RemisComptable`, ou
-un renvoi), chacun avec son **lien de lot signé** (30 jours). Un cabinet ne voit
+dossiers remis au comptable depuis le dernier envoi réussi à ce cabinet (journal
+`vers == RemisComptable`, ou un renvoi), chacun avec son **lien de lot signé**
+(30 jours). Un envoi raté ne fait rien avancer : ses dossiers repartent au
+passage suivant, et l'écran « Salariés » l'affiche en rouge
+(`DONNEES/recap.json`, écrit par `recap.py` seul). Un cabinet ne voit
 jamais les dossiers d'une autre société ; aucun mail à un cabinet sans dossier.
 Les liens sont fabriqués hors requête : `instance.json → url` (adresse publique
 de l'app) est obligatoire, le démarrage le refuse vide. Aucun scheduler dans

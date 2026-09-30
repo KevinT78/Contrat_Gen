@@ -133,7 +133,7 @@ def avertissements():
                        "hebdomadaire (recap.py) échouera  [config/societes.json]")
     url = config.url_publique()
     if url and not url.startswith("https://"):
-        out.append(f"url « {url} » n'est pas en https : les liens du mail hebdomadaire "
+        out.append(f"url « {url} » n'est pas en https : les liens des mails "
                    "partiraient en clair  [config/instance.json]")
     if not config.conservation():
         out.append("aucun bloc « conservation » : les pièces ne sont jamais purgées "

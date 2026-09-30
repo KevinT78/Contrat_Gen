@@ -256,11 +256,10 @@ Sur un dossier remis, la carte « Lien comptable » propose **« Refaire la copi
 
 ### Le mail hebdomadaire au cabinet
 
-Une fois par semaine (tâche planifiée à l'installation), chaque cabinet reçoit la liste des dossiers remis depuis 7 jours, avec un **lien personnel par dossier**, valable **30 jours**. Le service RH est en copie. La commande peut aussi être lancée à la main :
+Une fois par semaine (tâche planifiée à l'installation), chaque cabinet reçoit la liste des dossiers remis depuis son dernier mail, avec un **lien personnel par dossier**, valable **30 jours**. Le service RH est en copie. Si l'envoi échoue, un message rouge l'indique en haut de l'écran « Salariés », et les dossiers repartent avec le mail suivant. La commande peut aussi être lancée à la main :
 
 ```bash
-python recap.py              # dossiers remis ces 7 derniers jours
-python recap.py --jours 14   # sur 14 jours
+python recap.py              # dossiers remis depuis le dernier mail réussi
 ```
 
 ### La page du lot, côté cabinet
@@ -386,7 +385,7 @@ Le lien expire après 30 jours, ne sert qu'une fois, et un nouveau rejet en gén
 
 ### Le manager n'a pas reçu le mail de rejet
 
-Le message affiché après le rejet le signale (« le mail n'est pas parti ») et le journal du dossier porte une entrée « mail_echoue ». Vérifiez la configuration des mails avec `python configurer.py mail votre@adresse`.
+Le message affiché après le rejet le signale (« le mail n'est pas parti »), la carte « Rejetée » du dossier le rappelle, et le journal porte une entrée « mail_echoue ». Vérifiez la configuration des mails avec `python configurer.py mail votre@adresse`, puis cliquez sur **« Renvoyer le lien de correction »** dans la carte du dossier.
 
 Si le mail est bien parti mais que le manager ne l'a pas reçu, l'établissement n'a peut-être pas d'adresse de manager dans la configuration : le mail est alors arrivé au service RH, qui doit transférer le lien de correction au manager.
 

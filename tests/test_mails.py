@@ -192,5 +192,145 @@ assert "SMTPServerDisconnected" in _journal[0]["motif"], _journal[0]
 assert "PAS re" in _ecran, "l'ecran affirme un envoi qui a echoue : %r" % _ecran
 print("OK  echec d'envoi : journalise ET dit a l'ecran (route /rejeter)")
 
+
+# --- refus dont le mail est tombe : ecran, formulaire de correction, renvoi --
+# Le motif s'affichait depuis journal[-1] -- c'est-a-dire le mail_echoue, pas
+# le refus -- et l'ecran affirmait « lien envoye ». Aucun moyen de renvoyer.
+import html as _html                                               # noqa: E402
+
+_MOTIF = config.instance()["motifs_ko"][0]
+_champs = {config.role("email"): "manager@test.local",
+           config.role("nom"): "Martin", config.role("prenom"): "Camille",
+           config.role("etablissement"): config.etablissements()[0][0],
+           config.role("poste"): list(config.instance()["templates"])[0]}
+_uid = store.creer_soumission(_champs, {})
+_c = app.test_client()
+_c.post("/login", data={"identifiant": "rh", "mot_de_passe": "fixture"})
+_vus, _vrai = [], module.mails.envoyer
+
+
+def _smtp(marche):
+    module.mails.envoyer = lambda *a, **k: (_vus.append(k), (True, None) if marche
+                                            else (False, "SMTPServerDisconnected: simule"))[1]
+
+
+def _page():
+    return _html.unescape(_c.get("/dossier/%s" % _uid).get_data(as_text=True))
+
+
+try:
+    _smtp(False)
+    _c.post("/dossier/%s/rejeter" % _uid, data={"motif": _MOTIF, "commentaire": "piece floue"})
+    _p = _page()
+    assert re.search(r"Rejetée le [\d/]+ —\s+" + re.escape(_MOTIF), _p), "motif du refus absent"
+    assert "PAS reçu le lien" in _p and "a été envoyé" not in _p, "l'ecran affirme un envoi rate"
+    assert "renvoyer-correction" in _p, "pas de bouton de renvoi"
+
+    _jeton = store.signer("correction", _uid, store.lire(_uid)["link_epoch"])
+    _f = _html.unescape(_c.get("/corriger/" + _jeton).get_data(as_text=True))
+    assert _MOTIF in _f and "piece floue" in _f and "SMTPServer" not in _f, \
+        "le formulaire de correction montre l'erreur SMTP au lieu du motif"
+
+    _c.post("/dossier/%s/renvoyer-correction" % _uid)          # SMTP toujours en panne
+    assert "renvoyer-correction" in _page(), "bouton disparu alors que rien n'est parti"
+
+    _smtp(True)
+    _c.post("/dossier/%s/renvoyer-correction" % _uid)
+    assert _vus[-1]["commentaire"] == "piece floue" and "/corriger/" + _jeton in _vus[-1]["lien"]
+    _p = _page()
+    assert "a été envoyé" in _p and "renvoyer-correction" not in _p, "renvoi reussi non pris en compte"
+    _n = len(_vus)
+    _c.post("/dossier/%s/renvoyer-correction" % _uid)          # page perimee / double clic
+    assert len(_vus) == _n, "lien renvoye alors qu'il etait deja parti"
+finally:
+    module.mails.envoyer = _vrai
+print("OK  refus au mail rate : bon motif, echec dit, lien renvoyable")
+
+# --- recap hebdo : un envoi rate ne perd aucun dossier, et se voit -----------
+# Avant : fenetre fixe de 7 jours. Un lundi rate (SMTP en panne), et le lundi
+# suivant ces dossiers etaient sortis de la fenetre -- le cabinet ne les
+# recevait jamais, et l'echec ne se voyait que dans la sortie du cron.
+import recap                                                       # noqa: E402
+from datetime import datetime as _dt, timedelta as _td, timezone as _tz  # noqa: E402
+
+_il_y_a = lambda j: (_dt.now(_tz.utc) - _td(days=j)).isoformat(timespec="seconds")
+_remis = {"id": "REMIS6J", "champs": _champs,
+          "journal": [{"vers": "Soumise", "le": _il_y_a(9)},
+                      {"de": "DpaeFaite", "vers": "RemisComptable", "le": _il_y_a(6)}]}
+_cab = config.comptable(config.etablissements()[0][0])
+
+
+def _recap(jours, marche, dossiers=None):
+    envoyes, vrai_tout = [], store.tout
+    store.tout = lambda: [_remis] if dossiers is None else dossiers
+    module.mails.envoyer = lambda modele, a, cc=(), **k: (
+        envoyes.append(k["liste"]), (True, None) if marche else (False, "SMTPAuthenticationError: simule"))[1]
+    try:
+        recap.main(jours)
+    except SystemExit as e:
+        code = e.code
+    finally:
+        store.tout, module.mails.envoyer = vrai_tout, _vrai
+    return code, envoyes
+
+
+config.RECAP_ETAT.unlink(missing_ok=True)
+_code, _env = _recap(7, marche=False)
+assert _code == 1 and len(_env) == 1
+_s = _html.unescape(_c.get("/salaries").get_data(as_text=True))
+assert "n'est pas parti" in _s and _cab in _s, "recap rate invisible a l'ecran Salaries"
+
+# Semaine suivante simulee par --jours 1 : l'ancienne fenetre excluait le dossier.
+_code, _env = _recap(1, marche=True)
+assert _code == 0 and len(_env) == 1 and "Cliquer" in _env[0], "dossier perdu apres un recap rate"
+assert "n'est pas parti" not in _html.unescape(_c.get("/salaries").get_data(as_text=True))
+
+_code, _env = _recap(7, marche=True)
+assert _code == 0 and _env == [], "dossier deja annonce renvoye une seconde fois"
+
+# Echec, puis le dossier en attente quitte RemisComptable (archive) : plus rien
+# n'est en attente, le bandeau ne doit pas rester pour toujours.
+config.RECAP_ETAT.unlink()
+_recap(7, marche=False)
+_code, _env = _recap(7, marche=True, dossiers=[])
+assert _code == 0 and _env == []
+assert "n'est pas parti" not in _html.unescape(_c.get("/salaries").get_data(as_text=True)), \
+    "bandeau d'echec reste alors que plus rien n'est en attente"
+
+# recap.json illisible : arret clair, pas un depart silencieux de zero.
+config.RECAP_ETAT.write_text("{tronqué", encoding="utf-8")
+_code, _env = _recap(7, marche=True)
+assert isinstance(_code, str) and "illisible" in _code and _env == [], _code
+config.RECAP_ETAT.unlink()
+print("OK  recap rate : dit a l'ecran Salaries, dossiers repartis au passage suivant,")
+print("                 bandeau efface sans dossier en attente, etat illisible = arret clair")
+
+# --- lien du mail : l'url d'instance.json, jamais le Host de la requete ------
+# Formulaire public : un Host forge ferait envoyer par l'app un vrai mail dont
+# le lien pointe vers un site tiers. Remettre `_external=True` dans app.py
+# doit faire rougir ce bloc.
+def _lien_du_rejet(host):
+    champs = {config.role("email"): "manager@test.local",
+              config.role("nom"): "Martin", config.role("prenom"): "Camille",
+              config.role("etablissement"): config.etablissements()[0][0],
+              config.role("poste"): list(config.instance()["templates"])[0]}
+    uid = store.creer_soumission(champs, {})
+    c = app.test_client()
+    c.post("/login", base_url=host, data={"identifiant": "rh", "mot_de_passe": "fixture"})
+    vus, vrai = [], module.mails.envoyer
+    module.mails.envoyer = lambda *a, **k: (vus.append(k.get("lien")), (True, None))[1]
+    try:
+        c.post("/dossier/%s/rejeter" % uid, base_url=host,
+               data={"motif": config.instance()["motifs_ko"][0], "commentaire": "x"})
+    finally:
+        module.mails.envoyer = vrai
+    return vus[-1]
+
+
+_lien = _lien_du_rejet("http://site-pirate.example")
+assert _lien.startswith(config.url_publique() + "/corriger/"), _lien
+assert "site-pirate" not in _lien, _lien
+print("OK  lien de mail sur l'url configuree, Host forge ignore")
+
 print("\nmails.py OK — console, override, TLS conditionnee a l'auth, 4 templates, cc,")
-print("               echec d'envoi remonte par la route /rejeter")
+print("               echec d'envoi remonte par la route /rejeter, liens sur `url`")

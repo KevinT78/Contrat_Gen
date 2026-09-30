@@ -120,9 +120,18 @@
 
   {% elif etat == 'Rejetee' %}
     <p class="titre-carte">Rejetée</p>
-    <p style="margin:0">Rejetée le {{ date_fr(item.journal[-1].le[:10]) }} —
-      {{ item.journal[-1].motif }}.</p>
+    {% if refus %}<p style="margin:0">Rejetée le {{ date_fr(refus.le[:10]) }} —
+      {{ refus.motif }}.</p>{% endif %}
+    {% if correction_ratee %}
+    <p class="indice">Le mail n'est pas parti : le manager n'a PAS reçu le lien de
+      correction (voir le journal).</p>
+    <div class="actions">
+      <form method="post" action="{{ url_for('renvoyer_correction', uid=item.id) }}">
+        <button>Renvoyer le lien de correction</button></form>
+    </div>
+    {% else %}
     <p class="indice">Un lien de correction a été envoyé ; la demande reviendra ici corrigée.</p>
+    {% endif %}
 
   {% elif etat == 'ATraiter' %}
     <p class="titre-carte">Contrat</p>

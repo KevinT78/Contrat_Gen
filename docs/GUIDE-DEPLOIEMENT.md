@@ -163,7 +163,7 @@ sudo -u contratgen nano /srv/contratgen/demo/config/instance.json
 Dans `instance.json`, modifier :
 
 - `"secret"` : coller la valeur générée ;
-- `"url"` : `"https://demo.votre-domaine.fr"` (sert de base aux liens du mail hebdo) ;
+- `"url"` : `"https://demo.votre-domaine.fr"` (sert de base aux liens de tous les mails, jamais l'hôte de la requête) ;
 - laisser `"mails": {"mode": "console", ...}` : la démo n'envoie rien.
 
 > ⚠️ **Ne changez pas le mot de passe du compte `rh`.** `demo.py` se connecte en dur avec
@@ -266,8 +266,9 @@ demo.votre-domaine.fr {
 sudo systemctl reload caddy
 ```
 
-Caddy obtient le certificat tout seul et transmet l'en-tête `Host` d'origine. Grâce à
-`PROXIES=1`, les liens absolus (mails, correction) sont bien en `https://demo.votre-domaine.fr/...`.
+Caddy obtient le certificat tout seul. Les liens des mails (dossier, correction, lot du
+cabinet) sont bâtis sur `url` d'`instance.json`, jamais sur l'hôte de la requête : mettez-y
+`https://demo.votre-domaine.fr`.
 
 ### 1.7 Vérifier la mise en ligne
 
@@ -446,7 +447,7 @@ Pour restreindre l'espace RH (recommandé), voir §3.2.
 ### 2.5 Mail hebdomadaire au cabinet comptable (planification)
 
 L'app ne contient **aucun planificateur**. `recap.py` envoie un mail par cabinet avec les
-dossiers remis sur les 7 derniers jours, chacun accompagné de son lien de lot signé
+dossiers remis depuis le dernier envoi réussi à ce cabinet, chacun accompagné de son lien de lot signé
 (valable 30 jours). Il faut donc le planifier.
 
 `/etc/systemd/system/contratgen-recap@.service` :
@@ -483,12 +484,16 @@ sudo systemctl enable --now contratgen-recap@acme.timer
 sudo systemctl start contratgen-recap@acme.service && journalctl -u contratgen-recap@acme -n 20
 ```
 
-- **Aucun mémo « déjà envoyé »** : deux exécutions dans la même semaine envoient deux fois
-  le même mail. Si une semaine est sautée, relancer à la main avec `recap.py --jours 14`.
-- `recap.py` sort en code `1` si un envoi échoue, et l'unité apparaît alors dans
-  `systemctl --failed`.
-- En mode `smtp`, `recap.py` ne fait que lire les données. Il peut donc tourner à côté du
-  serveur sans casser la règle d'un seul process.
+- **Mémo par cabinet** dans `DONNEES/recap.json` : chaque cabinet repart de son dernier
+  envoi réussi. Une semaine sautée ou un envoi raté (SMTP en panne) ne perd aucun dossier :
+  ils partent au passage suivant. `--jours` ne règle que le tout premier envoi (défaut 7).
+  Si ce fichier est illisible, `recap.py` s'arrête en le disant plutôt que de repartir de
+  zéro ; le supprimer fait repartir chaque cabinet de la fenêtre `--jours`.
+- Un envoi raté s'affiche en rouge sur l'écran « Salariés ». `recap.py` sort aussi en
+  code `1`, et l'unité apparaît alors dans `systemctl --failed`.
+- `recap.py` n'écrit que `recap.json`, jamais un dossier (en mode `console`, il écrit aussi
+  les `.eml`). Il peut donc tourner à côté du serveur sans casser la règle d'un seul
+  process écrivain.
 
 ### 2.6 Conservation et purge (RGPD)
 
@@ -681,7 +686,8 @@ Cela déconnecte tout le monde, mais **invalide aussi tous les liens signés dé
 - les liens de lot du cabinet.
 
 Pour les lots, la RH peut « Refaire la copie et le lien », et le nouveau lien part dans le
-mail hebdo suivant. Un lien de correction perdu, lui, ne peut pas être renvoyé.
+mail hebdo suivant. Un lien de correction invalidé ainsi, lui, ne peut pas être renvoyé :
+le bouton « Renvoyer le lien de correction » n'apparaît qu'après un mail de rejet raté.
 
 #### Routes accessibles sans compte
 
@@ -723,20 +729,17 @@ mot de passe applicatif ne suffit plus.
 - **`PROXIES=1` derrière Caddy, c'est indispensable.** L'app demande alors à waitress de
   laisser passer les en-têtes `X-Forwarded-*` (qu'il efface par défaut), et `ProxyFix` les
   lit. Vérifié derrière Caddy avec deux clients d'IP différentes : chaque client garde sa
-  vraie IP, un `X-Forwarded-For` forgé par le client est ignoré (Caddy l'écrase), et les
-  liens sortent en `https://`.
+  vraie IP, et un `X-Forwarded-For` forgé par le client est ignoré (Caddy l'écrase). Les
+  liens des mails n'en dépendent pas : ils viennent de `url`.
   - Sans ce réglage, tous les visiteurs apparaissent comme `127.0.0.1` et partagent le
     même compteur. Au-delà de 10 soumissions en 5 minutes (tous managers confondus),
     le formulaire **affiche « Demande envoyée » mais n'enregistre rien**. Même effet sur
     le login : 10 tentatives en 15 minutes pour tout le monde.
-  - Les liens absolus des mails (nouvelle demande, rappel DPAE, lien de correction)
-    sortent en `http://`. Caddy redirige vers HTTPS, mais la première requête, jeton de
-    correction compris, part en clair. Le mail hebdo n'est pas touché : il se base sur `url`.
   - L'IP journalisée des accès au lot vaut `127.0.0.1` pour tout le monde.
 - **Réglage trop haut** (ex. `PROXIES=2` avec un seul proxy) : l'effet dépend du proxy.
   - **Caddy** écrase le `X-Forwarded-For` envoyé par le client : l'app ne trouve qu'une
     valeur sur les deux attendues et retombe sur `127.0.0.1`. C'est le même résultat qu'un
-    `PROXIES` absent (compteur partagé, liens `http://`), et l'IP n'est pas falsifiable.
+    `PROXIES` absent (compteur partagé), et l'IP n'est pas falsifiable.
     Mesuré.
   - **nginx** avec `$proxy_add_x_forwarded_for` *ajoute* à la valeur du client : l'IP
     devient falsifiable et l'anti-flood est contournable. Non mesuré ici, c'est le
@@ -808,9 +811,7 @@ mot de passe applicatif ne suffit plus.
 | `PROXIES doit etre un entier` | Valeur invalide dans le `.env` | `PROXIES=1` |
 | La connexion RH renvoie sans cesse sur `/login` | Accès en HTTP : le cookie `Secure` n'est pas conservé | Passer par le domaine HTTPS |
 | Le formulaire dit « envoyée » mais rien n'apparaît dans le suivi | Anti-flood partagé (`PROXIES` absent ou trop haut, §3.3), ou champ piège rempli par une extension/autofill | `PROXIES=1` et redémarrer ; tester dans un autre navigateur |
-| Liens des mails en `http://` | `PROXIES` absent ou trop haut (§3.3) | `PROXIES=1` et redémarrer |
-| Liens des mails en `127.0.0.1` | Proxy qui ne transmet pas `Host` | Avec nginx, `proxy_set_header Host $host` |
-| Liens vides dans le mail hebdo | `url` vide ou erronée | `instance.json` → `url` |
+| Liens des mails en `http://`, en `localhost` ou sur un mauvais domaine | `url` d'`instance.json` erronée | `instance.json` → `url` (adresse https publique), puis redémarrer |
 | « rappel DPAE NON parti (voir le journal) » | Échec SMTP | Commande de test du §3.1, lire l'entrée `mail_echoue` |
 | Aucun mail reçu, aucune erreur | `mails.mode` encore sur `console` | `"mode": "smtp"`, puis redémarrer l'unité |
 | `413 Request Entity Too Large` | Limite du proxy (nginx) | `client_max_body_size 40m;` |

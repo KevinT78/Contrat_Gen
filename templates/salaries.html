@@ -12,6 +12,12 @@
   </div>
 </div>
 
+{% for cab, e in echecs_recap.items() %}
+<p class="msg erreur">Le mail hebdomadaire au cabinet {{ cab }} n'est pas parti le
+  {{ date_fr(e.le[:10]) }} ({{ e.motif }}) : {{ e.nombre }} dossier(s) en attente,
+  ils repartiront au prochain envoi réussi.</p>
+{% endfor %}
+
 <nav class="sous-onglets" id="onglets" data-maj>
   <a href="{{ url_for('salaries', etablissement=etab, q=q or none) }}"
      {{ 'aria-current=page'|safe if not anciens }}>En poste</a>

@@ -131,6 +131,8 @@ def _donnees():
 # Fige au demarrage : deplacer les donnees d'une instance qui tourne n'est pas
 # un rechargement a chaud, c'est un redemarrage (et un deplacement de fichiers).
 DONNEES = _donnees()
+# Etat du mail hebdo par cabinet : ecrit par recap.py seul, lu par l'ecran Salaries.
+RECAP_ETAT = DONNEES / "recap.json"
 
 
 def recharger():
@@ -193,7 +195,8 @@ def manager(cle):
 
 
 def url_publique():
-    """Base des liens fabriques hors requete (recap.py) : instance.json -> url."""
+    """Base de TOUS les liens des mails (app._lien, recap.py) : instance.json -> url,
+    jamais l'hote de la requete."""
     return (instance().get("url") or "").rstrip("/")
 
 
@@ -603,7 +606,7 @@ def _verifier_installation():
     # d'un cron -- meme trou que mails.rh, refuse au meme endroit.
     if not url_publique():
         manques["url"] = ["vide : l'adresse publique de l'app (ex. https://embauche.acme.fr), "
-                          "base des liens du mail hebdomadaire au cabinet"]
+                          "base des liens de tous les mails"]
     return manques
 
 

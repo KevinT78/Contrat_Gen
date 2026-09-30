@@ -28,13 +28,10 @@ from _outils import corps_texte  # noqa: E402
 for zone in ("soumissions",):
     (config.DONNEES / zone).mkdir(parents=True, exist_ok=True)
 
-# instance.json -> url : base des liens _external que l'app fabrique DANS une
-# requete (url_for(..., _external=True)). L'app les construit depuis le Host
-# de la requete recue, pas depuis cette config -- correct en prod (reverse
-# proxy = vrai Host), mais le client de test n'envoie aucun Host et retombe
-# sur "http://localhost" sans port. On le corrige ICI, cote test, en donnant
-# base_url a chaque requete qui declenche un mail : ce n'est pas un defaut de
-# l'app, url_publique() n'est d'ailleurs faite QUE pour hors-requete (recap.py).
+# instance.json -> url : base des liens de TOUS les mails (app._lien), jamais
+# le Host de la requete -- un Host forge sur le formulaire public ferait
+# pointer le lien vers un site tiers. base_url ne sert plus qu'a rapprocher le
+# client de test d'un vrai navigateur.
 BASE_URL = config.url_publique() or None
 
 

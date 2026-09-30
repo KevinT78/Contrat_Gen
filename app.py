@@ -162,6 +162,13 @@ def _destinataire_manager(champs):
             or config.instance()["mails"].get("rh") or [])
 
 
+def _lien(endpoint, **kw):
+    """Lien absolu pour un mail, sur l'`url` d'instance.json -- jamais sur le
+    Host de la requete : le formulaire est public, un Host forge enverrait a
+    la RH un vrai mail de l'app pointant vers un site tiers (hameconnage)."""
+    return config.url_publique() + url_for(endpoint, **kw)
+
+
 def _mail(uid, modele, a, **vals):
     """Envoie, et JOURNALISE l'echec. -> True si parti.
 
@@ -402,7 +409,7 @@ def formulaire():
             return _formulaire_ko(champs, [str(e)], action=url_for("formulaire"))
         ok = _mail(uid, "nouvelle_soumission", config.instance()["mails"]["rh"],
                    nom=_nom(champs), id=uid,
-                   lien=url_for("detail", uid=uid, _external=True))
+                   lien=_lien("detail", uid=uid))
         return _formulaire_ok("Demande envoyée",
                               "Votre demande est bien enregistrée. Le service RH la "
                               "traite et vous recontacte si une pièce manque ou doit "
@@ -422,7 +429,7 @@ def corriger(jeton):
         return render_template("message.html", titre="Lien invalide",
                                texte="Ce lien a expiré, a déjà servi, ou la "
                                      "demande n'attend plus de correction."), 410
-    ko = item["journal"][-1]
+    ko = _refus(item)
     if request.method == "POST":
         if _pot_rempli() or not _soumission_autorisee(request.remote_addr):
             return _formulaire_ok("Correction envoyée",
@@ -437,7 +444,7 @@ def corriger(jeton):
         ok = _mail(item["id"], "nouvelle_soumission",
                    config.instance()["mails"]["rh"], nom=_nom(champs),
                    id=item["id"],
-                   lien=url_for("detail", uid=item["id"], _external=True))
+                   lien=_lien("detail", uid=item["id"]))
         return _formulaire_ok("Correction envoyée",
                               "Le service RH va réexaminer la demande." if ok else
                               "Votre correction est bien enregistrée, mais l'avis au "
@@ -497,10 +504,23 @@ def salaries():
         except KeyError:                    # etablissement retire de la config
             return ""
     return render_template("salaries.html", groupes=sorted(groupes.items()),
+                           echecs_recap=_echecs_recap(),
                            total=len(tous), etab=etab, q=q, anciens=anciens,
                            remis_le=store.date_remise, date_sortie=store.date_sortie,
                            cabinet=cabinet, signe_manquant=store.signe_manquant,
                            aujourdhui=date.today().isoformat())
+
+
+def _echecs_recap():
+    """{cabinet: echec} des derniers mails hebdo rates. LU seulement :
+    config.RECAP_ETAT est ecrit par recap.py, qui tourne en tache planifiee
+    dans un autre process -- sans ce bandeau, un recap rate ne se voyait que
+    dans une sortie que personne ne lit."""
+    try:
+        etat = json.loads(config.RECAP_ETAT.read_text(encoding="utf-8"))
+    except (FileNotFoundError, ValueError):
+        return {}
+    return {cab: e["echec"] for cab, e in etat.items() if "echec" in e}
 
 
 @app.get("/dossier/<uid>")
@@ -530,6 +550,7 @@ def detail(uid):
                            manquantes=store.manquantes(item),
                            date_sortie=store.date_sortie(item),
                            motifs=config.instance()["motifs_ko"],
+                           refus=_refus(item), correction_ratee=_correction_ratee(item),
                            champ=config.champ, saisie_rh=config.saisie_rh_champs(),
                            nom_affiche=_nom(item["champs"]),
                            mode_contrat=config.mode_contrat(config.valeur(item["champs"], "etablissement")),
@@ -719,7 +740,7 @@ def _rappel_dpae(item):
                  poste=config.valeur(champs, "poste"),
                  societe=m.get("Societe", ""), etablissement=m.get("Etablissement", ""),
                  siret=m.get("Siret", ""),
-                 lien=url_for("detail", uid=item["id"], _external=True))
+                 lien=_lien("detail", uid=item["id"]))
 
 
 @app.post("/dossier/<uid>/rejeter")
@@ -731,17 +752,58 @@ def rejeter(uid):
         flash("Un motif et un commentaire sont obligatoires pour un KO.", "erreur")
         return redirect(url_for("detail", uid=uid))
     store.rejeter(uid, motif, commentaire, session["utilisateur"])
-    item = store.lire(uid)
-    lien = url_for("corriger", jeton=store.signer("correction", uid, item["link_epoch"]),
-                   _external=True)
-    ok = _mail(uid, "rejet", _destinataire_manager(item["champs"]),
-               motif=motif, commentaire=commentaire, lien=lien,
-               nom=_nom(item["champs"]))
+    ok = _envoyer_correction(store.lire(uid))
     flash("Demande rejetée, lien de correction envoyé." if ok
           else "Demande rejetée, mais le mail n'est pas parti : le manager n'a "
                "PAS reçu le lien de correction — voir le journal.",
           "ok" if ok else "erreur")
     return redirect(url_for("detail", uid=uid))
+
+
+@app.post("/dossier/<uid>/renvoyer-correction")
+@rh
+def renvoyer_correction(uid):
+    """Le mail de refus est tombe (SMTP en panne) : sans ce bouton, le dossier
+    restait Rejetee sans que personne ne puisse jamais le corriger. Meme lien
+    (meme link_epoch) : il n'a jamais ete recu."""
+    item = store.lire(uid) or abort(404)
+    if store.etat(item) != "Rejetee":
+        flash("La demande n'attend plus de correction.", "erreur")
+    elif not _correction_ratee(item):             # page perimee, double clic
+        flash("Le lien de correction est déjà parti.", "erreur")
+    elif _envoyer_correction(item):
+        store.noter(uid, type="correction_renvoyee", par=session["utilisateur"])
+        flash("Lien de correction renvoyé.", "ok")
+    else:
+        flash("Le mail n'est toujours pas parti — voir le journal.", "erreur")
+    return redirect(url_for("detail", uid=uid))
+
+
+def _refus(item):
+    """Derniere entree de REFUS (motif + commentaire de la RH) -- pas
+    journal[-1] : un mail_echoue ou une autre note peut la suivre."""
+    return next((e for e in reversed(item["journal"])
+                 if e.get("vers") == "Rejetee" and "type" not in e), {})
+
+
+def _correction_ratee(item):
+    """Le dernier envoi du lien de correction a-t-il echoue ?"""
+    refus = _refus(item)
+    for e in reversed(item["journal"]):
+        if e.get("type") == "mail_echoue" and e.get("modele") == "rejet":
+            return True
+        if e.get("type") == "correction_renvoyee" or e is refus:
+            return False
+    return False
+
+
+def _envoyer_correction(item):
+    """Mail de refus au manager, avec le lien de correction. -> True si parti."""
+    refus = _refus(item)
+    lien = _lien("corriger", jeton=store.signer("correction", item["id"], item["link_epoch"]))
+    return _mail(item["id"], "rejet", _destinataire_manager(item["champs"]),
+                 motif=refus.get("motif", ""), commentaire=refus.get("commentaire", ""),
+                 lien=lien, nom=_nom(item["champs"]))
 
 
 def _produire_contrat(uid, extra=None):
