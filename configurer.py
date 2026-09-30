@@ -121,6 +121,10 @@ def avertissements():
         out.append("mails.mode = « console » : aucun mail ne part. En production : "
                    "« smtp », après un essai avec `configurer.py mail <adresse>`  "
                    "[config/instance.json]")
+    if config.supabase_actif():
+        out.append("sociétés lues depuis Supabase : un établissement s'ajoute dans "
+                   "la base. societes.json est réécrit tout seul, c'est la copie "
+                   "de secours si Supabase ne répond pas")
     sans_manager = [f"{s['nom']} / {e['nom']}" for s in config.societes()
                     for e in s["etablissements"] if not e.get("manager_email")]
     if sans_manager:

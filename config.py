@@ -8,7 +8,12 @@ instance.json et on dépose les .docx.
 import json
 import os
 import re
+import threading
+import time
+import urllib.error
+import urllib.request
 from pathlib import Path
+from urllib.parse import quote
 
 from apparence import resoudre
 
@@ -21,7 +26,8 @@ MDP_PAR_DEFAUT = "demo"          # l'ancien mot de passe de démo — refusé au
 # Version du FORMAT de config/, pas du produit. Le code est un paquet versionne,
 # config/ vit chez le client : une config ecrite pour un format qu'on ne
 # comprend plus doit refuser de demarrer en disant quoi faire, pas se faire
-# reecrire dans le dos (l'app n'ecrit jamais sa config).
+# reecrire dans le dos. Exception : avec un bloc `supabase`, societes.json est
+# la copie de secours, reecrite apres chaque lecture reussie.
 CONFIG_VERSION = 1
 
 # Cache simple plutot que lru_cache : `recharger()` a besoin de reposer
@@ -44,8 +50,174 @@ def formulaire():
     return _lire("formulaire.json")
 
 
+# Supabase, quand instance.json a un bloc `supabase` : source des societes.
+# Relu au plus toutes les 2 minutes. Une panne ne retente pas a chaque page :
+# 30 s sur la copie locale. `_TRANSPORT_SUPABASE` est le seul point d'injection
+# des tests, sur le modele de signature._TRANSPORT.
+_SUPABASE_TTL = 120
+_SUPABASE_REPRISE = 30
+_SUPABASE_ESSAI = None          # None : jamais tente. Un monotonic() a 0
+_SUPABASE_OK = False            # sauterait la premiere lecture au demarrage.
+_verrou_societes = threading.Lock()
+_TRANSPORT_SUPABASE = None      # (methode, url, headers) -> (statut, bytes)
+
+
+def supabase_actif():
+    """True si instance.json designe un projet Supabase (url + cle)."""
+    return _bloc_supabase() is not None
+
+
+def _bloc_supabase():
+    try:
+        b = instance().get("supabase")
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    if not isinstance(b, dict):
+        return None
+    url = b.get("url") if isinstance(b.get("url"), str) else ""
+    cle = b.get("cle") if isinstance(b.get("cle"), str) else ""
+    url, cle = url.strip().rstrip("/"), cle.strip()
+    if not url or not cle:
+        return None
+    return url, cle
+
+
+def _appel_supabase(url, cle):
+    entetes = {"apikey": cle, "Authorization": f"Bearer {cle}",
+               "Accept": "application/json"}
+    if _TRANSPORT_SUPABASE:
+        statut, brut = _TRANSPORT_SUPABASE("GET", url, entetes)
+    else:                                                    # pragma: no cover
+        req = urllib.request.Request(url, headers=entetes, method="GET")
+        try:
+            with urllib.request.urlopen(req, timeout=8) as r:
+                statut, brut = r.status, r.read()
+        except urllib.error.HTTPError as e:
+            statut, brut = e.code, e.read()
+    if statut >= 300:
+        raise RuntimeError(f"HTTP {statut}")
+    return brut
+
+
+def _objet(v):
+    if isinstance(v, dict):
+        return v
+    if isinstance(v, str) and v.strip():
+        try:
+            o = json.loads(v)
+        except json.JSONDecodeError:
+            return {}
+        return o if isinstance(o, dict) else {}
+    return {}
+
+
+def _forme_etablissement(e):
+    etab = {"nom": e["nom"]}
+    if (e.get("groupe") or "").strip():
+        etab["groupe"] = e["groupe"].strip()
+    etab["siret"] = e.get("siret") or ""
+    etab["manager_email"] = e.get("manager_email") or ""
+    if (e.get("contrat") or "").strip() and e["contrat"].strip() != "genere":
+        etab["contrat"] = e["contrat"].strip()
+    etab["mentions"] = _objet(e.get("mentions"))
+    return etab
+
+
+def _forme_societes(lignes):
+    """Lignes PostgREST -> la meme liste que societes.json."""
+    lignes = sorted(lignes, key=lambda s: (s.get("ordre") or 0, s.get("nom") or ""))
+    out = []
+    for s in lignes:
+        etabs = sorted(s.get("etablissements") or [],
+                       key=lambda e: (e.get("ordre") or 0, e.get("nom") or ""))
+        out.append({"nom": s["nom"], "siren": s.get("siren") or "",
+                    "comptable_email": s.get("comptable_email") or "",
+                    "mentions": _objet(s.get("mentions")),
+                    "etablissements": [_forme_etablissement(e) for e in etabs]})
+    return out
+
+
+def _societes_utilisables(data):
+    """Une reponse vide ou tronquee ne doit pas ecraser la copie locale :
+    verifier() refuserait alors de demarrer, et le dernier bon fichier aurait
+    disparu."""
+    if not isinstance(data, list) or not data:
+        return False
+    for s in data:
+        if not isinstance(s, dict) or not (s.get("nom") or "").strip():
+            return False
+        etabs = s.get("etablissements")
+        if not isinstance(etabs, list):
+            return False
+        if any(not isinstance(e, dict) or not (e.get("nom") or "").strip() for e in etabs):
+            return False
+    return any(s["etablissements"] for s in data)
+
+
+def _ecrire_secours_societes(data):
+    dest = CLIENT / "societes.json"
+    texte = json.dumps(data, ensure_ascii=False, indent=2) + "\n"
+    if dest.exists() and dest.read_text(encoding="utf-8") == texte:
+        return False
+    tmp = dest.with_suffix(".json.tmp")
+    tmp.write_text(texte, encoding="utf-8")
+    os.replace(tmp, dest)
+    return True
+
+
+def _societes_distantes(url, cle):
+    select = ("nom,siren,comptable_email,mentions,ordre,"
+              "etablissements(nom,siret,groupe,manager_email,contrat,mentions,ordre)")
+    adresse = f"{url}/rest/v1/societes?select={quote(select, safe='(),')}&order=ordre.asc"
+    lignes = json.loads(_appel_supabase(adresse, cle))
+    if not isinstance(lignes, list):
+        raise RuntimeError("réponse inattendue")
+    return _forme_societes(lignes)
+
+
+def _rafraichir_societes(url, cle):
+    """Met a jour le cache et la copie locale. -> la liste servie, toujours."""
+    global _SUPABASE_ESSAI, _SUPABASE_OK
+    _SUPABASE_ESSAI = time.monotonic()
+    try:
+        distant = _societes_distantes(url, cle)
+    except Exception as e:                       # noqa: BLE001 — repli sur le fichier
+        _SUPABASE_OK = False
+        print(f"[supabase] lecture impossible ({type(e).__name__}: {e}), "
+              "copie locale conservée", flush=True)
+        return _lire("societes.json")
+    if not _societes_utilisables(distant):
+        _SUPABASE_OK = False
+        print("[supabase] réponse inutilisable, copie locale conservée", flush=True)
+        return _lire("societes.json")
+    _SUPABASE_OK = True
+    _CACHE["societes.json"] = distant
+    try:
+        if _ecrire_secours_societes(distant):
+            print("[supabase] copie locale des sociétés mise à jour", flush=True)
+    except OSError as e:
+        print(f"[supabase] copie locale non écrite ({e})", flush=True)
+    return distant
+
+
 def societes():
-    return _lire("societes.json")
+    """Societes et etablissements.
+
+    Sans bloc `supabase` : societes.json. Avec un bloc : Supabase est la source,
+    societes.json la copie de secours (ecrasee apres une lecture reussie, gardee
+    si Supabase ne repond pas ou renvoie une liste vide)."""
+    bloc = _bloc_supabase()
+    if not bloc:
+        return _lire("societes.json")
+    with _verrou_societes:
+        maintenant = time.monotonic()
+        if (_SUPABASE_OK and "societes.json" in _CACHE and _SUPABASE_ESSAI is not None
+                and maintenant - _SUPABASE_ESSAI < _SUPABASE_TTL):
+            return _CACHE["societes.json"]
+        if (_SUPABASE_ESSAI is not None and not _SUPABASE_OK
+                and maintenant - _SUPABASE_ESSAI < _SUPABASE_REPRISE):
+            return _lire("societes.json")
+        return _rafraichir_societes(*bloc)
 
 
 def comptes():
@@ -139,8 +311,10 @@ def recharger():
     """Relit config/ a chaud, sans redemarrer. Renvoie {} si la nouvelle config
     est valide (elle est alors active), sinon les manques -- et l'ancienne
     config reste en place : une instance qui servait continue de servir."""
+    global _SUPABASE_ESSAI, _SUPABASE_OK
     ancien = dict(_CACHE)
     _CACHE.clear()
+    _SUPABASE_ESSAI, _SUPABASE_OK = None, False
     if manques := verifier():
         _CACHE.clear()
         _CACHE.update(ancien)
