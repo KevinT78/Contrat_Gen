@@ -18,6 +18,7 @@ SCENARIOS.md
 VERIFICATION-DEPLOIEMENT.md
 # instances clients preparees avec le skill installer-client (secrets, pieces)
 clients/
+wingstop/
 
 # chaine de fabrication des PDF de documentation (captures, scripts) : hors git,
 # seuls les .md et .pdf sont versionnes. Exception : les diagrammes, sources
