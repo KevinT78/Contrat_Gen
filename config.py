@@ -230,8 +230,9 @@ def societes():
 def _oublier_societes():
     """La prochaine lecture retente Supabase. A appeler apres une ecriture."""
     global _SUPABASE_ESSAI, _SUPABASE_OK
-    _CACHE.pop("societes.json", None)
-    _SUPABASE_ESSAI, _SUPABASE_OK = None, False
+    with _verrou_societes:
+        _CACHE.pop("societes.json", None)
+        _SUPABASE_ESSAI, _SUPABASE_OK = None, False
 
 
 def _filtre(colonne, valeur):
@@ -360,6 +361,15 @@ def sauver_etablissement(origine, societe_nom, societe, etablissement):
     introuvable. Une panne reseau reste une RuntimeError : rien n'est ecrit
     en local a la place, le fichier serait ecrase a la lecture suivante.
     """
+    if societe is not None:
+        nom = (societe.get("nom") or "").strip()
+        if not nom:
+            raise ValueError("Le nom de la société est obligatoire.")
+        # Un renommage vers le nom d'une autre societe creerait deux fiches
+        # homonymes : la cle « Societe / Etablissement » deviendrait ambigue.
+        if origine is not None and nom != origine[0] and any(
+                s["nom"] == nom for s in societes()):
+            raise ValueError("Cette société existe déjà : choisissez un autre nom.")
     if supabase_actif():
         _sauver_distant(origine, societe_nom, societe, etablissement)
         _oublier_societes()

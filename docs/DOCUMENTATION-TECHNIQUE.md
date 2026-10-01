@@ -233,7 +233,7 @@ Sur la même machine, le PID est sondé (vivant ou mort). Depuis une autre machi
 |---------|---------|
 | `instance.json` | Identité du client, secret HMAC, URL publique, mails, comptes, motifs de rejet, modèles par poste, règles dérivées, saisie RH, stockage, conservation |
 | `formulaire.json` | Champs du formulaire public et rôles |
-| `societes.json` | Sociétés, établissements, mentions légales, couloir de contrat, adresses du manager et du cabinet |
+| `societes.json` | Sociétés, établissements, mentions légales, couloir de contrat, adresses du manager et du cabinet. Avec un bloc `supabase`, c'est la **copie de secours** de la base (voir [Sociétés et établissements dans Supabase](#sociétés-et-établissements-dans-supabase)) |
 | `theme.json` | **Optionnel** — direction artistique du client : palette, logo, favicon. Absent = la DA d'origine |
 | `marque/` | **Optionnel** — logo et favicon du client, servis par Flask sur `/marque/` (`static_folder` de l'instance) |
 | `grille.json` | Grille de rémunération (optionnel) |
@@ -354,6 +354,73 @@ Un rôle non déclaré retombe sur son identifiant historique (`etablissement`, 
 ```
 
 `contrat` vaut `genere` ou `depose` et fixe le couloir. `manager_email` reçoit les liens de correction. `comptable_email` reçoit le récapitulatif hebdomadaire de la société (repli : `mails.comptable_defaut`).
+
+### Sociétés et établissements dans Supabase
+
+Optionnel. Quand `instance.json` contient un bloc `supabase`, **la base est la source des sociétés et des établissements** ; `societes.json` n'est plus qu'une copie de secours.
+
+```json
+"supabase": {"url": "https://<projet>.supabase.co", "cle": "<clé secrète du projet>"}
+```
+
+Sans ce bloc (ou avec `url` ou `cle` vide), rien ne change : `societes.json` est lu et écrit comme avant. `config.supabase_actif()` dit lequel des deux modes est en cours.
+
+> **La clé donne un accès complet à la base** (clé « secret » / `service_role`, qui contourne les règles RLS). Elle vit dans `instance.json` comme le secret HMAC : jamais dans Git, jamais dans une capture. Une clé « publishable » ne suffit pas tant que la lecture n'est pas autorisée par une policy ; `config.py` n'utilise que l'API REST (PostgREST), sans bibliothèque Supabase.
+
+#### Schéma attendu
+
+Le dépôt ne contient pas de script de migration. Le schéma ci-dessous a été **vérifié sur une base en service** : colonnes, types, valeurs par défaut et clé étrangère `societe_id → societes.id` sont conformes. Les contraintes `unique` n'ont pas été vérifiées, car l'API ne les expose pas : voir *Database → Tables* dans Supabase. Deux tables, une société a plusieurs établissements :
+
+```sql
+create table societes (
+  id              bigint generated always as identity primary key,
+  nom             text not null unique,
+  siren           text not null default '',
+  comptable_email text not null default '',
+  mentions        jsonb not null default '{}',   -- RaisonSociale, FormeCapital, GreffeRCS, RCS…
+  ordre           int  not null default 0
+);
+
+create table etablissements (
+  id            bigint generated always as identity primary key,
+  societe_id    bigint not null references societes(id),
+  nom           text not null,
+  siret         text not null default '',
+  groupe        text not null default '',       -- libre (suggestions : groupes déjà utilisés)
+  manager_email text not null default '',
+  contrat       text not null default '',       -- '' ou 'genere' = généré ; 'depose' = déposé
+  mentions      jsonb not null default '{}',    -- AdresseEtablissement…
+  ordre         int  not null default 0,
+  unique (societe_id, nom)
+);
+```
+
+Les contraintes `unique` sont recommandées, pas imposées par le code : l'écran vérifie déjà les doublons avant d'écrire, et un conflit (HTTP 409) de la base est rendu par « Ce nom est déjà utilisé ». Les colonnes sont celles du `select` de `_societes_distantes()` ; en ajouter une ne casse rien, en renommer une casse la lecture.
+
+#### Lecture, cache et copie de secours
+
+| Événement | Comportement |
+|-----------|--------------|
+| Lecture réussie | Résultat mis en cache **2 minutes** (`_SUPABASE_TTL`), `societes.json` réécrit (écriture atomique, seulement si le contenu change) |
+| Supabase en panne ou réponse invalide | Repli sur `societes.json`, **sans retenter pendant 30 s** (`_SUPABASE_REPRISE`) : une panne ne ralentit pas chaque page. Le journal du serveur dit pourquoi (`[supabase] lecture impossible…`) |
+| Réponse vide ou tronquée (aucune société, société sans nom, aucun établissement) | Refusée comme une panne : **la copie locale n'est jamais écrasée par une liste vide** |
+| Démarrage | La première lecture se fait au premier besoin ; sans réseau, l'instance démarre sur la copie, à condition que `societes.json` existe et soit valide |
+
+Conséquences à retenir :
+
+- **Ne plus éditer `societes.json` à la main** quand Supabase est actif : il est écrasé à la prochaine lecture réussie. On modifie la base (onglet **Établissements**, ou le *Table Editor* de Supabase) et on attend au plus 2 minutes.
+- C'est la seule exception à « l'app n'écrit jamais dans `config/` » avec le bloc `utilisateurs` (via `/compte`).
+- Le bilan de `configurer.py` affiche un avertissement quand Supabase est actif.
+
+#### Mettre à jour la base
+
+| Besoin | Comment |
+|--------|---------|
+| Ajouter ou modifier un établissement, changer un mail | Onglet **Établissements** (écrit dans Supabase, relit aussitôt) |
+| Corriger un lot de lignes, supprimer un établissement | *Table Editor* ou SQL dans Supabase ; visible au plus 2 minutes plus tard |
+| Première mise en service à partir d'un `societes.json` existant | Créer les tables, importer les sociétés puis les établissements (`societe_id` de la société parente, `ordre` = position dans le fichier), puis ajouter le bloc `supabase` : la première lecture réécrit `societes.json` à l'identique |
+
+Avant de supprimer ou renommer un établissement, vérifier qu'aucun dossier en cours ni aucune règle `templates` ne le cite : sa clé est « Société / Établissement ». Les dossiers dont l'établissement a disparu restent consultables (le repli est prévu pour valider, rejeter et lister), mais ne peuvent plus générer de contrat.
 
 ### `grille.json`
 
@@ -500,6 +567,9 @@ Liste blanche d'extensions (`.pdf`, `.jpg`, `.jpeg`, `.png` ; `.docx` en plus po
 |---------|-------|------|
 | GET | `/suivi` | Dossiers en cours (tout sauf RemisComptable), filtres établissement et état |
 | GET | `/salaries` | Dossiers remis au comptable, groupés par établissement |
+| GET | `/etablissements` | Liste des établissements : adresse, mail, SIRET |
+| GET, POST | `/etablissements/nouveau` | Créer un établissement, dans une société existante ou une société neuve |
+| GET, POST | `/etablissements/modifier?cle=Société / Établissement` | Modifier un établissement et, avec lui, la fiche de sa société |
 | GET | `/dossier/<uid>` | Fiche d'un dossier |
 | GET | `/dossier/<uid>/fichier/<bucket>/<nom>` | Téléchargement d'un fichier |
 | POST | `/dossier/<uid>/valider` | Accepter : ouvre le dossier, fiche salarié, rappel DPAE, contrat si couloir généré |
@@ -617,6 +687,8 @@ python tests/test_pieces_multi.py     # pièces multi-fichiers (recto/verso)
 python tests/test_valeurs_contrat.py  # valeurs imprimées dans le contrat (grille, mensualisation)
 python tests/test_produit.py          # garde-fou, fiche salarié, version de configuration
 python tests/test_clients.py          # deux instances isolées, étanchéité multi-client
+python tests/test_etablissements.py   # onglet Établissements : liste, ajout, modification
+python tests/test_supabase_societes.py  # lecture Supabase, copie de secours, écriture (transport factice)
 python tests/test_login.py            # rate-limit, session, PROXIES à travers waitress
 python tests/test_mails.py            # mode console, surcharge, STARTTLS vérifié
 python tests/test_configurer.py       # bilan, assistant, comptes, test SMTP
@@ -649,8 +721,8 @@ Les tests utilisent `config/` (fixture versionnée, client fictif) ou construise
 
 ### Ajouter un établissement, une société, un compte
 
-- Établissement : `societes.json` → `etablissements` (nom, SIRET, `contrat`, `manager_email`), puis redémarrer l'application.
-- Société : nouvel objet dans `societes.json` avec ses mentions et son `comptable_email`.
+- Établissement ou société : onglet **Établissements** de l'espace RH (`/etablissements/nouveau`), sans redémarrage. Les champs obligatoires sont contrôlés côté serveur (`_saisie_etablissement`). Sans bloc `supabase`, l'écran écrit `societes.json` (`config.sauver_etablissement`, écriture atomique, cache mis à jour) ; avec, il écrit dans Supabase puis relit.
+- À la main : `societes.json` → `etablissements` (nom, SIRET, `contrat`, `manager_email`), puis redémarrer — uniquement sans Supabase.
 - Compte : `python configurer.py compte identifiant`.
 
 ### Ajouter un mail

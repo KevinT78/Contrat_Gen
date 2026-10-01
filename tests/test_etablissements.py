@@ -109,3 +109,27 @@ r = c.post("/etablissements/nouveau", data={
 })
 assert r.status_code == 422 and "mail de l'établissement" in r.text, r.status_code
 print("OK  saisie incomplète : la page redit ce qui manque")
+
+modif = {
+    "cle": "ACME / Siège", "siren": "111 111 111", "comptable_email": "c@acme.example",
+    "nom": "Siège", "siret": "111 111 111 00011", "groupe": "RESTAURANTS",
+    "adresse": "1 rue X", "manager_email": "chef@acme.example", "contrat": "genere",
+    **mentions,
+}
+r = c.post("/etablissements/modifier", data={**modif, "societe": ""})
+assert r.status_code == 422 and "nom de la société est obligatoire" in r.text, r.status_code
+assert [s["nom"] for s in config.societes()] == ["ACME", "ACME Sud"]
+print("OK  modification : nom de société vide refusé")
+
+r = c.post("/etablissements/modifier", data={**modif, "societe": "ACME Sud"})
+assert r.status_code == 422 and "Cette société existe déjà" in r.text, r.status_code
+assert [s["nom"] for s in config.societes()] == ["ACME", "ACME Sud"]
+print("OK  modification : renommage vers une société existante refusé")
+
+r = c.post("/etablissements/nouveau", data={
+    "societe": "ACME", "nom": "Kiosque", "siret": "111 111 111 00033",
+    "adresse": "4 rue W", "manager_email": "", "contrat": "genere",
+}, follow_redirects=True)
+assert r.status_code == 200 and "Établissement enregistré" in r.text, r.status_code
+assert config.manager("ACME / Kiosque") == ""
+print("OK  ajout sans mail : accepté, les mails iront à la RH")

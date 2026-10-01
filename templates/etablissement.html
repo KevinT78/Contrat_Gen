@@ -36,12 +36,11 @@
     </div>
     <div class="champ">
       <label for="groupe">Groupe</label>
-      <select id="groupe" name="groupe">
-        <option value="">—</option>
-        {% for g in groupes %}
-          <option value="{{ g }}" {{ 'selected' if g == valeurs.groupe }}>{{ g }}</option>
-        {% endfor %}
-      </select>
+      <input id="groupe" name="groupe" value="{{ valeurs.groupe }}" list="groupes"
+             autocomplete="off">
+      <datalist id="groupes">
+        {% for g in groupes %}<option value="{{ g }}">{% endfor %}
+      </datalist>
     </div>
     <div class="champ pleine">
       <label for="adresse">Adresse</label>
@@ -49,7 +48,7 @@
     </div>
     <div class="champ">
       <label for="manager_email">Mail de l'établissement</label>
-      <input id="manager_email" name="manager_email" type="email" value="{{ valeurs.manager_email }}" required>
+      <input id="manager_email" name="manager_email" type="email" value="{{ valeurs.manager_email }}">
     </div>
     <div class="champ">
       <label for="contrat">Contrat</label>

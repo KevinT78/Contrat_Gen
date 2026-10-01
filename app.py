@@ -526,7 +526,6 @@ _MENTIONS_SOCIETE = (
 )
 _MENTIONS_REQUISES = ("RaisonSociale", "FormeCapital", "SiegeSocial", "Representant",
                       "VilleSignature", "ConventionCollective")
-_GROUPES = ("RESTAURANTS", "DARK KITCHENS")
 
 
 def _email_plausible(valeur):
@@ -534,7 +533,8 @@ def _email_plausible(valeur):
 
 
 def _groupes_proposes(courant=""):
-    vus = list(_GROUPES)
+    """Suggestions du champ Groupe : ceux deja utilises par la config du client."""
+    vus = []
     for s in config.societes():
         for e in s["etablissements"]:
             g = (e.get("groupe") or "").strip()
@@ -586,15 +586,17 @@ def _saisie_etablissement(creation):
         "nouvelle": nouvelle,
     }
     erreurs = []
-    if creation and not valeurs["societe"]:
-        erreurs.append("Choisissez une société, ou créez-en une.")
+    if not valeurs["societe"]:
+        erreurs.append("Choisissez une société, ou créez-en une." if creation
+                       else "Le nom de la société est obligatoire.")
     if not valeurs["nom"]:
         erreurs.append("Le nom de l'établissement est obligatoire.")
     if not valeurs["siret"]:
         erreurs.append("Le SIRET est obligatoire.")
     if not valeurs["adresse"]:
         erreurs.append("L'adresse de l'établissement est obligatoire.")
-    if not _email_plausible(valeurs["manager_email"]):
+    # Facultatif : sans mail, validation et rejet partent a la RH.
+    if valeurs["manager_email"] and not _email_plausible(valeurs["manager_email"]):
         erreurs.append("L'adresse mail de l'établissement n'est pas valide.")
     if nouvelle or not creation:
         if not valeurs["siren"]:
@@ -633,10 +635,9 @@ def _enregistrer_etablissement(valeurs, creation):
         societe["mentions"] = {**(ancienne.get("mentions") or {}), **valeurs["mentions"]}
     origine = None
     if not creation:
-        parties = valeurs["cle"].split(" / ", 1)
-        if len(parties) != 2:
+        if not ancien:
             raise ValueError("Établissement introuvable.")
-        origine = (parties[0], parties[1])
+        origine = (ancienne["nom"], ancien["nom"])
     config.sauver_etablissement(origine, valeurs["societe"], societe, etab)
 
 

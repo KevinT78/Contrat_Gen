@@ -17,9 +17,10 @@
 9. [Rejeter une demande et la faire corriger](#9-rejeter-une-demande-et-la-faire-corriger)
 10. [Abandonner un dossier](#10-abandonner-un-dossier)
 11. [Les salariés](#11-les-salariés)
-12. [La purge des anciens dossiers](#12-la-purge-des-anciens-dossiers)
-13. [Appliquer une modification de configuration](#13-appliquer-une-modification-de-configuration)
-14. [Questions fréquentes](#14-questions-fréquentes)
+12. [Les établissements](#12-les-établissements)
+13. [La purge des anciens dossiers](#13-la-purge-des-anciens-dossiers)
+14. [Appliquer une modification de configuration](#14-appliquer-une-modification-de-configuration)
+15. [Questions fréquentes](#15-questions-fréquentes)
 
 ---
 
@@ -44,6 +45,30 @@ Chaque demande d'embauche est un **dossier** qui avance d'étape en étape. Une 
 |---------|-----------------|-------------------|
 | **Contrat généré** | Le contrat est produit par l'application depuis le modèle du poste, avec les informations du formulaire et les mentions légales de la société. | Rien à faire : le contrat est généré au moment de l'acceptation. Un bouton **« Générer le contrat »** n'apparaît que si la configuration demande une saisie RH complémentaire, ou si la génération automatique a échoué. |
 | **Contrat déposé** | Le contrat est rédigé hors application (outil de paie, modèle Word maison). | Un bouton **« Déposer le contrat »** pour téléverser le fichier (PDF ou .docx). |
+
+### Essayer sur la démonstration
+
+Pour prendre l'application en main sans risque, lancez l'instance de démonstration depuis le dossier du projet :
+
+```bash
+python demo.py --vide
+```
+
+- `--vide` : le suivi est **vide**, vous faites tout vous-même. Sans cette option, quatre dossiers d'exemple sont déjà là, chacun arrêté à une étape différente (pratique pour une présentation).
+- L'application répond sur **http://localhost:5000** ; connexion RH : `rh` / `demo-rh`.
+- Les données vont dans `data_demo/` (effacé à chaque lancement) ; les mails ne partent pas, ils sont écrits en fichiers `.eml` dans `data_demo/mails/`.
+- Arrêt : `Ctrl+C` dans le terminal.
+
+> **Si la connexion RH ne tient pas** (retour à la page de connexion), relancez avec `DEBUG=1` : sans HTTPS, le navigateur refuse le cookie de session sécurisé.
+
+Parcours d'essai conseillé, environ 20 minutes :
+
+1. Faites une demande sur **Paris Bastille** depuis le formulaire public ([§2](#2-le-formulaire-de-demande-manager)).
+2. Connectez-vous, ouvrez le dossier et acceptez-le ([§3](#3-le-suivi-rh), [§4](#4-accepter-la-demande)) : le contrat est généré tout seul.
+3. Refaites une demande sur **Lyon Confluence** et acceptez-la : ce site est en couloir « contrat déposé » ([§5](#5-le-contrat)).
+4. Déposez un accusé DPAE, puis remettez le dossier au cabinet ([§7](#7-la-déclaration-dpae), [§8](#8-la-remise-au-cabinet-comptable)).
+5. Rejetez une troisième demande, ouvrez le `.eml` « rejet » dans `data_demo/mails/` et suivez le lien `/corriger/…` ([§9](#9-rejeter-une-demande-et-la-faire-corriger)).
+6. Ajoutez un établissement « Test » et faites une demande dessus ([§12](#12-les-établissements)).
 
 ---
 
@@ -116,7 +141,7 @@ Colonnes du tableau :
 | **Dernière activité** | Depuis quand le dossier n'a pas bougé. En rouge au-delà de 7 jours. |
 | **Pièces manquantes** | Nombre de pièces attendues et absentes, ou « — ». |
 
-Sous le titre, le compteur indique le nombre de dossiers affichés. Les dossiers rejetés ou abandonnés restent visibles, grisés. Quand une règle de conservation est configurée, un bandeau signale les dossiers dont les pièces peuvent être purgées et un bouton **« Purger les dossiers terminés »** apparaît (voir §12).
+Sous le titre, le compteur indique le nombre de dossiers affichés. Les dossiers rejetés ou abandonnés restent visibles, grisés. Quand une règle de conservation est configurée, un bandeau signale les dossiers dont les pièces peuvent être purgées et un bouton **« Purger les dossiers terminés »** apparaît (voir §13).
 
 ### La fiche d'un dossier
 
@@ -335,7 +360,41 @@ L'onglet **« Salariés »** (`/salaries`) liste les dossiers arrivés au bout d
 
 ---
 
-## 12. La purge des anciens dossiers
+## 12. Les établissements
+
+L'onglet **« Établissements »** (`/etablissements`) est la liste des sites pour lesquels on peut faire une demande d'embauche. C'est là qu'on **ajoute un établissement** ou qu'on **change son adresse mail**, sans toucher aux fichiers de configuration ni redémarrer l'application.
+
+La liste affiche, pour chaque établissement : son nom (avec sa société en dessous), son adresse, le **mail de l'établissement** et un bouton **Modifier**. Le mail de l'établissement est celui qui reçoit le lien de correction d'un rejet et l'avis de validation. S'il manque, ces mails partent à la RH.
+
+![L'onglet « Établissements »](pdf/img/22-etablissements.png)
+
+### Ajouter un établissement
+
+1. Cliquer sur **Ajouter**.
+2. Choisir la **société** dans la liste, ou **« Nouvelle société »** si l'établissement dépend d'une société qui n'existe pas encore.
+3. Renseigner : nom de l'établissement, SIRET, adresse, mail de l'établissement (facultatif : sans lui, les mails vont à la RH), groupe (choisi dans la liste ou saisi librement), et le **contrat** : « Produit par l'application » ou « Déposé (fait ailleurs) » (voir [section 5](#5-le-contrat)).
+4. Pour une **société nouvelle**, une fiche supplémentaire apparaît : SIREN, mail du cabinet comptable et mentions légales du contrat (raison sociale, forme et capital, greffe, RCS, siège, représentant, ville de signature, région de mobilité, convention collective).
+5. **Enregistrer**. L'établissement apparaît tout de suite dans le menu du formulaire public.
+
+![Le formulaire d'ajout d'un établissement](pdf/img/23-etablissement-nouveau.png)
+
+Tous les champs signalés sont obligatoires : l'écran refuse l'enregistrement et dit lequel manque. Deux établissements d'une même société ne peuvent pas porter le même nom.
+
+### Modifier un établissement
+
+Cliquer sur son nom (ou **Modifier**). On peut changer tous les champs, y compris les informations de la société : **les mentions légales et le cabinet comptable valent pour tous les établissements de cette société**, les modifier les change donc pour tous.
+
+> **Attention :** changer le **nom** d'un établissement ou d'une société ne renomme pas les dossiers déjà envoyés, et le menu du formulaire n'affiche plus l'ancien nom. Pour un dossier en cours, mieux vaut ne pas renommer. Si les règles de modèle de contrat (`templates` dans `instance.json`) citent l'ancien nom, elles doivent être mises à jour : sinon l'application refuse de redémarrer en le signalant.
+
+Il n'y a pas de suppression depuis l'écran : un établissement qui ferme se retire dans la configuration ou la base (voir la [documentation technique](DOCUMENTATION-TECHNIQUE.md#sociétés-et-établissements-dans-supabase)).
+
+### Si l'enregistrement échoue
+
+Le message « L'enregistrement n'a pas abouti. Réessayez dans un moment. » signale une panne de la base : rien n'a été enregistré, il suffit de recommencer plus tard. Si cela dure, prévenir l'installateur.
+
+---
+
+## 13. La purge des anciens dossiers
 
 Si une règle de conservation est configurée (bloc `conservation` de la configuration), les pièces des dossiers terminés peuvent être effacées au bout d'un délai, conformément au RGPD.
 
@@ -361,15 +420,17 @@ Un dossier est proposé à la purge quand il est dans l'un des états listés da
 
 ---
 
-## 13. Appliquer une modification de configuration
+## 14. Appliquer une modification de configuration
 
-Après une modification des fichiers de configuration (nouvel établissement, salaire revalorisé, motif de rejet ajouté), **redémarrez l'application** : c'est au démarrage qu'elle relit `config/`.
+Après une modification des fichiers de configuration (salaire revalorisé, motif de rejet ajouté), **redémarrez l'application** : c'est au démarrage qu'elle relit `config/`.
+
+Les établissements font exception : ils se gèrent depuis l'onglet [Établissements](#12-les-établissements) et sont pris en compte immédiatement.
 
 Une configuration invalide empêche le démarrage : l'application refuse de servir et indique ce qui bloque. `python doctor.py` permet de la vérifier avant de redémarrer.
 
 ---
 
-## 14. Questions fréquentes
+## 15. Questions fréquentes
 
 ### Je ne vois pas de bouton « Générer le contrat »
 
@@ -391,7 +452,7 @@ Si le mail est bien parti mais que le manager ne l'a pas reçu, l'établissement
 
 ### Je ne reçois aucun mail
 
-- En mode `console` (démonstration), les mails ne sont pas envoyés mais écrits dans `data/mails/`.
+- En mode `console`, les mails ne sont pas envoyés mais écrits dans le sous-dossier `mails/` du dossier de données (`data_demo/mails/` en démonstration).
 - En mode `smtp`, testez l'envoi : `python configurer.py mail votre@adresse`.
 
 ### Le contrat ne se génère pas
@@ -401,9 +462,9 @@ Si le mail est bien parti mais que le manager ne l'a pas reçu, l'établissement
 
 ### Comment ajouter un établissement ou un compte RH ?
 
-- Établissement : l'ajouter dans `societes.json`, puis redémarrer l'application.
+- Établissement : onglet **Établissements** → **Ajouter** (voir [section 12](#12-les-établissements)). Pas de redémarrage.
 - Compte : `python configurer.py compte identifiant` (le mot de passe est demandé à l'écran).
 
 ---
 
-*Contrat_Gen — édition du 16 septembre 2026*
+*Contrat_Gen — édition du 1er octobre 2026*
