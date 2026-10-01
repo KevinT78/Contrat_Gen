@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block titre %}Établissements{% endblock %}
+{% block classe_main %}large{% endblock %}
+{% block corps %}
+<div class="entete">
+  <div>
+    <h1>Établissements</h1>
+    <p class="sous">Le mail de l'établissement reçoit la validation et le rejet.
+      {% if supabase %}Enregistré dans Supabase.{% endif %}</p>
+  </div>
+  <a class="bouton" href="{{ url_for('etablissement_nouveau') }}">Ajouter</a>
+</div>
+
+{% if lignes %}
+<div class="tableau compact">
+<table>
+  <thead>
+    <tr><th>Établissement</th><th>Adresse</th><th>Mail de l'établissement</th><th></th></tr>
+  </thead>
+  <tbody>
+  {% for e in lignes %}
+    <tr>
+      <td><a class="nom" href="{{ url_for('etablissement_modifier', cle=e.cle) }}">{{ e.nom }}</a>
+        <div class="secondaire">{{ e.societe }}</div></td>
+      <td>{{ e.adresse or "—" }}</td>
+      <td>{{ e.mail or "—" }}</td>
+      <td><a class="bouton discret" href="{{ url_for('etablissement_modifier', cle=e.cle) }}">Modifier</a></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<p class="indice">Aucun établissement. Ajoutez le premier pour qu'il apparaisse dans le formulaire.</p>
+{% endif %}
+{% endblock %}

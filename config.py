@@ -82,18 +82,25 @@ def _bloc_supabase():
     return url, cle
 
 
-def _appel_supabase(url, cle):
+def _appel_supabase(url, cle, methode="GET", corps=None):
     entetes = {"apikey": cle, "Authorization": f"Bearer {cle}",
                "Accept": "application/json"}
+    data = None
+    if corps is not None:
+        entetes["Content-Type"] = "application/json"
+        entetes["Prefer"] = "return=representation"
+        data = json.dumps(corps, ensure_ascii=False).encode()
     if _TRANSPORT_SUPABASE:
-        statut, brut = _TRANSPORT_SUPABASE("GET", url, entetes)
+        statut, brut = _TRANSPORT_SUPABASE(methode, url, entetes, data)
     else:                                                    # pragma: no cover
-        req = urllib.request.Request(url, headers=entetes, method="GET")
+        req = urllib.request.Request(url, data=data, headers=entetes, method=methode)
         try:
             with urllib.request.urlopen(req, timeout=8) as r:
                 statut, brut = r.status, r.read()
         except urllib.error.HTTPError as e:
             statut, brut = e.code, e.read()
+    if statut == 409:
+        raise ValueError("Ce nom est déjà utilisé.")
     if statut >= 300:
         raise RuntimeError(f"HTTP {statut}")
     return brut
@@ -218,6 +225,147 @@ def societes():
                 and maintenant - _SUPABASE_ESSAI < _SUPABASE_REPRISE):
             return _lire("societes.json")
         return _rafraichir_societes(*bloc)
+
+
+def _oublier_societes():
+    """La prochaine lecture retente Supabase. A appeler apres une ecriture."""
+    global _SUPABASE_ESSAI, _SUPABASE_OK
+    _CACHE.pop("societes.json", None)
+    _SUPABASE_ESSAI, _SUPABASE_OK = None, False
+
+
+def _filtre(colonne, valeur):
+    return f"{colonne}=eq.{quote(str(valeur), safe='')}"
+
+
+def _societe_distante(url, cle, nom):
+    """{'id', 'etablissements': [{'id','nom','ordre'}]} ou None."""
+    select = "id,etablissements(id,nom,ordre)"
+    adresse = (f"{url}/rest/v1/societes?select={quote(select, safe='(),')}"
+               f"&{_filtre('nom', nom)}")
+    lignes = json.loads(_appel_supabase(adresse, cle))
+    if not isinstance(lignes, list) or not lignes:
+        return None
+    return lignes[0]
+
+
+def _corps_etablissement(etab, societe_id, ordre):
+    return {"societe_id": societe_id, "nom": etab["nom"],
+            "siret": etab.get("siret") or "", "groupe": etab.get("groupe") or "",
+            "manager_email": etab.get("manager_email") or "",
+            "contrat": etab.get("contrat") or "",
+            "mentions": etab.get("mentions") or {}, "ordre": ordre}
+
+
+def _sauver_distant(origine, societe_nom, societe, etablissement):
+    url, cle = _bloc_supabase()
+    if origine is None:
+        ligne = _societe_distante(url, cle, societe_nom)
+        if ligne is None:
+            if not societe:
+                raise ValueError("Société inconnue.")
+            cree = json.loads(_appel_supabase(
+                f"{url}/rest/v1/societes", cle, "POST", {
+                    "nom": societe["nom"], "siren": societe.get("siren") or "",
+                    "comptable_email": societe.get("comptable_email") or "",
+                    "mentions": societe.get("mentions") or {},
+                    "ordre": len(societes()),
+                }))
+            if not cree:
+                raise RuntimeError("société non créée")
+            sid, ordre = cree[0]["id"], 0
+        elif societe:
+            raise ValueError("Cette société existe déjà : choisissez-la dans la liste.")
+        else:
+            if any(e.get("nom") == etablissement["nom"]
+                   for e in ligne.get("etablissements") or []):
+                raise ValueError("Cet établissement existe déjà.")
+            sid = ligne["id"]
+            ordre = len(ligne.get("etablissements") or [])
+        _appel_supabase(f"{url}/rest/v1/etablissements", cle, "POST",
+                        _corps_etablissement(etablissement, sid, ordre))
+        return
+    ancien_soc, ancien_etab = origine
+    ligne = _societe_distante(url, cle, ancien_soc)
+    if not ligne:
+        raise ValueError("Société introuvable.")
+    etabs = ligne.get("etablissements") or []
+    trouve = next((e for e in etabs if e.get("nom") == ancien_etab), None)
+    if not trouve:
+        raise ValueError("Établissement introuvable.")
+    if any(e.get("nom") == etablissement["nom"] and e.get("id") != trouve["id"]
+           for e in etabs):
+        raise ValueError("Cet établissement existe déjà.")
+    corps = _corps_etablissement(etablissement, ligne["id"], trouve.get("ordre") or 0)
+    corps.pop("societe_id")
+    _appel_supabase(f"{url}/rest/v1/etablissements?{_filtre('id', trouve['id'])}",
+                    cle, "PATCH", corps)
+    if societe:
+        _appel_supabase(f"{url}/rest/v1/societes?{_filtre('id', ligne['id'])}",
+                        cle, "PATCH", {
+                            "nom": societe["nom"], "siren": societe.get("siren") or "",
+                            "comptable_email": societe.get("comptable_email") or "",
+                            "mentions": societe.get("mentions") or {},
+                        })
+
+
+def _sauver_local(origine, societe_nom, societe, etablissement):
+    data = json.loads(json.dumps(societes()))
+    if origine is None:
+        cible = next((s for s in data if s["nom"] == societe_nom), None)
+        if cible is None:
+            if not societe:
+                raise ValueError("Société inconnue.")
+            cible = {"nom": societe["nom"], "siren": societe.get("siren") or "",
+                     "comptable_email": societe.get("comptable_email") or "",
+                     "mentions": societe.get("mentions") or {}, "etablissements": []}
+            data.append(cible)
+        elif societe:
+            raise ValueError("Cette société existe déjà : choisissez-la dans la liste.")
+        elif any(e["nom"] == etablissement["nom"] for e in cible["etablissements"]):
+            raise ValueError("Cet établissement existe déjà.")
+        cible["etablissements"].append(etablissement)
+    else:
+        ancien_soc, ancien_etab = origine
+        cible = next((s for s in data if s["nom"] == ancien_soc), None)
+        if cible is None:
+            raise ValueError("Société introuvable.")
+        idx = next((i for i, e in enumerate(cible["etablissements"])
+                    if e["nom"] == ancien_etab), None)
+        if idx is None:
+            raise ValueError("Établissement introuvable.")
+        if any(e["nom"] == etablissement["nom"] and i != idx
+               for i, e in enumerate(cible["etablissements"])):
+            raise ValueError("Cet établissement existe déjà.")
+        if societe:
+            cible["nom"] = societe["nom"]
+            cible["siren"] = societe.get("siren") or ""
+            cible["comptable_email"] = societe.get("comptable_email") or ""
+            cible["mentions"] = societe.get("mentions") or {}
+        cible["etablissements"][idx] = etablissement
+    if not _societes_utilisables(data):
+        raise ValueError("Il doit rester au moins un établissement.")
+    _CACHE["societes.json"] = data
+    _ecrire_secours_societes(data)
+
+
+def sauver_etablissement(origine, societe_nom, societe, etablissement):
+    """Cree ou modifie un etablissement.
+
+    `origine` vaut None a la creation, sinon (nom de societe, nom d'etablissement)
+    avant modification. `societe` vaut None quand on rattache a une societe
+    deja la sans toucher a sa fiche ; sinon c'est la fiche a ecrire
+    (nom, siren, comptable_email, mentions). Avec Supabase, la copie locale
+    est relue ensuite. ValueError : nom deja pris, societe ou etablissement
+    introuvable. Une panne reseau reste une RuntimeError : rien n'est ecrit
+    en local a la place, le fichier serait ecrase a la lecture suivante.
+    """
+    if supabase_actif():
+        _sauver_distant(origine, societe_nom, societe, etablissement)
+        _oublier_societes()
+        societes()
+    else:
+        _sauver_local(origine, societe_nom, societe, etablissement)
 
 
 def comptes():

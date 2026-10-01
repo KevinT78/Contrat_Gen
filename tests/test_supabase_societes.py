@@ -65,7 +65,7 @@ DISTANT = [{
 APPELS = []
 
 
-def transport(methode, url, headers):
+def transport(methode, url, headers, corps=None):
     APPELS.append((methode, url))
     assert headers["apikey"] == "sb_secret_test"
     assert "sb_secret_test" not in url
@@ -116,7 +116,7 @@ assert lu2 == lu and len(APPELS) == 1
 print("OK  cache : pas de second appel dans le délai")
 
 # --- HTTP en échec : la copie déjà écrite reste, et on la ressert ------------
-def panne(methode, url, headers):
+def panne(methode, url, headers, corps=None):
     APPELS.append("panne")
     return 500, b'{"message":"down"}'
 
@@ -140,3 +140,65 @@ APPELS.clear()
 config._TRANSPORT_SUPABASE = panne
 assert config.societes() == garde and APPELS == []
 print("OK  panne récente : pas de nouvel appel")
+
+# --- sans supabase : l'écriture va dans le fichier --------------------------
+config.instance().pop("supabase")
+config._oublier_societes()
+config.sauver_etablissement(None, "Wing Store Bastille", None, {
+    "nom": "Comptoir", "siret": "933 534 604 00030",
+    "manager_email": "comptoir@example.com", "groupe": "RESTAURANTS",
+    "mentions": {"AdresseEtablissement": "3 rue Z"},
+})
+assert config.manager("Wing Store Bastille / Comptoir") == "comptoir@example.com"
+try:
+    config.sauver_etablissement(None, "Wing Store Bastille", None, {
+        "nom": "Comptoir", "siret": "1", "manager_email": "x@y.z",
+        "mentions": {"AdresseEtablissement": "3 rue Z"},
+    })
+    raise AssertionError("doublon accepté")
+except ValueError as e:
+    assert "existe déjà" in str(e)
+print("OK  sans supabase : établissement ajouté dans le fichier, doublon refusé")
+
+# --- avec supabase : le mail part en PATCH, puis la copie est relue ----------
+config.instance()["supabase"] = INSTANCE["supabase"]
+config._oublier_societes()
+JOURNAL = []
+
+def ecriture(methode, url, headers, corps=None):
+    JOURNAL.append((methode, url, json.loads(corps) if corps else None))
+    if methode == "GET" and "etablissements(id,nom,ordre)" in url:
+        return 200, json.dumps([{
+            "id": 4, "etablissements": [
+                {"id": 8, "nom": "Bastille", "ordre": 0},
+                {"id": 9, "nom": "Comptoir", "ordre": 1},
+            ],
+        }]).encode()
+    if methode == "PATCH":
+        return 200, b'[{"id": 9}]'
+    return 200, json.dumps([{
+        "nom": "Wing Store Bastille", "siren": "933 534 604",
+        "comptable_email": "addy@example.com", "ordre": 0,
+        "mentions": {"RaisonSociale": "WING STORE BASTILLE SAS"},
+        "etablissements": [{
+            "nom": "Comptoir", "ordre": 1, "siret": "933 534 604 00030",
+            "groupe": "RESTAURANTS", "manager_email": "nouveau@example.com",
+            "contrat": "", "mentions": {"AdresseEtablissement": "3 rue Z"},
+        }],
+    }]).encode()
+
+config._TRANSPORT_SUPABASE = ecriture
+config.sauver_etablissement(("Wing Store Bastille", "Comptoir"), "Wing Store Bastille", {
+    "nom": "Wing Store Bastille", "siren": "933 534 604",
+    "comptable_email": "addy@example.com",
+    "mentions": {"RaisonSociale": "WING STORE BASTILLE SAS"},
+}, {
+    "nom": "Comptoir", "siret": "933 534 604 00030", "groupe": "RESTAURANTS",
+    "manager_email": "nouveau@example.com",
+    "mentions": {"AdresseEtablissement": "3 rue Z"},
+})
+patch = next(corps for methode, url, corps in JOURNAL
+             if methode == "PATCH" and "/etablissements?" in url)
+assert patch["manager_email"] == "nouveau@example.com", patch
+assert config.manager("Wing Store Bastille / Comptoir") == "nouveau@example.com"
+print("OK  supabase : le mail du manager est écrit, puis relu")

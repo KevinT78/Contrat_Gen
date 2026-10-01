@@ -6,6 +6,7 @@ puis un POST (ticket 08).
 """
 import io
 import json
+import re
 import mimetypes
 import os
 import socket
@@ -509,6 +510,203 @@ def salaries():
                            remis_le=store.date_remise, date_sortie=store.date_sortie,
                            cabinet=cabinet, signe_manquant=store.signe_manquant,
                            aujourdhui=date.today().isoformat())
+
+
+# Mentions legales saisies avec un etablissement. L'ordre est celui du formulaire.
+_MENTIONS_SOCIETE = (
+    ("RaisonSociale", "Raison sociale"),
+    ("FormeCapital", "Forme et capital"),
+    ("GreffeRCS", "Greffe"),
+    ("RCS", "RCS"),
+    ("SiegeSocial", "Siège social"),
+    ("Representant", "Représentant"),
+    ("VilleSignature", "Ville de signature"),
+    ("RegionMobilite", "Région de mobilité"),
+    ("ConventionCollective", "Convention collective"),
+)
+_MENTIONS_REQUISES = ("RaisonSociale", "FormeCapital", "SiegeSocial", "Representant",
+                      "VilleSignature", "ConventionCollective")
+_GROUPES = ("RESTAURANTS", "DARK KITCHENS")
+
+
+def _email_plausible(valeur):
+    return bool(re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", valeur or ""))
+
+
+def _groupes_proposes(courant=""):
+    vus = list(_GROUPES)
+    for s in config.societes():
+        for e in s["etablissements"]:
+            g = (e.get("groupe") or "").strip()
+            if g and g not in vus:
+                vus.append(g)
+    if courant and courant not in vus:
+        vus.append(courant)
+    return vus
+
+
+def _fiche_etablissement(cle):
+    """Valeurs du formulaire pour un établissement déjà là, ou None."""
+    try:
+        societe, etab = config.etablissement(cle)
+    except KeyError:
+        return None
+    mentions = societe.get("mentions") or {}
+    return {
+        "cle": cle, "societe": societe["nom"], "siren": societe.get("siren") or "",
+        "comptable_email": societe.get("comptable_email") or "",
+        "mentions": {k: mentions.get(k, "") for k, _ in _MENTIONS_SOCIETE},
+        "nom": etab["nom"], "siret": etab.get("siret") or "",
+        "groupe": etab.get("groupe") or "",
+        "manager_email": etab.get("manager_email") or "",
+        "contrat": etab.get("contrat") or "genere",
+        "adresse": (etab.get("mentions") or {}).get("AdresseEtablissement", ""),
+    }
+
+
+def _saisie_etablissement(creation):
+    """(valeurs, erreurs) lues du POST. La société n'est refaite qu'en création
+    d'une société neuve, ou en modification (ses mentions valent pour tous
+    ses établissements)."""
+    g = request.form.get
+    nouvelle = creation and g("societe") == "__nouvelle__"
+    mentions = {k: (g(f"mention_{k}") or "").strip() for k, _ in _MENTIONS_SOCIETE}
+    valeurs = {
+        "cle": (g("cle") or "").strip(),
+        "societe": (g("societe_nom") or "").strip() if nouvelle else (g("societe") or "").strip(),
+        "siren": (g("siren") or "").strip(),
+        "comptable_email": (g("comptable_email") or "").strip(),
+        "mentions": mentions,
+        "nom": (g("nom") or "").strip(),
+        "siret": (g("siret") or "").strip(),
+        "groupe": (g("groupe") or "").strip(),
+        "manager_email": (g("manager_email") or "").strip(),
+        "contrat": "depose" if g("contrat") == "depose" else "genere",
+        "adresse": (g("adresse") or "").strip(),
+        "nouvelle": nouvelle,
+    }
+    erreurs = []
+    if creation and not valeurs["societe"]:
+        erreurs.append("Choisissez une société, ou créez-en une.")
+    if not valeurs["nom"]:
+        erreurs.append("Le nom de l'établissement est obligatoire.")
+    if not valeurs["siret"]:
+        erreurs.append("Le SIRET est obligatoire.")
+    if not valeurs["adresse"]:
+        erreurs.append("L'adresse de l'établissement est obligatoire.")
+    if not _email_plausible(valeurs["manager_email"]):
+        erreurs.append("L'adresse mail de l'établissement n'est pas valide.")
+    if nouvelle or not creation:
+        if not valeurs["siren"]:
+            erreurs.append("Le SIREN est obligatoire.")
+        if not _email_plausible(valeurs["comptable_email"]):
+            erreurs.append("L'adresse mail du cabinet comptable n'est pas valide.")
+        for cle in _MENTIONS_REQUISES:
+            if not mentions[cle]:
+                lib = dict(_MENTIONS_SOCIETE)[cle]
+                erreurs.append(f"{lib} est obligatoire.")
+    return valeurs, erreurs
+
+
+def _enregistrer_etablissement(valeurs, creation):
+    mentions_etab = {"AdresseEtablissement": valeurs["adresse"]}
+    etab = {"nom": valeurs["nom"], "siret": valeurs["siret"],
+            "manager_email": valeurs["manager_email"], "mentions": mentions_etab}
+    if valeurs["groupe"]:
+        etab["groupe"] = valeurs["groupe"]
+    if valeurs["contrat"] == "depose":
+        etab["contrat"] = "depose"
+    if creation and not valeurs["nouvelle"]:
+        config.sauver_etablissement(None, valeurs["societe"], None, etab)
+        return
+    # En modification, garder les autres mentions d'établissement déjà là
+    # (une adresse n'est pas la seule clé possible).
+    societe = {"nom": valeurs["societe"], "siren": valeurs["siren"],
+               "comptable_email": valeurs["comptable_email"],
+               "mentions": dict(valeurs["mentions"])}
+    if not creation:
+        try:
+            ancienne, ancien = config.etablissement(valeurs["cle"])
+        except KeyError:
+            ancienne, ancien = {}, {}
+        etab["mentions"] = {**(ancien.get("mentions") or {}), **mentions_etab}
+        societe["mentions"] = {**(ancienne.get("mentions") or {}), **valeurs["mentions"]}
+    origine = None
+    if not creation:
+        parties = valeurs["cle"].split(" / ", 1)
+        if len(parties) != 2:
+            raise ValueError("Établissement introuvable.")
+        origine = (parties[0], parties[1])
+    config.sauver_etablissement(origine, valeurs["societe"], societe, etab)
+
+
+@app.get("/etablissements")
+@rh
+def etablissements_page():
+    lignes = []
+    for s in config.societes():
+        for e in s["etablissements"]:
+            lignes.append({
+                "cle": f"{s['nom']} / {e['nom']}",
+                "societe": s["nom"], "nom": e["nom"],
+                "adresse": (e.get("mentions") or {}).get("AdresseEtablissement", ""),
+                "mail": e.get("manager_email") or "",
+                "siret": e.get("siret") or "",
+            })
+    return render_template("etablissements.html", lignes=lignes,
+                           supabase=config.supabase_actif())
+
+
+@app.route("/etablissements/nouveau", methods=["GET", "POST"])
+@rh
+def etablissement_nouveau():
+    return _etablissement_form(True)
+
+
+@app.route("/etablissements/modifier", methods=["GET", "POST"])
+@rh
+def etablissement_modifier():
+    return _etablissement_form(False)
+
+
+def _etablissement_form(creation):
+    if request.method == "POST":
+        valeurs, erreurs = _saisie_etablissement(creation)
+        if not erreurs:
+            try:
+                _enregistrer_etablissement(valeurs, creation)
+            except ValueError as e:
+                erreurs = [str(e)]
+            except Exception as e:               # noqa: BLE001 — panne supabase, rien d'écrit
+                print(f"[etablissements] enregistrement impossible ({type(e).__name__}: {e})",
+                      flush=True)
+                erreurs = ["L'enregistrement n'a pas abouti. Réessayez dans un moment."]
+        if erreurs:
+            return render_template(
+                "etablissement.html", creation=creation, valeurs=valeurs,
+                erreurs=erreurs, mentions=_MENTIONS_SOCIETE,
+                societes=[s["nom"] for s in config.societes()],
+                groupes=_groupes_proposes(valeurs.get("groupe") or ""),
+                supabase=config.supabase_actif()), 422
+        flash("Établissement enregistré.", "ok")
+        return redirect(url_for("etablissements_page"))
+    if creation:
+        valeurs = {"cle": "", "societe": "", "siren": "", "comptable_email": "",
+                   "mentions": {k: "" for k, _ in _MENTIONS_SOCIETE},
+                   "nom": "", "siret": "", "groupe": "", "manager_email": "",
+                   "contrat": "genere", "adresse": "", "nouvelle": False}
+    else:
+        cle = request.args.get("cle") or ""
+        valeurs = _fiche_etablissement(cle)
+        if not valeurs:
+            flash("Établissement introuvable.", "erreur")
+            return redirect(url_for("etablissements_page"))
+        valeurs["nouvelle"] = False
+    return render_template(
+        "etablissement.html", creation=creation, valeurs=valeurs, erreurs=[],
+        mentions=_MENTIONS_SOCIETE, societes=[s["nom"] for s in config.societes()],
+        groupes=_groupes_proposes(valeurs.get("groupe") or ""),
+        supabase=config.supabase_actif())
 
 
 def _echecs_recap():

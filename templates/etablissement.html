@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% block titre %}{{ 'Nouvel établissement' if creation else valeurs.nom }}{% endblock %}
+{% block corps %}
+<p class="retour"><a href="{{ url_for('etablissements_page') }}">← Établissements</a></p>
+<h1>{{ 'Nouvel établissement' if creation else 'Modifier ' ~ valeurs.nom }}</h1>
+<p class="sous">{% if creation %}Le nouvel établissement est enregistré{% else %}La modification est enregistrée{% endif %}
+  dans {% if supabase %}Supabase{% else %}la configuration{% endif %}.
+  Le mail de l'établissement reçoit la validation et le rejet.</p>
+
+{% for e in erreurs %}<p class="msg erreur">{{ e }}</p>{% endfor %}
+
+<form method="post" class="carte">
+  {% if not creation %}<input type="hidden" name="cle" value="{{ valeurs.cle }}">{% endif %}
+
+  <p class="titre-carte">Établissement</p>
+  <div class="grille-champs">
+    {% if creation %}
+    <div class="champ">
+      <label for="societe">Société</label>
+      <select id="societe" name="societe">
+        <option value="">Choisir…</option>
+        {% for nom in societes %}
+          <option value="{{ nom }}" {{ 'selected' if nom == valeurs.societe and not valeurs.nouvelle }}>{{ nom }}</option>
+        {% endfor %}
+        <option value="__nouvelle__" {{ 'selected' if valeurs.nouvelle }}>Nouvelle société</option>
+      </select>
+    </div>
+    {% endif %}
+    <div class="champ">
+      <label for="nom">Nom de l'établissement</label>
+      <input id="nom" name="nom" value="{{ valeurs.nom }}" required>
+    </div>
+    <div class="champ">
+      <label for="siret">SIRET</label>
+      <input id="siret" name="siret" value="{{ valeurs.siret }}" required>
+    </div>
+    <div class="champ">
+      <label for="groupe">Groupe</label>
+      <select id="groupe" name="groupe">
+        <option value="">—</option>
+        {% for g in groupes %}
+          <option value="{{ g }}" {{ 'selected' if g == valeurs.groupe }}>{{ g }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="champ pleine">
+      <label for="adresse">Adresse</label>
+      <input id="adresse" name="adresse" value="{{ valeurs.adresse }}" required>
+    </div>
+    <div class="champ">
+      <label for="manager_email">Mail de l'établissement</label>
+      <input id="manager_email" name="manager_email" type="email" value="{{ valeurs.manager_email }}" required>
+    </div>
+    <div class="champ">
+      <label for="contrat">Contrat</label>
+      <select id="contrat" name="contrat">
+        <option value="genere" {{ 'selected' if valeurs.contrat != 'depose' }}>Produit par l'application</option>
+        <option value="depose" {{ 'selected' if valeurs.contrat == 'depose' }}>Déposé (fait ailleurs)</option>
+      </select>
+    </div>
+  </div>
+
+  <div id="fiche-societe" {% if creation %}hidden{% endif %}>
+    <hr class="sep">
+    <p class="titre-carte">Société</p>
+    {% if not creation %}
+      <p class="indice">Ces mentions figurent sur le contrat. Elles sont communes à tous les établissements de cette société. Changer le nom ne renomme pas les dossiers déjà envoyés.</p>
+    {% endif %}
+    <div class="grille-champs">
+      <div class="champ pleine">
+        <label for="societe-nom">Nom de la société</label>
+        {% if creation %}
+          <input id="societe-nom" name="societe_nom" value="{{ valeurs.societe if valeurs.nouvelle else '' }}">
+        {% else %}
+          <input id="societe-nom" name="societe" value="{{ valeurs.societe }}" required>
+        {% endif %}
+      </div>
+      <div class="champ">
+        <label for="siren">SIREN</label>
+        <input id="siren" name="siren" value="{{ valeurs.siren }}">
+      </div>
+      <div class="champ">
+        <label for="comptable_email">Mail du cabinet comptable</label>
+        <input id="comptable_email" name="comptable_email" type="email" value="{{ valeurs.comptable_email }}">
+      </div>
+      {% for cle, lib in mentions %}
+      <div class="champ {{ 'pleine' if cle in ('FormeCapital', 'SiegeSocial', 'ConventionCollective') }}">
+        <label for="mention-{{ cle }}">{{ lib }}</label>
+        <input id="mention-{{ cle }}" name="mention_{{ cle }}" value="{{ valeurs.mentions[cle] }}">
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+
+  <div class="actions" style="margin-top:28px">
+    <button type="submit">Enregistrer</button>
+    <a class="bouton discret" href="{{ url_for('etablissements_page') }}">Annuler</a>
+  </div>
+</form>
+{% if creation %}
+<script>
+  const sel = document.getElementById("societe");
+  const bloc = document.getElementById("fiche-societe");
+  function maj() { bloc.hidden = sel.value !== "__nouvelle__"; }
+  sel.addEventListener("change", maj);
+  maj();
+</script>
+{% endif %}
+{% endblock %}

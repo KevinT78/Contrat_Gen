@@ -29,3 +29,6 @@ docs/pdf/img/*
 
 # skills personnalises et configuration Claude Code locale
 .claude/
+
+# environnement virtuel (avec le point)
+.venv/
