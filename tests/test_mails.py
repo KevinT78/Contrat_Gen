@@ -236,7 +236,11 @@ try:
 
     _smtp(True)
     _c.post("/dossier/%s/renvoyer-correction" % _uid)
-    assert _vus[-1]["commentaire"] == "piece floue" and "/corriger/" + _jeton in _vus[-1]["lien"]
+    # Le jeton porte l'heure a la seconde : comparer a _jeton echouait au
+    # passage d'une seconde. On verifie qu'il ouvre bien ce dossier.
+    _envoye = _vus[-1]["lien"].split("/corriger/", 1)[1]
+    assert _vus[-1]["commentaire"] == "piece floue"
+    assert (store.verifier_lien(_envoye, "correction") or {}).get("id") == _uid
     _p = _page()
     assert "a été envoyé" in _p and "renvoyer-correction" not in _p, "renvoi reussi non pris en compte"
     _n = len(_vus)
