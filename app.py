@@ -689,7 +689,10 @@ def _ecran_sharepoint(cle):
     if ctx["sp_etab"]:
         sp_id = ctx["sp_etab"]["id"]
         deja = sharepoint.deja_importes()
-        ctx["salaries"] = [dict(s, deja=sharepoint.cle(s["id"]) in deja)
+        # signalé, jamais bloqué : un vrai homonyme reste importable
+        dans_app = sharepoint.deja_dans_app(cle)
+        ctx["salaries"] = [dict(s, deja=sharepoint.cle(s["id"]) in deja,
+                                dans_app=dans_app.get(sharepoint.cle_nom(s["nom"])))
                            for s in sharepoint.lister_salaries(sp_id)]
     return ctx
 

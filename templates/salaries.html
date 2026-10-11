@@ -69,7 +69,9 @@
         <td class="secondaire">{{ valeur(i.champs, 'type_contrat') or '—' }}</td>
         <td>{{ date_fr(dd) or '—' }}</td>
         <td class="secondaire">
-          {% if not dd %}<span class="manque">à compléter</span>
+          {# un ancien ne se complète plus : la date d'entrée n'est saisissable qu'en poste #}
+          {% if not dd and anciens %}—
+          {% elif not dd %}<span class="manque">à compléter</span>
           {% elif j is none %}à venir
           {% elif j >= 60 %}{{ j // 30 }} mois
           {% else %}{{ j }} j{% endif %}</td>

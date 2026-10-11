@@ -16,6 +16,7 @@ L'assistant ne remplit que ce qui se dicte (adresses, comptes, société et
 restent un travail d'éditeur : il montre où, puis attend qu'on ait corrigé.
 """
 import getpass
+import importlib.util
 import json
 import os
 import secrets
@@ -143,6 +144,9 @@ def avertissements():
         out.append("sharepoint + stockage « dossier » : le jeton Microsoft de la RH "
                    "(DONNEES/sharepoint-jeton.json) part dans le dossier synchronisé. "
                    "Se déconnecter après chaque import  [config/instance.json]")
+    if config.sharepoint() and importlib.util.find_spec("msal") is None:
+        out.append("sharepoint déclaré mais le module msal manque : la connexion "
+                   "Microsoft échouera. pip install -r requirements-sharepoint.txt")
     if not config.conservation():
         out.append("aucun bloc « conservation » : les pièces ne sont jamais purgées "
                    "(RGPD)  [config/instance.json]")

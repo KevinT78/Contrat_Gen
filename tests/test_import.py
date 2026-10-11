@@ -272,6 +272,7 @@ import html as _html  # noqa: E402
 app.app.config["SESSION_COOKIE_SECURE"] = False
 anonyme, c = app.app.test_client(), app.app.test_client()
 c.post("/login", data={"identifiant": "rh", "mot_de_passe": "fixture"})
+vrai_compte = sp.compte
 sp.compte = lambda: "rh@acme.test"
 page = lambda u: _html.unescape(c.get(u).get_data(as_text=True))          # noqa: E731
 
@@ -361,5 +362,135 @@ config.sharepoint = lambda: {}
 assert "Récupérer les dossiers" not in page("/etablissements"), "bouton sans bloc sharepoint"
 assert c.get(f"/etablissements/recuperer?cle={ETAB}").status_code == 404
 print("ok  écran : connexion par code, liste à cocher, déjà importés grisés, id forgé refusé")
+
+# 19. revue du 11/10 : déjà dans l'app, gros fichiers, Leavers sous un poste, msal
+import types  # noqa: E402
+
+import configurer  # noqa: E402
+
+config.sharepoint = vrai_sp
+ARBRE["EQ"].append(D("NOUVEAU Léa", "S7"))
+ARBRE["S7"] = []
+case_s7 = lambda: re.search(r'<input[^>]*value="S7"[^>]*>', page(f"/etablissements/recuperer?cle={ETAB}")).group()  # noqa: E731
+store.creer_soumission({"etablissement": AUTRE, "nom_naissance": "Nouveau", "prenom": "Léa"}, {})
+assert "checked" in case_s7(), "homonyme d'un autre établissement signalé"
+uid_lea = store.creer_soumission({"etablissement": ETAB, "nom_naissance": "Martin",
+                                  "nom_usage": "nouveau", "prenom": "Lea"}, {})
+assert sp.deja_dans_app(ETAB)[sp.cle_nom("NOUVEAU Léa")]["id"] == uid_lea, "nom d'usage, accent, ordre"
+assert sp.cle_nom("DIR Paul") not in sp.deja_dans_app(ETAB), "un importé compté comme déjà dans l'app"
+s = page(f"/etablissements/recuperer?cle={ETAB}")
+assert "déjà dans l'app" in s and f"/dossier/{uid_lea}" in s and "Soumise" in s, s[-2000:]
+assert "checked" not in case_s7() and "disabled" not in case_s7(), "doublon : décoché mais cochable"
+assert "La date d'entrée ne figure pas dans le SharePoint" in s
+
+GROS = {"name": "video.mp4", "id": "G", "file": {}, "size": 60 * 2**20}
+arbre = {"S8": [GROS, {"name": "cni.pdf", "id": "P", "file": {}, "size": 1000}]}
+ouverts, vrai_ouvrir = [], sp.ouvrir
+sp.ouvrir = lambda it: ouverts.append(it["id"]) or b"%PDF x"
+sp._import.update(etat="en_cours", crees=0, fait=0, erreurs=[])
+sp._un_salarie(ETAB, SP_ETAB, {"id": "S8", "nom": "GROS Fichier", "dossier": "Equipiers/GROS Fichier",
+                               "heures": "", "poste": ""}, arbre.get, "rh", set())
+sp.ouvrir, sp._import["etat"] = vrai_ouvrir, "fini"
+assert ouverts == ["P"], "fichier de 60 Mo téléchargé"
+assert sp._import["erreurs"] == ["GROS Fichier : video.mp4 (60 Mo) non importé, à récupérer à la main"], sp._import
+gros = next(i for i in store.tout() if i.get("import_cle") == sp.cle("S8"))
+assert store.fichiers(gros, "pieces") == ["cni.pdf"]
+
+arbre = {"E": [D("Equipiers", "P")], "P": [D("EQUI Bob", "B"), D("Leavers", "LV")], "LV": [D("PARTI Léo", "X")]}
+assert [s_["id"] for s_ in sp.salaries(arbre.get, "E")] == ["B"], "Leavers sous un poste listé"
+
+vrai_msal = sys.modules.get("msal")
+sys.modules["msal"] = types.SimpleNamespace(
+    SerializableTokenCache=lambda: types.SimpleNamespace(deserialize=lambda t: None),
+    PublicClientApplication=lambda client, authority, token_cache: {"authority": authority})
+sp._msal = None
+assert sp._app()[0]["authority"].endswith("/organizations")
+sys.modules["msal"], sp._msal = None, None                       # msal absent
+try:
+    sp._app()
+    raise AssertionError("msal absent sans ErreurSharePoint")
+except sp.ErreurSharePoint as e:
+    assert "requirements-sharepoint.txt" in str(e), e
+c.post("/sharepoint/connexion", data={"cle": ETAB})
+assert "pas installé" in page(f"/etablissements/recuperer?cle={ETAB}"), "msal absent muet à la connexion"
+assert any("msal" in a for a in configurer.avertissements()), configurer.avertissements()
+sys.modules.pop("msal")
+if vrai_msal:
+    sys.modules["msal"] = vrai_msal
+assert not any("msal" in a for a in configurer.avertissements()), "contrôle : msal installé"
+sp._conn.clear()
+sp._conn["etat"] = "vierge"
+print("ok  déjà dans l'app décoché, > 50 Mo laissé à la RH, Leavers sous un poste ignoré, msal absent lisible")
+
+# 20. cas limites de la revue du 11/10
+store.creer_soumission({"etablissement": ETAB, "nom_naissance": "Shift", "prenom": "Ana"}, {})
+s = page(f"/etablissements/recuperer?cle={ETAB}")
+assert "disabled" in re.search(r'<input[^>]*value="S2"[^>]*>', s).group(), "importé redevenu cochable"
+assert s.count("— déjà dans l'app") == 1, "un déjà importé aussi marqué « déjà dans l'app »"
+assert sp.lancer_import(ETAB, SP_ETAB, ["S7"], "rh")                     # homonyme coché par la RH
+av = attendre()
+assert (av["crees"], av["erreurs"]) == (1, []), "homonyme bloqué côté serveur"
+assert "disabled" in case_s7(), "importé : grisé"
+
+vrai_role = config.role
+config.role = lambda n: "nom_complet" if n == "nom" else vrai_role(n)
+store.creer_soumission({"etablissement": ETAB, "nom_complet": "ZED Ali"}, {})
+assert sp.cle_nom("Ali ZED") in sp.deja_dans_app(ETAB), "formulaire à champ unique « NOM Prénom »"
+config.role = vrai_role
+store.creer_soumission({"etablissement": ETAB, "prenom": "Seul"}, {})
+assert frozenset() not in sp.deja_dans_app(ETAB), "dossier sans nom : rapproche tout dossier SharePoint sans nom"
+assert sp.cle_nom("MARTIN Jean-Pierre") == sp.cle_nom("martin  jean pierre")
+abandon = store.creer_soumission({"etablissement": ETAB, "nom_naissance": "Equi", "prenom": "Bob"}, {})
+store.transition(abandon, "Abandonnee", "rh")
+rejet = store.creer_soumission({"etablissement": ETAB, "nom_naissance": "Dir", "prenom": "Paul"}, {})
+store.rejeter(rejet, "piece", "CNI illisible", "rh")
+assert sp.cle_nom("EQUI Bob") not in sp.deja_dans_app(ETAB), "embauche abandonnée comptée « déjà dans l'app »"
+assert sp.deja_dans_app(ETAB)[sp.cle_nom("DIR Paul")]["id"] == rejet, "dossier rejeté (en correction) ignoré"
+
+LIMITE = {"name": "pile.pdf", "id": "L50", "file": {}, "size": sp.TAILLE_MAX}
+arbre = {"S9": [LIMITE, {"name": "sans_taille.pdf", "id": "NS", "file": {}}], "S10": [dict(GROS, id="G2")]}
+ouverts = []
+sp.ouvrir = lambda it: ouverts.append(it["id"]) or b"%PDF x"
+sp._import.update(etat="en_cours", erreurs=[])
+for sid in ("S9", "S10"):
+    sp._un_salarie(ETAB, SP_ETAB, {"id": sid, "nom": f"BORNE {sid}", "dossier": "x", "heures": "", "poste": ""},
+                   arbre.get, "rh", set())
+sp.ouvrir, sp._import["etat"] = vrai_ouvrir, "fini"
+assert ouverts == ["L50", "NS"], "50 Mo pile ou taille absente : non importés"
+s10 = next(i for i in store.tout() if i.get("import_cle") == sp.cle("S10"))
+assert store.fichiers(s10, "pieces") == [] and len(sp._import["erreurs"]) == 1, sp._import
+assert "BORNE S10 : video.mp4 (60 Mo) non importé" in page(f"/etablissements/recuperer?cle={ETAB}"), \
+    "fichier écarté invisible pour la RH"
+
+jeton_fichier = config.DONNEES / "sharepoint-jeton.json"
+jeton_fichier.write_text("{}", encoding="utf-8")                  # connectée avant le retrait de msal
+sys.modules["msal"], sp._msal, sp.compte = None, None, vrai_compte
+r = c.get(f"/etablissements/recuperer?cle={ETAB}")
+assert r.status_code == 200 and "pas installé" in _html.unescape(r.get_data(as_text=True)), r.status_code
+sys.modules.pop("msal")
+if vrai_msal:
+    sys.modules["msal"] = vrai_msal
+jeton_fichier.unlink()
+sp._msal, sp.compte = None, lambda: "rh@acme.test"
+anciens = page("/salaries?anciens=1")                  # DUPONT : importé, archivé sans date d'entrée
+assert f"/dossier/{uid}" in anciens and "à compléter" not in anciens, \
+    "ancien « à compléter » alors que la date ne se saisit plus après l'archivage"
+print("ok  homonyme importable, nom unique, bornes 50 Mo, dossier tout trop gros, msal retiré sans 500")
+
+# 21. disque presque plein (stockage sur un VPS) : l'import s'arrête net, avant d'écrire, et reprend ensuite
+import shutil  # noqa: E402
+
+ARBRE["EQ"] += [D("DISQUE Un", "SD1"), D("DISQUE Deux", "SD2")]
+ARBRE["SD1"] = ARBRE["SD2"] = []
+vrai_disk = shutil.disk_usage
+shutil.disk_usage = lambda p: types.SimpleNamespace(total=0, used=0, free=sp.MARGE_DISQUE // 2)
+assert sp.lancer_import(ETAB, SP_ETAB, ["SD1", "SD2"], "rh")
+av = attendre()
+shutil.disk_usage = vrai_disk
+assert (av["crees"], av["fait"]) == (0, 0) and len(av["erreurs"]) == 1, av
+assert av["erreurs"][0].startswith("Espace disque insuffisant"), av["erreurs"]
+assert sp.lancer_import(ETAB, SP_ETAB, ["SD1", "SD2"], "rh")
+assert attendre()["crees"] == 2, "relance après libération de place"
+print("ok  disque presque plein : import arrêté avant d'écrire, relance possible")
 
 print("\nOK test_import")
