@@ -306,6 +306,19 @@ config.RECAP_ETAT.write_text("{tronqué", encoding="utf-8")
 _code, _env = _recap(7, marche=True)
 assert isinstance(_code, str) and "illisible" in _code and _env == [], _code
 config.RECAP_ETAT.unlink()
+
+# Le cabinet ouvre le lot (noter -> acces_lot, de == vers == RemisComptable) :
+# ce n'est pas une remise. Avant, le dossier repartait au recap suivant et la
+# date « remis le » prenait celle du clic.
+_ouvert = {"id": "OUVERT", "champs": _champs, "journal": _remis["journal"] + [
+    {"de": "RemisComptable", "vers": "RemisComptable", "le": _il_y_a(0), "type": "acces_lot"}]}
+_seuil = _dt.now(_tz.utc) - _td(days=1)
+assert not recap._remis_apres(_ouvert, _seuil), "ouverture du lot comptee comme remise"
+assert store.date_remise(_ouvert) == _remis["journal"][-1]["le"][:10], "date de remise = date du clic"
+_renvoi = dict(_ouvert, journal=_ouvert["journal"] + [
+    {"de": "RemisComptable", "vers": "RemisComptable", "le": _il_y_a(0), "type": "renvoi_comptable"}])
+assert recap._remis_apres(_renvoi, _seuil), "renvoi au comptable ignore"
+print("OK  recap : l'ouverture du lot n'est pas une remise, le renvoi en est une")
 print("OK  recap rate : dit a l'ecran Salaries, dossiers repartis au passage suivant,")
 print("                 bandeau efface sans dossier en attente, etat illisible = arret clair")
 

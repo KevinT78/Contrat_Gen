@@ -319,13 +319,25 @@ def date_sortie(item):
                 if e.get("vers") == "Parti"), "")
 
 
-def date_remise(item):
-    """Jour (AAAA-MM-JJ) de la derniere remise/renvoi au comptable ; repli aujourd'hui.
-    Fige la date des noms de fichiers : un cabinet qui telecharge le lot une
-    semaine plus tard garde la date de la remise, pas celle du clic."""
-    jours = [e["le"][:10] for e in item["journal"]
-             if e.get("vers") == "RemisComptable" or e.get("type") == "renvoi_comptable"]
-    return jours[-1] if jours else datetime.now(timezone.utc).date().isoformat()
+def est_remise(e):
+    """Entree de journal qui remet (ou renvoie) le dossier au comptable.
+    noter() ecrit aussi vers == RemisComptable sur un dossier deja remis
+    (acces_lot, contrat_signe...) : ces notes ne sont pas des remises, sinon
+    l'ouverture du lot par le cabinet le renvoyait au recap suivant."""
+    return ((e.get("vers") == "RemisComptable" and e.get("de") != "RemisComptable")
+            or e.get("type") == "renvoi_comptable")
+
+
+def date_remise(item, repli=True):
+    """Jour (AAAA-MM-JJ) de la derniere remise/renvoi au comptable ; repli
+    aujourd'hui (repli=False : "" -- un affichage ne doit pas dater du jour un
+    dossier jamais remis, ex. importe). Fige la date des noms de fichiers : un
+    cabinet qui telecharge le lot une semaine plus tard garde la date de la
+    remise, pas celle du clic."""
+    jours = [e["le"][:10] for e in item["journal"] if est_remise(e)]
+    if jours:
+        return jours[-1]
+    return datetime.now(timezone.utc).date().isoformat() if repli else ""
 
 
 def _qui(item):
@@ -418,7 +430,10 @@ SIGNE_DEPOSABLE = {"RemisComptable"}
 def signe_manquant(item):
     """Contrat signe attendu mais pas encore depose (badge salaries,
     garde du depot et de l'envoi en signature)."""
+    # Importe : le dossier etait en ordre dans sa source, ses fichiers gardent
+    # leur nom d'origine (aucun role lisible) -- rien n'est attendu.
     return (etat(item) in SIGNE_DEPOSABLE and not item.get("purge")
+            and not item.get("import_cle")
             and not fichiers_role(item, "contrat", "contrat-signe"))
 
 
@@ -434,7 +449,7 @@ def manquantes(item):
     # rmtree ferait repasser toutes les pieces requises en « manquantes » et
     # /suivi afficherait un rouge permanent et faux. Couvre les quatre appelants
     # (suivi, detail, _saisie, _fiche_salarie).
-    if item.get("purge"):
+    if item.get("purge") or item.get("import_cle"):     # importe : cf. signe_manquant
         return []
     comptes = Counter(_extraire_role(f) for f in fichiers(item, "pieces"))
     return [{"champ": c} for c in config.pieces()
@@ -520,6 +535,68 @@ def creer_soumission(champs, fichiers_recus):
         shutil.rmtree(d, ignore_errors=True)
         raise
     _ecrire(d, item)
+    return uid
+
+
+# --- import de salaries deja en poste (bouton « Récupérer les dossiers ») ---
+# Un salarie embauche avant l'outil a deja un dossier en ordre ailleurs
+# (SharePoint) : rien a verifier, rien a classer. Son dossier nait directement
+# a RemisComptable (visible dans /salaries), fichiers sous leur nom d'origine,
+# et n'affiche jamais de piece manquante (cf. manquantes, signe_manquant).
+IMPORT = ".import"     # sous DONNEES, hors de _scan : chantier d'un import en cours
+
+
+def _nom_importe(dest_dir, nom, longueur_finale):
+    """Nom d'origine rendu sur pour Windows, raccourci pour que le chemin
+    FINAL tienne sous 240 car., numerote plutot qu'ecraser un homonyme."""
+    p = Path(_ILLEGAL.sub("-", nom).strip().rstrip(". ") or "fichier")
+    ext = p.suffix[:10]
+    stem = p.stem[:max(20, 240 - longueur_finale - len(ext) - 6)].rstrip(". ")
+    dest, n = dest_dir / f"{stem}{ext}", 2
+    while dest.exists():
+        dest, n = dest_dir / f"{stem} ({n}){ext}", n + 1
+    return dest
+
+
+def vider_imports():
+    """Chantiers laisses par un import interrompu (arret du serveur)."""
+    shutil.rmtree(config.DONNEES / IMPORT, ignore_errors=True)
+
+
+def importer(champs, cle, entree, fichiers, racine=None):
+    """Cree le dossier d'un salarie deja en poste, a RemisComptable.
+
+    `cle` l'identifie dans sa source : une cle deja importee ne fait rien
+    (rejouable, jamais d'ecrasement). `entree` complete l'entree de journal
+    (par, origine...) ; `racine` va a la racine du dossier, que la purge
+    garde (le journal purge n'en garde que le squelette). `fichiers` = [(bucket, nom, ouvrir)], ouvrir() -> octets.
+    Tout s'ecrit dans DONNEES/.import/<uid> puis est deplace d'un bloc : un
+    echec ne laisse aucun dossier a moitie ne. -> uid, ou None si deja importe."""
+    if any(i.get("import_cle") == cle for i in tout()):
+        return None
+    uid = nouvel_id()
+    # de == vers, comme noter() : etat() lit "vers", et ni le recap hebdo
+    # (est_remise) ni la purge (_entree_etat_courant) n'y voient une remise.
+    item = {"formulaire_version": config.formulaire()["version"], "id": uid,
+            "champs": champs, "link_epoch": 0, "lien_comptable_epoch": 0,
+            "import_cle": cle, **(racine or {}),
+            "journal": [{"de": "RemisComptable", "vers": "RemisComptable",
+                         "le": maintenant(), "type": "import", **entree}]}
+    dst = _dossier_cible(item)
+    tmp = config.DONNEES / IMPORT / uid
+    try:
+        tmp.mkdir(parents=True)
+        for bucket, nom, ouvrir in fichiers:
+            dest_dir = tmp / BUCKETS[bucket]
+            dest_dir.mkdir(exist_ok=True)
+            _nom_importe(dest_dir, nom, len(str(dst / BUCKETS[bucket]))).write_bytes(ouvrir())
+        _ecrire(tmp, item)
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(tmp), str(dst))
+    except BaseException:
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise
+    _carte[uid] = dst
     return uid
 
 
@@ -691,6 +768,9 @@ def _eligibilite(item, conf):
     la liste affichee a l'ecran de confirmation a pu vieillir entre le GET et
     le POST (un renvoi / abandon a pu bouger la date d'entree dans l'etat)."""
     if item.get("purge") or etat(item) not in (conf.get("apres") or []):
+        return None
+    # importe : RemisComptable des l'import, mais toujours en poste
+    if item.get("import_cle") and etat(item) != "Parti":
         return None
     duree = (conf.get("jours_candidature", conf["jours"])
              if etat(item) == "Soumise" else conf["jours"])

@@ -76,8 +76,20 @@
 {# Salarié remis au cabinet : ses actions (lien, départ) sont sous la fiche #}
 {% set sous_fiche = etat == 'RemisComptable' and not item.purge %}
 {# Contrat signé attendu : en haut de la fiche jusqu'au dépôt #}
-{% if sous_fiche and not contrat_signe %}
+{# Importé (SharePoint) : dossier déjà en ordre, aucun contrat signé attendu #}
+{% if sous_fiche and not contrat_signe and not item.import_cle %}
 <div class="carte">{{ bloc_signe(false) }}</div>
+{% endif %}
+{% if item.import_cle and sous_fiche %}
+<form method="post" action="{{ url_for('date_entree', uid=item.id) }}" class="carte actions">
+  <div class="champ">
+    <label for="date_entree">Date d'entrée</label>
+    <input type="date" name="date_entree" id="date_entree"
+           value="{{ valeur(item.champs, 'date_debut') }}" required></div>
+  <button class="discret">Enregistrer</button>
+  <p class="indice" style="flex-basis:100%">Dossier importé depuis le SharePoint : la date
+    d'entrée n'y figure pas, saisissez-la pour calculer l'ancienneté.</p>
+</form>
 {% endif %}
 {% if not sous_fiche %}
 <div class="carte">
@@ -220,7 +232,7 @@
       {% if not pieces and not manquantes %}<li class="vide">Aucune.</li>{% endif %}
     </ul></div>
 
-    <h2 id="produits">Documents produits</h2>
+    <h2 id="produits">{{ 'Contrat et documents' if item.import_cle else 'Documents produits' }}</h2>
     <div class="carte"><ul class="docs">
       {% for f, bucket in produits %}
         <li><a href="{{ url_for('fichier', uid=item.id, bucket=bucket, nom=f) }}">{{ f }}</a></li>
@@ -229,7 +241,9 @@
   </div>
 </div>
 
+{# Importé : déjà connu du cabinet, un clic l'enverrait en double au mail hebdo #}
 {% if sous_fiche %}
+{% if not item.import_cle %}
 <h2>Lien comptable</h2>
 <div class="carte">
   <div class="actions">
@@ -240,6 +254,7 @@
     prochain mail hebdomadaire.</p>
   {% if contrat_signe %}{{ bloc_signe() }}{% endif %}
 </div>
+{% endif %}
 
 <h2>Départ du salarié</h2>
 <div class="carte">

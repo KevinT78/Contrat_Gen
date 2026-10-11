@@ -439,6 +439,17 @@ def conservation():
     return c if isinstance(c, dict) else {}
 
 
+def sharepoint():
+    """Le bloc `sharepoint` d'instance.json : le site d'ou le bouton
+    « Récupérer les dossiers » importe les salaries deja en poste. Lecture
+    GARDEE comme conservation(). Bloc absent = pas de bouton."""
+    try:
+        c = instance().get("sharepoint")
+    except (OSError, ValueError, KeyError):
+        return {}
+    return c if isinstance(c, dict) else {}
+
+
 def _donnees():
     """LE seul endroit qui decide ou vit data/. Priorite :
 
@@ -885,6 +896,42 @@ def _verifier_conservation():
     return {"conservation": raisons} if raisons else {}
 
 
+def _verifier_sharepoint():
+    """Bouton « Récupérer les dossiers ». Patron de _verifier_conservation.
+    Bloc absent = pas de bouton."""
+    c = instance().get("sharepoint")
+    if c is None:
+        return {}
+    if not isinstance(c, dict):
+        return {"sharepoint": ["attend un objet, ex. {\"site\": "
+                               "\"https://acme.sharepoint.com/sites/rh\"}"]}
+    raisons = []
+    site = c.get("site")
+    if not isinstance(site, str) or not re.match(r"https://[^/]+\.sharepoint\.com/", site):
+        raisons.append(f"« site » attend l'adresse du site, ex. "
+                       f"https://acme.sharepoint.com/sites/rh (reçu : {site!r})")
+    if not (isinstance(c.get("racine"), str) and c["racine"].strip("/ ")):
+        raisons.append("« racine » attend le dossier qui contient les groupes "
+                       "d'établissements, ex. \"DOSSIERS SALARIES\"")
+    if "client_id" in c and not (isinstance(c["client_id"], str) and c["client_id"]):
+        raisons.append("« client_id » attend une chaîne (ou rien : client Office)")
+    for cle, ex in (("ignorer", "[\"Anciens\", \"Archives\"]"), ("mots_ignores", "[\"restaurant\"]")):
+        v = c.get(cle, [])
+        if not (isinstance(v, list) and all(isinstance(x, str) for x in v)):
+            raisons.append(f"« {cle} » attend une liste de textes, ex. {ex}")
+    postes = c.get("postes", {})
+    if not (isinstance(postes, dict)
+            and all(isinstance(k, str) and isinstance(v, str) for k, v in postes.items())):
+        raisons.append("« postes » attend {\"dossier SharePoint\": \"poste du formulaire\"}, "
+                       "ex. {\"Chefs d'équipe\": \"Manager\", \"Direction\": \"\"}")
+    dossiers = c.get("dossiers", {})
+    if not (isinstance(dossiers, dict)
+            and all(isinstance(k, str) and isinstance(v, str) for k, v in dossiers.items())):
+        raisons.append("« dossiers » attend {\"Société / Établissement\": \"GROUPE/Dossier\"}, "
+                       "ex. {\"ACME Sud / Marseille Prado\": \"RESTAURANTS/Marseille\"}")
+    return {"sharepoint": raisons} if raisons else {}
+
+
 def _verifier_theme():
     """La DA du client. Patron de _verifier_conservation : la FORME avant les
     valeurs, et un KO propre qui nomme le sujet.
@@ -1236,7 +1283,7 @@ def verifier():
     {sujet: [raisons]} et l'instance ne sert pas."""
     manques = {}
     for check in (_verifier_version, _verifier_comptes, _verifier_stockage,
-                  _verifier_conservation, _verifier_theme,
+                  _verifier_conservation, _verifier_sharepoint, _verifier_theme,
                   _verifier_installation,
                   _verifier_derives, _verifier_roles, _verifier_placeholders,
                   _verifier_regles, _verifier_postes, _verifier_grille):

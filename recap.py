@@ -32,8 +32,8 @@ _PHRASE_LIEN = "Cliquer pour consulter le dossier"
 
 
 def _remis_apres(item, seuil):
-    return any((e.get("vers") == "RemisComptable" or e.get("type") == "renvoi_comptable")
-               and datetime.fromisoformat(e["le"]) >= seuil for e in item["journal"])
+    return any(store.est_remise(e) and datetime.fromisoformat(e["le"]) >= seuil
+               for e in item["journal"])
 
 
 def remis_depuis(seuil):

@@ -139,6 +139,10 @@ def avertissements():
     if url and not url.startswith("https://"):
         out.append(f"url « {url} » n'est pas en https : les liens des mails "
                    "partiraient en clair  [config/instance.json]")
+    if config.sharepoint() and config.stockage().get("mode") == "dossier":
+        out.append("sharepoint + stockage « dossier » : le jeton Microsoft de la RH "
+                   "(DONNEES/sharepoint-jeton.json) part dans le dossier synchronisé. "
+                   "Se déconnecter après chaque import  [config/instance.json]")
     if not config.conservation():
         out.append("aucun bloc « conservation » : les pièces ne sont jamais purgées "
                    "(RGPD)  [config/instance.json]")

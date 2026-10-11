@@ -1,0 +1,6 @@
+# Seulement pour un client dont instance.json porte un bloc « sharepoint »
+# (bouton « Récupérer les dossiers », sharepoint.py) :
+#   pip install -r requirements.txt -r requirements-sharepoint.txt
+# Sans ce bloc, l'app n'importe jamais ces paquets.
+msal==1.39.0
+requests==2.34.2       # deja tire par msal ; importe directement pour le keep-alive Graph

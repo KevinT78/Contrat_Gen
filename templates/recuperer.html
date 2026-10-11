@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+{% block titre %}Récupérer les dossiers{% endblock %}
+{% block corps %}
+<a class="retour" href="{{ url_for('etablissements_page') }}">← Établissements</a>
+<h1>Récupérer les dossiers</h1>
+<p class="sous">{{ cle }} · les salariés déjà en poste, depuis le SharePoint</p>
+
+{% set av = avancement %}
+{% if av.etat == "en_cours" %}
+  <div class="carte">
+    <p class="titre-carte">Import en cours</p>
+    <p>{{ av.chemin }} : {{ av.fait }} / {{ av.total }} salarié(s) traité(s).</p>
+    <p class="indice">La page se met à jour toute seule. Vous pouvez la quitter : l'import continue.</p>
+  </div>
+  <script>setTimeout(() => location.reload(), 2000)</script>
+
+{% else %}
+  {% if av.etat == "fini" and av.cle == cle %}
+    <div class="carte">
+      <p class="titre-carte">Dernier import</p>
+      <p>{{ av.crees }} dossier(s) créé(s) sur {{ av.total }} salarié(s) coché(s), depuis {{ av.chemin }}.
+        <a href="{{ url_for('salaries') }}">Voir les salariés</a></p>
+      {% for e in av.erreurs %}<p class="indice manque">{{ e }}</p>{% endfor %}
+    </div>
+  {% endif %}
+
+  {% set c = connexion %}
+  {% if c.etat in ("vierge", "erreur") %}
+    <div class="carte">
+      <p class="titre-carte">Connexion à SharePoint</p>
+      <p>Connectez-vous avec votre compte Microsoft, celui qui ouvre le SharePoint des dossiers salariés.</p>
+      {% if c.erreur %}<p class="indice manque">La connexion a échoué : {{ c.erreur }}</p>{% endif %}
+      <form method="post" action="{{ url_for('sharepoint_connexion') }}" class="actions">
+        <input type="hidden" name="cle" value="{{ cle }}">
+        <button>Se connecter</button>
+      </form>
+    </div>
+
+  {% elif c.etat in ("demarrage", "attente") %}
+    <div class="carte">
+      <p class="titre-carte">Connexion à SharePoint</p>
+      {% if c.code %}
+        <p>Ouvrez <a href="{{ c.url }}" target="_blank" rel="noopener">{{ c.url }}</a>
+          et saisissez le code :</p>
+        <p style="font-size:28px;letter-spacing:.12em;font-weight:600">{{ c.code }}</p>
+        <p class="indice">Puis connectez-vous avec votre compte Microsoft. Cette page continue toute seule.</p>
+      {% else %}
+        <p>Préparation du code…</p>
+      {% endif %}
+    </div>
+    <script>setTimeout(() => location.reload(), 3000)</script>
+
+  {% else %}
+    <div class="carte">
+      <p class="titre-carte">Dossier SharePoint de l'établissement</p>
+      {% if erreur %}<p class="indice manque">{{ erreur }}</p>{% endif %}
+      {% if sp_etab %}
+        <p>{{ sp_etab.chemin }}</p>
+      {% elif not erreur %}
+        <p class="indice manque">Aucun dossier SharePoint ne correspond sûrement à cet établissement.
+          L'installateur doit l'indiquer dans <code>instance.json</code>
+          (<code>sharepoint.dossiers</code>, ex. <code>{"{{ cle }}": "RESTAURANTS/…"}</code>).</p>
+      {% endif %}
+    </div>
+
+    {% if sp_etab %}
+      <form method="post" action="{{ url_for('recuperer_lancer') }}" class="carte">
+        <input type="hidden" name="cle" value="{{ cle }}">
+        <input type="hidden" name="sp" value="{{ sp_etab.id }}">
+        <p class="titre-carte">{{ salaries|length }} salarié(s) dans {{ sp_etab.chemin }}</p>
+        <p class="indice">Décochez les salariés qui ne travaillent plus dans l'établissement.
+          {% if ignorer %}Les dossiers rangés dans {{ ignorer | join(', ') }} ne sont pas listés.{% endif %}</p>
+        <style>
+          .liste-sp { overflow-x:auto }
+          @media (max-width:600px) {
+            .liste-sp .col-sp { display:none }
+            .liste-sp th, .liste-sp td { white-space:normal; padding-left:10px; padding-right:10px }
+          }
+        </style>
+        <div class="tableau liste-sp">
+        <table>
+          <thead><tr><th></th><th>Salarié</th><th>Poste</th><th class="col-sp">Dossier SharePoint</th></tr></thead>
+          <tbody>
+          {% for s in salaries %}
+            <tr class="{{ 'inactif' if s.deja }}">
+              <td><input type="checkbox" name="ids" value="{{ s.id }}" style="width:auto"
+                         aria-label="Importer {{ s.nom }}" {{ 'disabled' if s.deja else 'checked' }}></td>
+              <td>{{ s.nom }}{% if s.deja %} <span class="secondaire">— déjà importé</span>{% endif %}</td>
+              <td>{{ s.poste or "—" }}</td>
+              <td class="secondaire col-sp">{{ s.dossier }}</td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+        </div>
+        <div class="actions" style="margin-top:20px">
+          {% if salaries | rejectattr('deja') | list %}
+          <button>Importer les salariés cochés</button>
+          <span>Ils seront rangés dans <b>{{ cle }}</b>.</span>
+          {% else %}
+          <p class="indice" style="margin:0">Tous les salariés de ce dossier sont déjà importés.</p>
+          {% endif %}
+        </div>
+      </form>
+    {% endif %}
+
+    <form method="post" action="{{ url_for('sharepoint_deconnexion') }}" class="actions" style="margin-top:24px">
+      <input type="hidden" name="cle" value="{{ cle }}">
+      <span class="secondaire">Connecté : {{ c.compte }}</span>
+      <button class="discret">Se déconnecter</button>
+    </form>
+  {% endif %}
+{% endif %}
+{% endblock %}

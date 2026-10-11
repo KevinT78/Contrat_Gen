@@ -69,11 +69,15 @@
         <td class="secondaire">{{ valeur(i.champs, 'type_contrat') or '—' }}</td>
         <td>{{ date_fr(dd) or '—' }}</td>
         <td class="secondaire">
-          {% if j is none %}à venir
+          {% if not dd %}<span class="manque">à compléter</span>
+          {% elif j is none %}à venir
           {% elif j >= 60 %}{{ j // 30 }} mois
           {% else %}{{ j }} j{% endif %}</td>
         <td class="secondaire">{{ cabinet(valeur(i.champs, 'etablissement')) or '—' }}</td>
-        <td class="secondaire">{{ date_fr(date_sortie(i)) if anciens else date_fr(remis_le(i)) }}</td>
+        <td class="secondaire">{% if anciens %}{{ date_fr(date_sortie(i)) }}
+          {% elif remis_le(i) %}{{ date_fr(remis_le(i)) }}
+          {% elif i.import_cle %}Importé le {{ date_fr(i.journal[0].le[:10]) }}
+          {% else %}—{% endif %}</td>
       </tr>
     {% endfor %}
     </tbody>

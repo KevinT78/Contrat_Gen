@@ -15,6 +15,7 @@ volontairement. Un déploiement réel se pose hors du dépôt avec `installer.py
 
 ```bash
 pip install -r requirements.txt
+pip install -r requirements-sharepoint.txt   # seulement si instance.json a un bloc « sharepoint »
 python tests/test_parcours.py     # les deux couloirs, de bout en bout
 python tests/test_signature.py    # e-sign Yousign contre un transport factice
 python tests/test_clients.py      # 2 clients factices, chacun dans son instance

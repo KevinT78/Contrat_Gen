@@ -27,6 +27,7 @@ from werkzeug.security import check_password_hash
 import config
 import contrat
 import mails
+import sharepoint
 import signature
 import store
 
@@ -507,7 +508,8 @@ def salaries():
     return render_template("salaries.html", groupes=sorted(groupes.items()),
                            echecs_recap=_echecs_recap(),
                            total=len(tous), etab=etab, q=q, anciens=anciens,
-                           remis_le=store.date_remise, date_sortie=store.date_sortie,
+                           remis_le=lambda i: store.date_remise(i, repli=False),
+                           date_sortie=store.date_sortie,
                            cabinet=cabinet, signe_manquant=store.signe_manquant,
                            aujourdhui=date.today().isoformat())
 
@@ -655,7 +657,116 @@ def etablissements_page():
                 "siret": e.get("siret") or "",
             })
     return render_template("etablissements.html", lignes=lignes,
-                           supabase=config.supabase_actif())
+                           supabase=config.supabase_actif(),
+                           sharepoint=bool(config.sharepoint()))
+
+
+# --- « Récupérer les dossiers » : import depuis SharePoint (sharepoint.py) ---
+# Un seul écran à états : connexion Microsoft -> choix du dossier SharePoint
+# de l'établissement -> liste à cocher -> avancement de l'import.
+
+def _cle_etab_ou_404(cle):
+    if not config.sharepoint():
+        abort(404)
+    try:
+        config.etablissement(cle)
+    except KeyError:
+        abort(404)
+    return cle
+
+
+def _dossier_permis(cle, sp_id):
+    """Le dossier posté s'il est bien celui de cet établissement
+    (sharepoint.dossier_de), sinon 404 : jamais d'import croisé."""
+    d = sharepoint.dossier_de(cle, sharepoint.etablissements_sp())
+    return d if d and d["id"] == sp_id else abort(404)
+
+
+def _ecran_sharepoint(cle):
+    """Ce que montre l'écran une fois connecté : le dossier de
+    l'établissement (jamais choisi par la RH) et ses salariés."""
+    ctx = {"sp_etab": sharepoint.dossier_de(cle, sharepoint.etablissements_sp())}
+    if ctx["sp_etab"]:
+        sp_id = ctx["sp_etab"]["id"]
+        deja = sharepoint.deja_importes()
+        ctx["salaries"] = [dict(s, deja=sharepoint.cle(s["id"]) in deja)
+                           for s in sharepoint.lister_salaries(sp_id)]
+    return ctx
+
+
+@app.get("/etablissements/recuperer")
+@rh
+def recuperer():
+    cle = _cle_etab_ou_404(request.args.get("cle", ""))
+    av = sharepoint.avancement()
+    ctx = {"cle": cle, "connexion": sharepoint.etat_connexion(), "avancement": av,
+           "ignorer": config.sharepoint().get("ignorer") or []}
+    if av["etat"] != "en_cours" and ctx["connexion"]["etat"] == "connecte":
+        try:
+            ctx.update(_ecran_sharepoint(cle))
+        except sharepoint.NonConnecte:
+            sharepoint.deconnecter()
+            ctx["connexion"] = {"etat": "vierge"}
+        except sharepoint.ErreurSharePoint as e:
+            ctx["erreur"] = str(e)
+    return render_template("recuperer.html", **ctx)
+
+
+@app.post("/etablissements/recuperer")
+@rh
+def recuperer_lancer():
+    cle = _cle_etab_ou_404(request.form.get("cle", ""))
+    ids = request.form.getlist("ids")
+    try:
+        # dossier relu et contrôlé côté serveur : rien de posté n'est cru
+        sp_etab = _dossier_permis(cle, request.form.get("sp"))
+        if not ids:
+            flash("Aucun salarié coché.", "erreur")
+        elif not sharepoint.lancer_import(cle, sp_etab, ids, session["utilisateur"]):
+            flash("Un import est déjà en cours : attendez qu'il se termine.", "erreur")
+    except sharepoint.NonConnecte:
+        sharepoint.deconnecter()
+        flash("Session Microsoft expirée : reconnectez-vous.", "erreur")
+    except (ValueError, sharepoint.ErreurSharePoint) as e:
+        flash(str(e), "erreur")
+    return redirect(url_for("recuperer", cle=cle))
+
+
+@app.post("/dossier/<uid>/date-entree")
+@rh
+def date_entree(uid):
+    """Date d'entrée d'un salarié importé : le SharePoint ne la donne pas."""
+    item = store.lire(uid) or abort(404)
+    # noter() recopie l'état : sur un Parti, la note masquerait la date de sortie
+    if not item.get("import_cle") or store.etat(item) != "RemisComptable":
+        abort(400)
+    brut = (request.form.get("date_entree") or "").strip()
+    try:
+        date.fromisoformat(brut)
+    except ValueError:
+        flash("Date d'entrée invalide.", "erreur")
+        return redirect(url_for("detail", uid=uid))
+    store.completer_champs(uid, {config.role("date_debut"): brut})
+    store.noter(uid, type="date_entree", par=session["utilisateur"], date=brut)
+    flash("Date d'entrée enregistrée.", "ok")
+    return redirect(url_for("detail", uid=uid))
+
+
+@app.post("/sharepoint/connexion")
+@rh
+def sharepoint_connexion():
+    cle = _cle_etab_ou_404(request.form.get("cle", ""))
+    sharepoint.connecter()
+    return redirect(url_for("recuperer", cle=cle))
+
+
+@app.post("/sharepoint/deconnexion")
+@rh
+def sharepoint_deconnexion():
+    cle = _cle_etab_ou_404(request.form.get("cle", ""))
+    sharepoint.deconnecter()
+    flash("Déconnecté de SharePoint : le jeton Microsoft est effacé.", "ok")
+    return redirect(url_for("recuperer", cle=cle))
 
 
 @app.route("/etablissements/nouveau", methods=["GET", "POST"])
@@ -773,8 +884,11 @@ def _entetes(reponse):
 def _servir(octets, nom, bucket):
     if octets is None:
         abort(404)
+    # Hors liste blanche (fichier importe : .html, .svg...) : jamais inline,
+    # il s'executerait sur l'origine de l'app.
     return send_file(io.BytesIO(octets), download_name=nom,
-                     as_attachment=(bucket == "contrat"),
+                     as_attachment=(bucket == "contrat"
+                                    or Path(nom).suffix.lower() not in store.EXTENSIONS),
                      mimetype=mimetypes.guess_type(nom)[0] or "application/octet-stream")
 
 
@@ -1214,6 +1328,10 @@ def remettre(uid):
 @app.post("/dossier/<uid>/renvoyer")
 @rh
 def renvoyer(uid):
+    if (store.lire(uid) or abort(404)).get("import_cle"):
+        # importé : déjà connu du cabinet par l'ancien circuit (bouton masqué)
+        flash("Dossier importé : il ne part pas au cabinet comptable.", "erreur")
+        return redirect(url_for("detail", uid=uid))
     store.bump_epoch(uid, "lien_comptable_epoch")             # tue l'ancien lien
     # noter AVANT la copie : nom_export lit la date du dernier renvoi dans le journal.
     store.noter(uid, type="renvoi_comptable", par=session["utilisateur"])
