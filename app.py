@@ -861,11 +861,15 @@ def _ecran_completer(cle, saisies=None, erreurs=None, excel_par_uid=None, libres
         lignes.append({"item": i, "cellules": cellules, "version": _version(ch),
                        "erreur": erreurs.get(f"{i['id']}:*"),
                        "a_voir": any(x["erreur"] or x["excel"] for x in cellules)
-                       or erreurs.get(f"{i['id']}:*")})
+                       or erreurs.get(f"{i['id']}:*"),
+                       "complet": not (erreurs.get(f"{i['id']}:*")
+                                       or any(x["erreur"] or x["excel"] or x["manque"] or x["propose"]
+                                              for x in cellules))})
     return render_template("completer.html", cle=cle, colonnes=cols, lignes=lignes,
                            importes=items, libres=libres, ecarts=ecarts,
                            propositions=sum(len(v) for v in propositions.values()),
-                           en_attente=bool(propositions or saisies or libres)), statut
+                           en_attente=bool(propositions or saisies or libres),
+                           saisie=bool(saisies)), statut
 
 
 @app.get("/etablissements/completer")

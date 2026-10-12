@@ -222,6 +222,7 @@ s = page(c.get(f"/etablissements/completer?cle={ETAB}"))
 assert f"/dossier/{dupont}" in s and f"/dossier/{leroy}" in s
 assert f"/dossier/{ailleurs}" not in s and f"/dossier/{soumis}" not in s
 assert "Compléter les dossiers" in page(c.get("/etablissements"))
+assert "data-saisie>" not in s, "page tout juste lue du disque gardée comme saisie"
 print("ok  tableau : importés en poste de l'établissement seulement")
 
 # 4. upload : propose, n'écrit rien avant « Enregistrer »
@@ -252,6 +253,14 @@ assert r.status_code == 200 and "1 dossier(s) rapproché(s)" in s and "Rien n'es
 assert store.lire(dupont)["champs"] == avant, "l'Excel a écrit sans « Enregistrer »"
 assert "proposé par l'Excel" in s and 'value="01/01/1990"' in s, "valeur proposée absente"
 assert re.search(r'<td class="propose', s) and re.search(r'<td class="ecart', s), "cellules non surlignées"
+# tous les vides proposés : rien n'est encore enregistré, la ligne n'est pas « Complet »
+vides = {f["id"]: "x" for f in app._colonnes() if not store.lire(leroy)["champs"].get(f["id"])}
+with app.app.test_request_context():
+    vue, _ = app._ecran_completer(ETAB, propositions={leroy: vides})
+ligne = re.search(rf'<tr class="([^"]*)">\s*<th scope="row"><a class="nom" href="/dossier/{leroy}".*?</th>',
+                  vue, re.S)
+assert "complet" not in ligne.group(1).split() and "Complet" not in ligne.group(0), \
+    "ligne seulement proposée affichée « Complet »"
 assert "Excel : 06 11 22 33 44" in s and "Excel : Equipier Polyvalent" in s, "écart non signalé"
 assert "MARTIN Paul" in s and "non rattachées" in s, "homonymes côté dossiers"
 assert "2 dossiers en poste à ce nom" in s, "motif de l'homonyme absent"
@@ -295,6 +304,7 @@ assert app._horodatage("pas une date") == "pas une date"
 r = post(**{f"{leroy}:date_naissance": "31/02/1990", f"{leroy}:telephone": "0611"})
 s = page(r)
 assert r.status_code == 422 and "31/02/1990" in s
+assert "data-saisie>" in s, "saisie réaffichée après refus : fermer l'onglet ne prévient plus"
 assert re.search(r'<td class="erreur[^"]*">\s*<input[^>]*value="31/02/1990"[^>]*aria-invalid', s), \
     "cellule fautive non surlignée"
 r = post(**{f"{leroy}:civilite": "Mademoiselle", f"{leroy}:telephone": "0611"})

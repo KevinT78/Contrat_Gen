@@ -279,8 +279,9 @@ page = lambda u: _html.unescape(c.get(u).get_data(as_text=True))          # noqa
 assert "Récupérer les dossiers" in page("/etablissements")
 assert anonyme.get(f"/etablissements/recuperer?cle={ETAB}").status_code == 302
 s = page(f"/etablissements/recuperer?cle={ETAB}")          # lié : salariés d'office
-assert "SECOND Ana" in s and "PARTI Max" not in s and s.count("— déjà importé") == 4, s[-1500:]
+assert "SECOND Ana" in s and "PARTI Max" not in s and s.count(">déjà importé<") == 4, s[-1500:]
 assert "rh@acme.test" in s and "Se déconnecter" in s
+assert s.count('class="faite"') == 3 and "aria-current=step" not in s, "fil d'étapes : import fini non coché"
 assert "RESTAURANTS/Zorba Grill Bastille" in s and "#Ne pas toucher/" not in s, "choix du dossier"
 assert "Les dossiers rangés dans Leavers, #Ne pas toucher ne sont pas listés" in s
 assert c.post("/etablissements/recuperer", data={"cle": ETAB, "sp": "FORGE", "ids": "S1"}).status_code == 404
@@ -426,7 +427,7 @@ print("ok  déjà dans l'app décoché, > 50 Mo laissé à la RH, Leavers sous u
 store.creer_soumission({"etablissement": ETAB, "nom_naissance": "Second", "prenom": "Ana"}, {})
 s = page(f"/etablissements/recuperer?cle={ETAB}")
 assert "disabled" in re.search(r'<input[^>]*value="S2"[^>]*>', s).group(), "importé redevenu cochable"
-assert s.count("— déjà dans l'app") == 1, "un déjà importé aussi marqué « déjà dans l'app »"
+assert s.count(">déjà dans l'app<") == 1, "un déjà importé aussi marqué « déjà dans l'app »"
 assert sp.lancer_import(ETAB, SP_ETAB, ["S7"], "rh")                     # homonyme coché par la RH
 av = attendre()
 assert (av["crees"], av["erreurs"]) == (1, []), "homonyme bloqué côté serveur"

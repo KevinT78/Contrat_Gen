@@ -29,12 +29,30 @@
            list-style:none; font-size:12.5px; color:var(--gris) }
   .legende li { display:flex; align-items:center; gap:8px }
   .legende i { width:14px; height:14px; border-radius:2px; display:inline-block }
+  .depot { display:flex; flex-wrap:wrap; align-items:flex-end; gap:12px 24px; padding:20px 24px }
+  .depot .champ { margin:0 }
+  .depot .indice { flex-basis:100%; margin:0 }
+  .bilan { display:flex; flex-wrap:wrap; align-items:center; gap:6px 24px; margin:0 0 10px }
+  .bilan b { font-weight:600 }
+  .bilan label { display:inline-flex; align-items:center; gap:8px; margin:0 0 0 auto; cursor:pointer;
+           font-size:12.5px; font-weight:400; letter-spacing:0; text-transform:none; color:var(--gris) }
+  .bilan input { width:16px; height:16px; margin:0; padding:0; accent-color:var(--accent) }
+  .saisie.masque tbody tr.complet { display:none }
+  .saisie .reste { display:block; font-size:11.5px; font-weight:600; color:var(--alerte);
+           margin-top:2px; white-space:normal }
+  .saisie .ok { display:block; font-size:11.5px; color:var(--accent); margin-top:2px }
+  .barre-save { position:sticky; bottom:0; z-index:2; display:flex; flex-wrap:wrap; align-items:center;
+           gap:12px 20px; margin:24px -40px 0; padding:14px 40px; background:var(--fond);
+           border-top:1px solid var(--bord) }
+  .barre-save .indice { margin:0 }
+  html { scroll-padding-bottom:96px }   /* un champ focalisé ne passe pas sous .barre-save */
   .libres li { display:flex; flex-wrap:wrap; gap:8px 24px; align-items:flex-end }
   .libres .qui { flex:1 1 260px; min-width:0 }
   .libres select { max-width:280px }
   @media (max-width:700px) {
     main.large { padding-left:16px; padding-right:16px }
     .carte { padding:20px 16px }
+    .barre-save { margin-left:-16px; margin-right:-16px; padding-left:16px; padding-right:16px }
     .saisie th:first-child, .saisie td:first-child { min-width:120px }
   }
 </style>
@@ -44,38 +62,38 @@
 <p class="sous">{{ cle }} · les salariés importés depuis le SharePoint</p>
 
 <form method="post" action="{{ url_for('completer_excel', cle=cle) }}" enctype="multipart/form-data"
-      class="carte">
-  <p class="titre-carte">Depuis les exports Excel</p>
+      class="carte depot">
   <input type="hidden" name="cle" value="{{ cle }}">
-  <div class="actions">
-    <div class="champ">
-      <label for="fichiers">Fichiers .xlsx (logiciel RH, planning)</label>
-      <input type="file" name="fichiers" id="fichiers" accept=".xlsx" multiple>
-    </div>
-    <button class="discret">Lire les fichiers</button>
+  <div class="champ">
+    <label for="fichiers">Exports Excel (.xlsx) du logiciel RH ou du planning</label>
+    <input type="file" name="fichiers" id="fichiers" accept=".xlsx" multiple>
   </div>
-  <p class="indice">Rapprochement par le nom. Les valeurs trouvées sont proposées dans les
-    cellules vides, sans rien enregistrer : vérifiez-les, puis cliquez sur « Enregistrer ».
-    Un champ déjà rempli n'est jamais remplacé. Les fichiers ne sont pas conservés.</p>
+  <button class="discret">Lire les fichiers</button>
+  <p class="indice">Rapprochement par le nom. Les valeurs trouvées apparaissent dans les cellules vides,
+    sans rien enregistrer. Un champ déjà rempli n'est jamais remplacé. Les fichiers ne sont pas conservés.</p>
 </form>
 
 {% if not lignes %}
 <p class="indice">Aucun salarié importé et en poste pour cet établissement.</p>
 {% else %}
 <form method="post" action="{{ url_for('completer_enregistrer') }}" id="tableau-completer"
-      {% if en_attente %}data-en-attente{% endif %}>
+      {% if en_attente %}data-en-attente{% endif %} {% if saisie %}data-saisie{% endif %}>
   <input type="hidden" name="cle" value="{{ cle }}">
-  {% if propositions or ecarts %}
-    <p class="msg">{% if propositions %}{{ propositions }} valeur(s) proposée(s) par l'Excel, à vérifier.{% endif %}
-      {% if ecarts %}{{ ecarts }} cellule(s) où l'Excel dit autre chose que le dossier : rien n'y est changé.{% endif %}</p>
-  {% endif %}
+  {% set a_traiter = lignes | rejectattr('complet') | list | length %}
+  <p class="bilan" role="status">
+    <span><b>{{ a_traiter }}</b> dossier{{ 's' if a_traiter > 1 }} sur {{ lignes|length }} à compléter ou vérifier</span>
+    {% if propositions %}<span><b>{{ propositions }}</b> valeur{{ 's' if propositions > 1 }} proposée{{ 's' if propositions > 1 }} par l'Excel, à vérifier</span>{% endif %}
+    {% if ecarts %}<span><b>{{ ecarts }}</b> cellule{{ 's' if ecarts > 1 }} où l'Excel dit autre chose, rien n'y est changé</span>{% endif %}
+    {% if a_traiter < lignes|length %}
+    <label><input type="checkbox" id="masquer-complets"> Masquer les dossiers complets</label>{% endif %}
+  </p>
   <ul class="legende">
     {% if propositions %}<li><i style="background:var(--actif-fond)"></i>proposé par l'Excel, pas encore enregistré</li>{% endif %}
     {% if ecarts %}<li><i style="background:var(--attente-fond)"></i>l'Excel dit autre chose</li>{% endif %}
     <li><i style="background:var(--alerte-fond);box-shadow:inset 0 0 0 2px var(--alerte)"></i>erreur à corriger</li>
     <li>Vider une cellule efface la valeur à l'enregistrement.</li>
   </ul>
-  <div class="tableau saisie">
+  <div class="tableau saisie" id="saisie">
   <table>
     <thead><tr><th scope="col">Salarié</th>
       {% for c in colonnes %}<th scope="col">{{ c.libelle }}{% if c.requis %} *{% endif %}</th>{% endfor %}
@@ -84,15 +102,18 @@
     {% for l in lignes %}
       {% set qui = nom_de(l.item.champs) %}
       {% set ko = l.erreur or l.cellules|selectattr('erreur')|list %}
-      <tr class="{{ 'a-voir' if l.a_voir }} {{ 'ko' if ko }}">
+      {% set reste = l.cellules | selectattr('manque') | list | length %}
+      <tr class="{{ 'a-voir' if l.a_voir }} {{ 'ko' if ko }} {{ 'complet' if l.complet }}">
         <th scope="row"><a class="nom" href="{{ url_for('detail', uid=l.item.id) }}">{{ qui }}</a>
           <input type="hidden" name="v:{{ l.item.id }}" value="{{ l.version }}">
-          {% if l.erreur %}<span class="note erreur" style="font-weight:600">{{ l.erreur }}</span>{% endif %}</th>
+          {% if l.erreur %}<span class="note erreur">{{ l.erreur }}</span>{% endif %}
+          {% if reste %}<span class="reste">{{ reste }} champ{{ 's' if reste > 1 }} à compléter</span>
+          {% elif l.complet %}<span class="ok">Complet</span>{% endif %}</th>
         {% for x in l.cellules %}
           {% set c = x.c %}
-          <td class="{{ 'erreur' if x.erreur else 'ecart' if x.excel else 'propose' if x.propose }} {{ 'manque' if x.manque }}">
+          <td class="{{ 'erreur' if x.erreur else 'ecart' if x.excel else 'propose' if x.propose }} {{ 'manque' if x.manque }}"{{ ' title="à compléter"'|safe if x.manque and not x.erreur }}>
             {% if c.type == 'choix' %}
-              <select name="{{ x.nom }}" aria-label="{{ c.libelle }} — {{ qui }}"
+              <select name="{{ x.nom }}" aria-label="{{ c.libelle }} — {{ qui }}{{ ', à compléter' if x.manque and not x.erreur }}"
                       {% if x.erreur %}aria-invalid="true"{% endif %}>
                 <option value=""></option>
                 {% if x.v and x.v not in (c.options or []) %}
@@ -103,15 +124,15 @@
             {% elif c.type == 'date' %}
               <input type="text" name="{{ x.nom }}" value="{{ x.v }}" class="date"
                      inputmode="numeric" placeholder="jj/mm/aaaa" maxlength="10"
-                     autocomplete="off" aria-label="{{ c.libelle }} — {{ qui }}"
+                     autocomplete="off" aria-label="{{ c.libelle }} — {{ qui }}{{ ', à compléter' if x.manque and not x.erreur }}"
                      {% if x.erreur %}aria-invalid="true"{% endif %}>
             {% else %}
               <input type="text" name="{{ x.nom }}" value="{{ x.v }}" autocomplete="off"
-                     aria-label="{{ c.libelle }} — {{ qui }}"
+                     aria-label="{{ c.libelle }} — {{ qui }}{{ ', à compléter' if x.manque and not x.erreur }}"
                      {% if x.erreur %}aria-invalid="true"{% endif %}>
             {% endif %}
             {% if x.erreur %}<span class="note erreur">{{ x.erreur }}</span>
-            {% elif x.manque %}<span class="note erreur">à compléter</span>{% endif %}
+            {% endif %}
             {% if x.propose and not x.erreur %}<span class="note propose">proposé par l'Excel</span>{% endif %}
             {% if x.excel %}<span class="note ecart">{{ x.excel }}</span>{% endif %}
           </td>
@@ -125,7 +146,7 @@
   {% if libres %}
   <h2>Lignes Excel non rattachées</h2>
   <div class="carte">
-    <p class="indice" style="margin-top:0">Le nom ne désigne pas un seul dossier en poste.
+    <p class="indice" style="margin:0 0 16px">Le nom ne désigne pas un seul dossier en poste.
       Choisissez le dossier à compléter&nbsp;: seuls ses champs vides seront remplis, à l'enregistrement.</p>
     <ul class="docs libres">
     {% for p in libres %}
@@ -151,11 +172,19 @@
   </div>
   {% endif %}
 
-  <div class="actions" style="margin-top:24px">
+  <div class="barre-save">
     <button>Enregistrer</button>
-    <span class="indice" style="margin:0">Le nom ne se modifie pas ici : il sert à rapprocher l'Excel.</span>
+    <span class="indice">Le nom ne se modifie pas ici : il sert à rapprocher l'Excel.</span>
   </div>
 </form>
+<dialog class="popup-quitter" id="popup-non-enregistre" aria-labelledby="non-enregistre-titre">
+  <p id="non-enregistre-titre"><b>Ce tableau n'est pas enregistré.</b> Si vous changez de page
+    maintenant, ce que vous avez saisi ou récupéré des Excel sera perdu.</p>
+  <div class="actions">
+    <button type="button" class="discret" id="partir">Changer de page</button>
+    <button type="button" id="rester" autofocus>Rester</button>
+  </div>
+</dialog>
 <script>
   // 1re erreur : souvent hors champ, le tableau défile en largeur
   const fautive = document.querySelector('.saisie td.erreur input, .saisie td.erreur select')
@@ -164,12 +193,37 @@
     fautive.scrollIntoView({ block: 'center', inline: 'center' });
     fautive.focus?.({ preventScroll: true });
   }
+  document.getElementById('masquer-complets')?.addEventListener('change', (e) =>
+    document.getElementById('saisie').classList.toggle('masque', e.target.checked));
   // Propositions de l'Excel ou saisie en cours : prévenir avant de quitter
   const formulaire = document.getElementById('tableau-completer');
   let enCours = formulaire.hasAttribute('data-en-attente');
-  formulaire.addEventListener('input', () => { enCours = true; });
-  document.addEventListener('submit', () => { enCours = false; });   // enregistrer ou relire un Excel
-  addEventListener('beforeunload', (e) => { if (enCours) e.preventDefault(); });
+  // frappe de la RH, y compris celle réaffichée après un refus : seule perte
+  // irrécupérable, donc seule gardée par le navigateur
+  let saisie = formulaire.hasAttribute('data-saisie');
+  formulaire.addEventListener('input', () => { enCours = saisie = true; });
+  document.addEventListener('submit', () => { enCours = saisie = false; });   // enregistrer ou relire un Excel
+  // Navigation dans l'app : fenêtre à nous, centrée. Le beforeunload natif (texte
+  // et position imposés par le navigateur) ne garde que la saisie manuelle, pour
+  // la fermeture de l'onglet et le rechargement : une proposition d'Excel se relit.
+  const confirmation = document.getElementById('popup-non-enregistre');
+  let destination = null;
+  document.addEventListener('click', (e) => {
+    const lien = e.target.closest('a[href]');
+    if (!enCours || e.defaultPrevented || !lien || lien.target === '_blank' || lien.hasAttribute('download')
+        || /^(#|mailto:|tel:)/.test(lien.getAttribute('href'))
+        || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
+    e.preventDefault();
+    document.querySelectorAll('dialog[open]').forEach(d => d.close());
+    destination = lien.href;
+    confirmation.showModal();
+  });
+  document.getElementById('rester').addEventListener('click', () => confirmation.close());
+  document.getElementById('partir').addEventListener('click', () => {
+    enCours = saisie = false;
+    location.assign(destination);
+  });
+  addEventListener('beforeunload', (e) => { if (saisie) e.preventDefault(); });
 </script>
 {% endif %}
 {% endblock %}
