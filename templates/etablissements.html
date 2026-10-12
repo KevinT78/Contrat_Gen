@@ -24,7 +24,8 @@
         <div class="secondaire">{{ e.societe }}</div></td>
       <td>{{ e.adresse or "—" }}</td>
       <td>{{ e.mail or "—" }}</td>
-      <td>{% if sharepoint %}<a class="bouton discret" href="{{ url_for('recuperer', cle=e.cle) }}">Récupérer les dossiers</a>{% endif %}
+      <td>{% if sharepoint %}<a class="bouton discret" href="{{ url_for('recuperer', cle=e.cle) }}">Récupérer les dossiers</a>
+        <a class="bouton discret" href="{{ url_for('completer', cle=e.cle) }}">Compléter les dossiers</a>{% endif %}
         <a class="bouton discret" href="{{ url_for('etablissement_modifier', cle=e.cle) }}">Modifier</a></td>
     </tr>
   {% endfor %}

@@ -16,6 +16,7 @@ volontairement. Un déploiement réel se pose hors du dépôt avec `installer.py
 ```bash
 pip install -r requirements.txt
 pip install -r requirements-sharepoint.txt   # seulement si instance.json a un bloc « sharepoint »
+python tests/test_excel.py        # « Compléter les dossiers » importés depuis les Excel du logiciel RH et du planning
 python tests/test_parcours.py     # les deux couloirs, de bout en bout
 python tests/test_signature.py    # e-sign Yousign contre un transport factice
 python tests/test_clients.py      # 2 clients factices, chacun dans son instance
@@ -333,7 +334,7 @@ Chaque établissement porte `"contrat"` dans `config/societes.json` :
 | Valeur | Couloir | À l'état `ATraiter` |
 |---|---|---|
 | `genere` (défaut) | Dark Kitchen | **Générer le contrat** — `.docx` rempli depuis le template du poste |
-| `depose` | Restaurant | **Déposer le contrat** — fait à la main sur myrhis, PDF ou `.docx` |
+| `depose` | Restaurant | **Déposer le contrat** — fait à la main dans le logiciel RH, PDF ou `.docx` |
 
 Les deux voies mènent à `ContratPret`, d'où la DPAE se déclare directement.
 
@@ -588,7 +589,7 @@ de frappe, c'est le logo que personne n'a copié dans l'instance.
 |---|---|
 | `app.py` | routes et parcours ; aucune action au `GET` |
 | `store.py` | disque, journal, états + `TRANSITIONS`, liens signés HMAC |
-| `contrat.py` | remplissage des `.docx` (`paragraphes`/`remplacer` repris de wingstop_) |
+| `contrat.py` | remplissage des `.docx` (`paragraphes`/`remplacer` repris du générateur historique, hors dépôt) |
 | `config.py` | lecture de `config/` + garde-fou de démarrage |
 | `apparence.py` | `theme.json` traduit en tokens CSS : palette, dérivées, contraste, logo ; ne connaît pas `config` |
 | `mails.py` | rendu des templates + SMTP ou console |

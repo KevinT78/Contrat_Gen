@@ -197,6 +197,8 @@ def main():
         assert item["journal"][-1]["de"] == item["journal"][-1]["vers"] == "RemisComptable"
         assert not any("commentaire" in e or "ip" in e for e in item["journal"]), \
             "commentaire libre ou ip resté dans le journal"
+        assert any(store.est_remise(e) and e.get("jour") for e in item["journal"]), \
+            "jour local de la remise perdu à la purge : la date repasserait en UTC"
 
         # 3. epochs bumpés : le jeton d'avant la purge est mort
         assert app.test_client().get(lot).status_code == 410, "jeton de lot survivant"

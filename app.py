@@ -4,6 +4,7 @@ DPAE -> remise au cabinet comptable.
 Aucune action au GET : chaque decision passe par un ecran de confirmation
 puis un POST (ticket 08).
 """
+import hashlib
 import io
 import json
 import re
@@ -26,6 +27,7 @@ from werkzeug.security import check_password_hash
 
 import config
 import contrat
+import excel
 import mails
 import sharepoint
 import signature
@@ -47,7 +49,7 @@ def _jours_ouvrables_entre(de, a):
             total += 1
     return total * signe
 
-CONTRAT_EXT = {".pdf", ".docx"}          # contrat venu de myrhis / PDF signé
+CONTRAT_EXT = {".pdf", ".docx"}          # contrat venu du logiciel RH / PDF signé
 
 # --- rate-limit par IP ----------------------------------------------------
 # Deux pots : le formulaire public (seul endpoint non authentifie qui ecrit sur
@@ -204,6 +206,18 @@ def _depuis(iso):
     return (datetime.now(d.tzinfo) - d).days
 
 
+def _horodatage(iso):
+    """Horodatage du journal (UTC) -> « JJ/MM/AAAA HH:MM » à l'heure locale.
+    Sans conversion, une saisie de 23h54 à Paris s'affichait 21:54, et après
+    minuit la veille."""
+    # simplification volontaire : heure locale du serveur, pas un fuseau fixe
+    # (tzdata absent sous Windows) ; à revoir si l'app tourne sur un serveur réglé en UTC
+    try:
+        return datetime.fromisoformat(iso).astimezone().strftime("%d/%m/%Y %H:%M")
+    except (ValueError, TypeError):
+        return iso or ""
+
+
 def _date_fr(iso):
     """AAAA-MM-JJ -> JJ/MM/AAAA. Valeur non datee : rendue telle quelle."""
     try:
@@ -231,7 +245,9 @@ def _aides():
             "valeur": config.valeur,
             "depuis": _depuis,
             "date_fr": _date_fr,
+            "horodatage": _horodatage,
             "libelle_etat": lambda e: LIBELLES_ETAT.get(e, e),
+            "libelles_champs": lambda ids: ", ".join(config.champ(i)["libelle"] for i in ids),
             "ton_etat": lambda e: TONS_ETAT.get(e, "")}
 
 
@@ -755,6 +771,249 @@ def date_entree(uid):
     return redirect(url_for("detail", uid=uid))
 
 
+# --- « Compléter les dossiers » : les champs des importés, au tableau ou par
+# les exports Excel de la RH (excel.py). Le nom ne se modifie pas : il nomme le
+# dossier et sert de clé de rapprochement avec l'Excel.
+
+def _importes(cle):
+    return sorted((i for i in store.tout()
+                   if i.get("import_cle") and store.etat(i) == "RemisComptable"
+                   and not i.get("purge")
+                   and config.valeur(i["champs"], "etablissement") == cle),
+                  key=lambda i: _sans_accents(_nom(i["champs"])))
+
+
+def _colonnes():
+    """Colonnes du tableau : champs requis (même sous condition), hors pièces,
+    établissement et nom."""
+    noms = {config.role(r) for r in ("nom", "prenom", "nom_usage", "nom_naissance")}
+    return [c for c in config.champs()
+            if (c.get("requis") or c.get("requis_si"))
+            and c["type"] not in ("piece_jointe", "etablissement") and c["id"] not in noms]
+
+
+def _cellule(c, brut):
+    """Saisie d'une cellule -> (valeur à stocker, erreur ou None)."""
+    v = (brut or "").strip()
+    if not v:
+        return "", None
+    if c["type"] == "date":
+        iso = _date_iso(v)
+        return (iso, None) if iso else (v, "date jj/mm/aaaa attendue")
+    if c["type"] == "choix" and v not in (c.get("options") or []):
+        return v, "hors liste"
+    return v, None
+
+
+def _version(champs):
+    """Empreinte des champs d'un dossier, affichée avec sa ligne : si elle a
+    changé à l'enregistrement, quelqu'un a saisi entre-temps. Les champs
+    seuls : une fiche générée ailleurs ne périme pas la ligne."""
+    return hashlib.sha256(json.dumps(champs, sort_keys=True).encode()).hexdigest()[:16]
+
+
+def _affiche(c, v):
+    return _date_fr(v) if c["type"] == "date" else v
+
+
+def _ecart_excel(c, p, actuel):
+    """« Excel : … » sous une cellule REMPLIE quand l'Excel dit autre chose (une
+    cellule vide reçoit une proposition), ou en cas de conflit ou de rejet."""
+    if c["id"] in p["conflits"]:
+        return "Excel : " + " / ".join(_affiche(c, v) for v in p["conflits"][c["id"]])
+    if c["id"] in p["rejets"]:
+        return f"Excel : {p['rejets'][c['id']]} (non reconnu)"
+    v = p["valeurs"].get(c["id"])
+    return f"Excel : {_affiche(c, v)}" if v and actuel and v != actuel else None
+
+
+def _ecran_completer(cle, saisies=None, erreurs=None, excel_par_uid=None, libres=(),
+                     propositions=None, statut=200):
+    """Le tableau, valeurs du disque. `saisies` : valeurs postées à réafficher
+    (422) ; `propositions` : valeurs de l'Excel pour les cellules vides, à
+    vérifier puis enregistrer -- rien n'est écrit avant le bouton."""
+    cols, erreurs, propositions = _colonnes(), erreurs or {}, propositions or {}
+    items = _importes(cle)
+    lignes, ecarts = [], 0
+    for i in items:
+        ch, p = i["champs"], (excel_par_uid or {}).get(i["id"])
+        # saisie réaffichée seulement sur la version d'où elle part : sinon ses
+        # valeurs périmées, reparties avec la version du disque, écraseraient
+        # au prochain « Enregistrer » ce qui a été saisi ailleurs
+        reprise = saisies and saisies.get(f"v:{i['id']}") == _version(ch)
+        cellules = []
+        for c in cols:
+            nom = f"{i['id']}:{c['id']}"
+            propose = propositions.get(i["id"], {}).get(c["id"])
+            if reprise and nom in saisies:
+                v = saisies[nom]
+            else:
+                v = _affiche(c, propose or ch.get(c["id"], ""))
+            requis = c.get("requis")
+            if c.get("requis_si"):
+                autre, attendu = c["requis_si"]
+                requis = ch.get(autre) == attendu
+            excel_note = p and _ecart_excel(c, p, ch.get(c["id"], ""))
+            ecarts += bool(excel_note)
+            cellules.append({"c": c, "nom": nom, "v": v, "erreur": erreurs.get(nom),
+                             "propose": bool(propose), "excel": excel_note,
+                             "manque": bool(requis and not v)})
+        lignes.append({"item": i, "cellules": cellules, "version": _version(ch),
+                       "erreur": erreurs.get(f"{i['id']}:*"),
+                       "a_voir": any(x["erreur"] or x["excel"] for x in cellules)
+                       or erreurs.get(f"{i['id']}:*")})
+    return render_template("completer.html", cle=cle, colonnes=cols, lignes=lignes,
+                           importes=items, libres=libres, ecarts=ecarts,
+                           propositions=sum(len(v) for v in propositions.values()),
+                           en_attente=bool(propositions or saisies or libres)), statut
+
+
+@app.get("/etablissements/completer")
+@rh
+def completer():
+    return _ecran_completer(_cle_etab_ou_404(request.args.get("cle", "")))
+
+
+@app.errorhandler(413)
+def _trop_lourd(e):
+    """Envoi au-delà de MAX_CONTENT_LENGTH : un message dans l'écran de
+    complétion plutôt que la page brute de Werkzeug ; ailleurs, inchangé."""
+    if request.path == url_for("completer_excel") and (cle := request.args.get("cle")):
+        flash(f"Fichiers trop lourds (plus de {app.config['MAX_CONTENT_LENGTH'] // 2**20} Mo "
+              "au total) : envoyez-les en plusieurs fois.", "erreur")
+        return redirect(url_for("completer", cle=cle))
+    return e
+
+
+@app.post("/etablissements/completer/excel")
+@rh
+def completer_excel():
+    """Lit les Excel et PROPOSE leurs valeurs dans les cellules vides des
+    dossiers rapprochés par le nom. Rien n'est écrit ni stocké : la RH vérifie,
+    puis enregistre le tableau."""
+    cle = _cle_etab_ou_404(request.form.get("cle", ""))
+    fichiers = [(f.filename, f.read()) for f in request.files.getlist("fichiers")
+                if f and f.filename]
+    if not fichiers:
+        flash("Choisissez au moins un fichier Excel.", "erreur")
+        return redirect(url_for("completer", cle=cle))
+    try:
+        personnes = excel.par_personne(fichiers)
+    except ValueError as e:
+        flash(str(e), "erreur")
+        return redirect(url_for("completer", cle=cle))
+    ids = {c["id"] for c in _colonnes()}
+    index, champs = defaultdict(list), {}
+    for i in _importes(cle):
+        index[sharepoint.cle_nom(*config.identite(i["champs"]))].append(i["id"])
+        champs[i["id"]] = i["champs"]
+    partis = {sharepoint.cle_nom(*config.identite(i["champs"])) for i in store.tout()
+              if store.etat(i) == "Parti" and config.valeur(i["champs"], "etablissement") == cle}
+    par_uid, libres, propositions, ignorees = {}, [], {}, 0
+    for k, p in sorted(personnes.items(), key=lambda kp: _sans_accents(kp[1]["nom"])):
+        valeurs = {f: v for f, v in p["valeurs"].items() if f in ids}
+        nb = len(index.get(k, []))
+        if not nb and k in partis:      # proposé au rattachement, il finirait dans le dossier d'un autre
+            ignorees += 1
+            continue
+        if nb != 1:
+            libres.append({"nom": p["nom"], "sources": p["sources"], "valeurs": valeurs,
+                           "motif": f"{nb} dossiers en poste à ce nom" if nb
+                           else "aucun dossier en poste à ce nom"})
+            continue
+        uid = index[k][0]
+        par_uid[uid] = p
+        if vides := {f: v for f, v in valeurs.items() if not champs[uid].get(f)}:
+            propositions[uid] = vides
+    n = sum(len(v) for v in propositions.values())
+    flash(f"{len(par_uid)} dossier(s) rapproché(s), {n} champ(s) proposé(s), "
+          f"{len(libres)} ligne(s) Excel non rattachée(s)"
+          + (f", {ignorees} ligne(s) de salarié parti ignorée(s)" if ignorees else "")
+          + ". Rien n'est enregistré : vérifiez puis cliquez sur « Enregistrer ».", "ok")
+    return _ecran_completer(cle, excel_par_uid=par_uid, libres=libres,
+                            propositions=propositions)
+
+
+@app.post("/etablissements/completer")
+@rh
+def completer_enregistrer():
+    """Corrections du tableau et rattachements manuels. Une cellule vidée
+    efface. Une cellule invalide, ou une ligne modifiée ailleurs depuis
+    l'affichage : rien n'est écrit, tout est réaffiché."""
+    cle = _cle_etab_ou_404(request.form.get("cle", ""))
+    f, cols = request.form, _colonnes()
+    dossiers = {i["id"]: i for i in _importes(cle)}
+    saisies, erreurs, rattaches, libres = {}, {}, [], []
+    for uid, item in dossiers.items():
+        ch = item["champs"]
+        for c in cols:
+            nom = f"{uid}:{c['id']}"
+            # cellule inchangée : jamais revalidée, une vieille valeur hors
+            # format bloquerait sinon tout le tableau
+            if nom in f and f[nom].strip() != _affiche(c, ch.get(c["id"], "")):
+                v, err = _cellule(c, f[nom])
+                saisies.setdefault(uid, {})[c["id"]] = v
+                if err:
+                    erreurs[nom] = err
+        # verrou optimiste : une cellule vidée efface, donc une ligne
+        # enregistrée ailleurs depuis l'affichage ne doit pas être écrasée
+        if uid in saisies and f.get(f"v:{uid}") != _version(ch):
+            erreurs = {k: e for k, e in erreurs.items() if not k.startswith(f"{uid}:")}
+            erreurs[f"{uid}:*"] = ("modifié ailleurs depuis l'affichage : la ligne est "
+                                   "rechargée, refaites vos modifications")
+    for n in sorted(int(m.group(1)) for k in f if (m := re.fullmatch(r"x(\d+)", k))):
+        x = f"x{n}"
+        libre = {"nom": f.get(f"{x}:_nom", ""), "motif": f.get(f"{x}:_motif", ""), "choisi": f[x],
+                 "valeurs": {c["id"]: f[f"{x}:{c['id']}"] for c in cols if f"{x}:{c['id']}" in f}}
+        libres.append(libre)
+        if f[x] in dossiers:
+            motifs = (["dossier déjà choisi pour une autre ligne"]
+                      if any(uid == f[x] for uid, _ in rattaches) else [])
+            vals = {}
+            for c in cols:
+                v, err = _cellule(c, libre["valeurs"].get(c["id"]))
+                vals[c["id"]] = v
+                if err:
+                    motifs.append(f"{c['libelle']} : {err}")
+            if motifs:
+                erreurs[x] = libre["erreur"] = " · ".join(motifs)
+            rattaches.append((f[x], vals))
+    if erreurs:
+        flash(f"{len(erreurs)} erreur(s), surlignée(s) en rouge : rien n'a été enregistré.",
+              "erreur")
+        return _ecran_completer(cle, saisies=dict(f), erreurs=erreurs, libres=libres, statut=422)
+    ecrits = 0
+    try:
+        for uid, vals in saisies.items():
+            ecrits += len(store.completer(uid, vals, session["utilisateur"], "correction",
+                                          effacer=True))
+        for uid, vals in rattaches:
+            ecrits += len(store.completer(uid, vals, session["utilisateur"],
+                                          "completion_excel", vides_seulement=True))
+    except ValueError as e:                       # dossier parti entre-temps
+        flash(str(e), "erreur")
+    flash(f"{ecrits} champ(s) enregistré(s).", "ok")
+    return redirect(url_for("completer", cle=cle))
+
+
+@app.post("/dossier/<uid>/fiche")
+@rh
+def generer_fiche(uid):
+    """Fiche salarié d'un importé, une fois ses champs complétés."""
+    item = store.lire(uid) or abort(404)
+    if not item.get("import_cle") or store.etat(item) != "RemisComptable" or item.get("purge"):
+        abort(400)
+    nom = store.nom_piece(item, "fiche-salarie", ".docx")
+    if (nom in store.fichiers(item, "pieces")
+            and not any(e.get("type") == "fiche_salarie" for e in item["journal"])):
+        flash(f"« {nom} » vient du SharePoint : il n'est pas remplacé.", "erreur")
+    elif _fiche_salarie(item):
+        flash("Fiche salarié générée.", "ok")
+    else:
+        flash(f"Fiche non générée : {store.lire(uid)['journal'][-1]['motif']}", "erreur")
+    return redirect(url_for("detail", uid=uid))
+
+
 @app.post("/sharepoint/connexion")
 @rh
 def sharepoint_connexion():
@@ -846,7 +1105,7 @@ def detail(uid):
     # candidat -- affichage seul, le stockage disque ne bouge pas.
     fiche = store.fichiers_role(item, "pieces", "fiche-salarie")
     etat = store.etat(item)
-    signe_le = next((e["le"][:10] for e in reversed(item["journal"])
+    signe_le = next((e["le"] for e in reversed(item["journal"])
                      if e.get("type") == "contrat_signe" or e.get("vers") == "ContratSigne"), None)
     return render_template("dossier.html", item=item, etat=etat,
                            vue="salaries" if etat in store.TERMINES else "suivi",
@@ -951,7 +1210,10 @@ def _pieces_du_dossier(item):
     calculer a un seul endroit : la fiche les fournissait, le contrat non, et
     doctor les injectant de son cote, un contrat qui les citait passait tous
     les garde-fous puis sortait « non genere » devant la RH."""
-    fournies = [c["libelle"] for c in config.pieces()
+    if item.get("import_cle"):              # fichiers sous leur nom d'origine : rôles inconnus
+        return {"PiecesFournies": "non vérifiées (dossier importé)",
+                "PiecesManquantes": "non vérifiées (dossier importé)"}
+    fournies =[c["libelle"] for c in config.pieces()
                 if store.fichiers_role(item, "pieces", c["role"])]
     manquantes = [m["champ"]["libelle"] for m in store.manquantes(item)]
     return {"PiecesFournies": ", ".join(fournies) or "—",
@@ -1011,7 +1273,7 @@ def valider(uid):
           "popup" if ok_fiche else "popup-erreur")
 
     # Contrat produit dès la validation — plus de bouton « Générer » à part.
-    # Sauf couloir « déposé » (contrat fait sur myrhis) ou config qui réclame
+    # Sauf couloir « déposé » (contrat fait dans le logiciel RH) ou config qui réclame
     # une saisie RH avant génération : l'écran ATraiter garde alors son bouton,
     # et la pop-up ne doit pas prétendre qu'un contrat est sorti.
     if (config.mode_contrat(config.valeur(item["champs"], "etablissement")) == "genere"
@@ -1129,7 +1391,7 @@ def _produire_contrat(uid, extra=None):
     un échec : modèle manquant, placeholder critique vide)."""
     item = store.lire(uid)
     if config.mode_contrat(config.valeur(item["champs"], "etablissement")) != "genere":
-        return False, ("établissement en contrat déposé (myrhis) : "
+        return False, ("établissement en contrat déposé : "
                        "utilisez « Déposer le contrat »")
     modele = config.modele_pour(item["champs"])
     if not modele:
@@ -1200,7 +1462,7 @@ def generer_contrat(uid):
 @app.post("/dossier/<uid>/contrat-depose")
 @rh
 def contrat_depose(uid):
-    """Couloir Restaurant : le contrat est fait à la main sur myrhis, la RH
+    """Couloir Restaurant : le contrat est fait à la main dans le logiciel RH, la RH
     dépose le PDF/.docx ici."""
     item = store.lire(uid) or abort(404)
     if config.mode_contrat(config.valeur(item["champs"], "etablissement")) != "depose":

@@ -4,7 +4,7 @@
 
 Écrit dans un dossier temporaire, ne touche jamais data/.
   - couloir Dark Kitchen : Lille Grand Place, contrat généré
-  - couloir Restaurant   : Marseille Prado, contrat déposé (myrhis)
+  - couloir Restaurant   : Marseille Prado, contrat déposé
 Contrat signé non bloquant, déposé après la remise sans changer d'état. Fiche salarié générée dans contrat/ dès la
 validation. recap.py liste le salarié de la semaine. Plus les refus attendus.
 """
@@ -14,6 +14,7 @@ import re
 import sys
 import tempfile
 import zipfile
+from datetime import date
 from io import BytesIO
 from pathlib import Path
 
@@ -178,6 +179,10 @@ def couloir_dark_kitchen(c):
     assert presents == attendu, (presents, attendu)
     assert all(re.search(r" - MARTIN Camille - \d{4}-\d{2}-\d{2}\.\w+$", n)
                for n in presents), presents
+    # jour LOCAL figé à la remise (entre 0 h et 2 h à Paris, l'UTC dit la veille)
+    remise = next(e for e in reversed(item["journal"]) if store.est_remise(e))
+    assert remise.get("jour") == date.today().isoformat(), remise
+    assert all(f" - {date.today().isoformat()}." in n for n in presents), presents
     assert {"FICHE PERSONNELLE", "CONTRAT"} == {n.split("/")[0] for n in presents}
     lot = "http://localhost/lot/" + store.signer("lot_comptable", uid,
                                                  item.get("lien_comptable_epoch", 0))
@@ -205,7 +210,7 @@ def couloir_dark_kitchen(c):
 
 
 def couloir_restaurant(c):
-    """Marseille Prado — contrat fait sur myrhis puis déposé."""
+    """Marseille Prado — contrat fait dans le logiciel RH puis déposé."""
     uid = soumettre(c, base_saisie("ACME Sud / Marseille Prado",
                                    poste="Équipier polyvalent"))
     c.post(f"/dossier/{uid}/valider")
@@ -214,7 +219,7 @@ def couloir_restaurant(c):
     # refus : « Générer le contrat » sur un établissement en mode déposé
     r = c.post(f"/dossier/{uid}/contrat", follow_redirects=True)
     assert store.etat(store.lire(uid)) == "ATraiter", "contrat généré sur un établissement déposé"
-    assert "contrat déposé" in r.text or "myrhis" in r.text
+    assert "contrat déposé" in r.text or "logiciel RH" in r.text
 
     # dépôt du contrat -> ContratPret
     c.post(f"/dossier/{uid}/contrat-depose", data={"contrat": piece()},

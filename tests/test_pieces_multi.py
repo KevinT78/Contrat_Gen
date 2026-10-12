@@ -5,7 +5,7 @@
 Ecrit dans un dossier temporaire, ne touche jamais data/.
 Couvre : nommage indexe (1er = nom nu, retro-compatible), fichiers_role,
 _extraire_role, manquantes (max_fichiers = nombre exige), et le
-chemin dict simple (import myrhis / tests) qui n'a pas .getlist.
+chemin dict simple (import du logiciel RH / tests) qui n'a pas .getlist.
 """
 import os
 import sys

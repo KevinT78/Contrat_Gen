@@ -126,13 +126,13 @@ D = lambda nom, i: {"name": nom, "id": i, "folder": {}}                        #
 F = lambda nom, i: {"name": nom, "id": i, "file": {},                         # noqa: E731
                     "@microsoft.graph.downloadUrl": f"https://dl.test/{i}"}
 ARBRE = {
-    "ETAB": [D("Direction", "DIR"), D("Shifts Managers", "SM"), D("Équipiers polyvalents", "EQ"),
+    "ETAB": [D("Direction", "DIR"), D("Seconds Managers", "SM"), D("Équipiers polyvalents", "EQ"),
              D("Leavers", "L"), D("#Ne pas toucher", "NP"), F("planning.xlsx", "PL")],
-    "DIR": [D("DIR Paul", "S1")], "SM": [D("SHIFT Ana (18h)", "S2")],
+    "DIR": [D("DIR Paul", "S1")], "SM": [D("SECOND Ana (18h)", "S2")],
     "EQ": [D("EQUI Bob ( 15H)", "S3"), D("EQUI Zoe (ALT)", "S4")], "L": [D("PARTI Max", "S5")],
     "S2": [D("CONTRAT", "C2"), D("FICHE PERSONELLE", "F2"), D("MALADIE", "M2"), F("cni.pdf", "CNI")],
     "C2": [F("Contrat_de_travail.pdf", "CT")], "F2": [D("scan", "F2b")], "F2b": [F("vitale.jpg", "VI")],
-    "M2": [F("arret.pdf", "AR")], "R": [D("Wing Store Bastille", "ETAB"), D("#Ne pas toucher", "NP")], "S1": [], "S3": [], "S4": [], "S5": [], "NP": [D("COPIE", "S9")],
+    "M2": [F("arret.pdf", "AR")], "R": [D("Zorba Grill Bastille", "ETAB"), D("#Ne pas toucher", "NP")], "S1": [], "S3": [], "S4": [], "S5": [], "NP": [D("COPIE", "S9")],
 }
 appels = []
 deja_429 = set()
@@ -164,8 +164,8 @@ import re    # noqa: E402
 sp._TRANSPORT = faux_graph
 sp.jeton = lambda: "J"
 SP_CONF = {"site": "https://acme.sharepoint.com/sites/rh", "racine": "DOSSIERS SALARIES",
-           "ignorer": ["Leavers", "#Ne pas toucher"], "mots_ignores": ["wing", "store"],
-           "postes": {"Shift managers": "Assistant manager", "Direction": ""}}
+           "ignorer": ["Leavers", "#Ne pas toucher"], "mots_ignores": ["zorba", "grill"],
+           "postes": {"Second managers": "Assistant manager", "Direction": ""}}
 config.sharepoint = lambda: SP_CONF
 enfants = sp._enfants(sp._drive("J"))
 
@@ -174,14 +174,14 @@ trouves = {s["id"]: s for s in sp.salaries(enfants, "ETAB")}
 assert set(trouves) == {"S1", "S2", "S3", "S4"}, set(trouves)       # ni Leavers ni #Ne pas toucher
 assert trouves["S1"]["poste"] == "" and trouves["S2"]["poste"] == "Assistant manager"
 assert trouves["S3"]["poste"] == "Équipier polyvalent", trouves["S3"]     # pluriel + accent du formulaire
-assert (trouves["S2"]["nom"], trouves["S2"]["heures"]) == ("SHIFT Ana", "18H")
+assert (trouves["S2"]["nom"], trouves["S2"]["heures"]) == ("SECOND Ana", "18H")
 assert trouves["S3"]["heures"] == "15H" and (trouves["S4"]["heures"], trouves["S4"]["suffixe"]) == ("", "ALT")
 assert sp.poste_de("Inconnu") == ""
 config.sharepoint = lambda: {**SP_CONF, "ignorer": []}
 assert "S5" in {s["id"] for s in sp.salaries(enfants, "ETAB")}, "dossiers ignorés codés en dur"
 config.sharepoint = lambda: SP_CONF
 source = (Path(sp.__file__)).read_text(encoding="utf-8").lower()
-assert not [m for m in ("wing", "leavers", "dossiers salaries", "ne pas toucher") if m in source], \
+assert not [m for m in ("zorba", "leavers", "dossiers salaries", "ne pas toucher") if m in source], \
     "vocabulaire d'un client dans sharepoint.py : il va dans instance.json"
 assert deja_429 and any("page2" in u for u, _ in appels), "429 ou pagination jamais exercés"
 print("ok  liste : Leavers ignorés, postes traduits, heures lues, 429 repris, pagination suivie")
@@ -209,18 +209,18 @@ def attendre():
     raise AssertionError("import jamais fini")
 
 
-SP_ETAB = {"id": "ETAB", "chemin": "RESTAURANTS/Wing Store Bastille"}
+SP_ETAB = {"id": "ETAB", "chemin": "RESTAURANTS/Zorba Grill Bastille"}
 assert sp.lancer_import(ETAB, SP_ETAB, ["S1", "S2", "S3", "FORGE"], "rh")
 av = attendre()
 assert (av["total"], av["fait"], av["crees"], av["erreurs"]) == (3, 3, 3, []), av
 ana = next(i for i in store.tout() if i.get("import_cle") == sp.cle("S2"))
 assert store.fichiers(ana, "contrat") == ["Contrat_de_travail.pdf"]
 assert store.fichiers(ana, "pieces") == ["cni.pdf", "vitale.jpg"]
-assert ana["journal"][0]["sp_dossier"] == "Shifts Managers/SHIFT Ana (18h)"
+assert ana["journal"][0]["sp_dossier"] == "Seconds Managers/SECOND Ana (18h)"
 assert sp.liens()[ETAB] == SP_ETAB
 AUTRE = "ACME Restauration / Paris Opéra"
-DOSSIERS = [SP_ETAB, {"id": "OP", "chemin": "RESTAURANTS/Wing Store Opéra"},
-            {"id": "MA", "chemin": "RESTAURANTS/Wing Store Marseille"}]
+DOSSIERS = [SP_ETAB, {"id": "OP", "chemin": "RESTAURANTS/Zorba Grill Opéra"},
+            {"id": "MA", "chemin": "RESTAURANTS/Zorba Grill Marseille"}]
 MARSEILLE = "ACME Sud / Marseille Prado"
 assert sp.dossier_de(ETAB, DOSSIERS) == SP_ETAB, "établissement lié : son dossier"
 assert sp.dossier_de(AUTRE, DOSSIERS)["id"] == "OP"                     # « Opéra » en commun
@@ -279,15 +279,15 @@ page = lambda u: _html.unescape(c.get(u).get_data(as_text=True))          # noqa
 assert "Récupérer les dossiers" in page("/etablissements")
 assert anonyme.get(f"/etablissements/recuperer?cle={ETAB}").status_code == 302
 s = page(f"/etablissements/recuperer?cle={ETAB}")          # lié : salariés d'office
-assert "SHIFT Ana" in s and "PARTI Max" not in s and s.count("— déjà importé") == 4, s[-1500:]
+assert "SECOND Ana" in s and "PARTI Max" not in s and s.count("— déjà importé") == 4, s[-1500:]
 assert "rh@acme.test" in s and "Se déconnecter" in s
-assert "RESTAURANTS/Wing Store Bastille" in s and "#Ne pas toucher/" not in s, "choix du dossier"
+assert "RESTAURANTS/Zorba Grill Bastille" in s and "#Ne pas toucher/" not in s, "choix du dossier"
 assert "Les dossiers rangés dans Leavers, #Ne pas toucher ne sont pas listés" in s
 assert c.post("/etablissements/recuperer", data={"cle": ETAB, "sp": "FORGE", "ids": "S1"}).status_code == 404
 assert c.post("/etablissements/recuperer", data={"cle": AUTRE, "sp": "ETAB", "ids": "S1"}).status_code == 404,     "import croisé par l'écran"
-assert "SHIFT Ana" not in page(f"/etablissements/recuperer?cle={AUTRE}&sp=ETAB"), "sp de l'URL cru"
+assert "SECOND Ana" not in page(f"/etablissements/recuperer?cle={AUTRE}&sp=ETAB"), "sp de l'URL cru"
 s = page(f"/etablissements/recuperer?cle={AUTRE}")
-assert "Wing Store Bastille" not in s and "Aucun dossier SharePoint ne correspond" in s, "dossier lié proposé ailleurs"
+assert "Zorba Grill Bastille" not in s and "Aucun dossier SharePoint ne correspond" in s, "dossier lié proposé ailleurs"
 assert "<select" not in s and "<select" not in page(f"/etablissements/recuperer?cle={ETAB}"), "la RH choisit encore"
 assert c.get("/etablissements/recuperer?cle=Inconnu").status_code == 404
 
@@ -325,13 +325,13 @@ print("ok  importé : ni dépôt de contrat ni envoi au cabinet, « à compléte
 assert "Archiver dans LEAVERS" in f, "départ impossible pour un importé"
 assert sp.dossier_de(AUTRE, [{"id": "R", "chemin": "RESTAURANTS/Restauration Nord"}]) is None, \
     "lié sur un mot du nom de la société"
-vraies_societes = config.societes      # Wingstop : une société par restaurant
-config.societes = lambda: [{"nom": "Wing Store Bastille", "etablissements": [{"nom": "Bastille"}]},
-                           {"nom": "Wing Store Toulouse", "etablissements": [{"nom": "Blagnac"}]}]
+vraies_societes = config.societes      # une société par restaurant
+config.societes = lambda: [{"nom": "Zorba Grill Bastille", "etablissements": [{"nom": "Bastille"}]},
+                           {"nom": "Zorba Grill Toulouse", "etablissements": [{"nom": "Blagnac"}]}]
 resto = [{"id": "DB", "chemin": "DARK KITCHENS/Bastille"},
-         {"id": "RB", "chemin": "RESTAURANTS/Wing Store Bastille"},
-         {"id": "RT", "chemin": "RESTAURANTS/Wing Store Toulouse"}]
-assert sp.dossier_de("Wing Store Toulouse / Blagnac", resto)["id"] == "RT", \
+         {"id": "RB", "chemin": "RESTAURANTS/Zorba Grill Bastille"},
+         {"id": "RT", "chemin": "RESTAURANTS/Zorba Grill Toulouse"}]
+assert sp.dossier_de("Zorba Grill Toulouse / Blagnac", resto)["id"] == "RT", \
     "société à un seul établissement : son nom le désigne"
 config.societes = vraies_societes
 assert item_ana["sp_etab"] == SP_ETAB, "lien établissement <-> dossier hors racine"
@@ -423,7 +423,7 @@ sp._conn["etat"] = "vierge"
 print("ok  déjà dans l'app décoché, > 50 Mo laissé à la RH, Leavers sous un poste ignoré, msal absent lisible")
 
 # 20. cas limites de la revue du 11/10
-store.creer_soumission({"etablissement": ETAB, "nom_naissance": "Shift", "prenom": "Ana"}, {})
+store.creer_soumission({"etablissement": ETAB, "nom_naissance": "Second", "prenom": "Ana"}, {})
 s = page(f"/etablissements/recuperer?cle={ETAB}")
 assert "disabled" in re.search(r'<input[^>]*value="S2"[^>]*>', s).group(), "importé redevenu cochable"
 assert s.count("— déjà dans l'app") == 1, "un déjà importé aussi marqué « déjà dans l'app »"

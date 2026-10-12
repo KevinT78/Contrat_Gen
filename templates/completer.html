@@ -1,0 +1,175 @@
+{% extends "base.html" %}
+{% block titre %}Compléter les dossiers{% endblock %}
+{% block classe_main %}large{% endblock %}
+{% block corps %}
+<style>
+  /* séparées : en collapse, les bordures de la colonne fixe restent sur place quand le tableau défile */
+  .saisie table { font-size:13px; border-collapse:separate; border-spacing:0 }
+  .saisie tbody tr:last-child th { border-bottom:0 }
+  .saisie th, .saisie td { padding:10px 12px; vertical-align:top }
+  .saisie td:last-child, .saisie th:last-child { text-align:left }
+  .saisie th:first-child, .saisie td:first-child { position:sticky; left:0; z-index:1;
+           background:var(--surface); border-right:1px solid var(--bord); min-width:180px;
+           white-space:normal }
+  .saisie input, .saisie select { min-width:130px; padding:6px 0; font-size:13px }
+  .saisie input.date { min-width:104px }
+  .saisie td.manque input, .saisie td.manque select { border-bottom-color:var(--alerte) }
+  /* une teinte par raison de regarder la cellule, la même dans la légende */
+  .saisie td.propose { background:var(--actif-fond) }
+  .saisie td.ecart   { background:var(--attente-fond) }
+  .saisie td.erreur  { background:var(--alerte-fond); box-shadow:inset 0 0 0 2px var(--alerte) }
+  .saisie tr.a-voir th:first-child { box-shadow:inset 4px 0 0 var(--attente) }
+  .saisie tr.a-voir.ko th:first-child { box-shadow:inset 4px 0 0 var(--alerte) }
+  .saisie .note { display:block; font-size:11.5px; line-height:1.4; margin-top:4px;
+           white-space:normal; max-width:220px; color:var(--gris) }
+  .saisie .note.erreur { color:var(--alerte); font-weight:600 }
+  .saisie .note.ecart  { color:var(--attente); font-weight:600 }
+  .saisie .note.propose { color:var(--accent) }
+  .legende { display:flex; flex-wrap:wrap; gap:8px 20px; margin:0 0 14px; padding:0;
+           list-style:none; font-size:12.5px; color:var(--gris) }
+  .legende li { display:flex; align-items:center; gap:8px }
+  .legende i { width:14px; height:14px; border-radius:2px; display:inline-block }
+  .libres li { display:flex; flex-wrap:wrap; gap:8px 24px; align-items:flex-end }
+  .libres .qui { flex:1 1 260px; min-width:0 }
+  .libres select { max-width:280px }
+  @media (max-width:700px) {
+    main.large { padding-left:16px; padding-right:16px }
+    .carte { padding:20px 16px }
+    .saisie th:first-child, .saisie td:first-child { min-width:120px }
+  }
+</style>
+
+<a class="retour" href="{{ url_for('etablissements_page') }}">← Établissements</a>
+<h1>Compléter les dossiers</h1>
+<p class="sous">{{ cle }} · les salariés importés depuis le SharePoint</p>
+
+<form method="post" action="{{ url_for('completer_excel', cle=cle) }}" enctype="multipart/form-data"
+      class="carte">
+  <p class="titre-carte">Depuis les exports Excel</p>
+  <input type="hidden" name="cle" value="{{ cle }}">
+  <div class="actions">
+    <div class="champ">
+      <label for="fichiers">Fichiers .xlsx (logiciel RH, planning)</label>
+      <input type="file" name="fichiers" id="fichiers" accept=".xlsx" multiple>
+    </div>
+    <button class="discret">Lire les fichiers</button>
+  </div>
+  <p class="indice">Rapprochement par le nom. Les valeurs trouvées sont proposées dans les
+    cellules vides, sans rien enregistrer : vérifiez-les, puis cliquez sur « Enregistrer ».
+    Un champ déjà rempli n'est jamais remplacé. Les fichiers ne sont pas conservés.</p>
+</form>
+
+{% if not lignes %}
+<p class="indice">Aucun salarié importé et en poste pour cet établissement.</p>
+{% else %}
+<form method="post" action="{{ url_for('completer_enregistrer') }}" id="tableau-completer"
+      {% if en_attente %}data-en-attente{% endif %}>
+  <input type="hidden" name="cle" value="{{ cle }}">
+  {% if propositions or ecarts %}
+    <p class="msg">{% if propositions %}{{ propositions }} valeur(s) proposée(s) par l'Excel, à vérifier.{% endif %}
+      {% if ecarts %}{{ ecarts }} cellule(s) où l'Excel dit autre chose que le dossier : rien n'y est changé.{% endif %}</p>
+  {% endif %}
+  <ul class="legende">
+    {% if propositions %}<li><i style="background:var(--actif-fond)"></i>proposé par l'Excel, pas encore enregistré</li>{% endif %}
+    {% if ecarts %}<li><i style="background:var(--attente-fond)"></i>l'Excel dit autre chose</li>{% endif %}
+    <li><i style="background:var(--alerte-fond);box-shadow:inset 0 0 0 2px var(--alerte)"></i>erreur à corriger</li>
+    <li>Vider une cellule efface la valeur à l'enregistrement.</li>
+  </ul>
+  <div class="tableau saisie">
+  <table>
+    <thead><tr><th scope="col">Salarié</th>
+      {% for c in colonnes %}<th scope="col">{{ c.libelle }}{% if c.requis %} *{% endif %}</th>{% endfor %}
+    </tr></thead>
+    <tbody>
+    {% for l in lignes %}
+      {% set qui = nom_de(l.item.champs) %}
+      {% set ko = l.erreur or l.cellules|selectattr('erreur')|list %}
+      <tr class="{{ 'a-voir' if l.a_voir }} {{ 'ko' if ko }}">
+        <th scope="row"><a class="nom" href="{{ url_for('detail', uid=l.item.id) }}">{{ qui }}</a>
+          <input type="hidden" name="v:{{ l.item.id }}" value="{{ l.version }}">
+          {% if l.erreur %}<span class="note erreur" style="font-weight:600">{{ l.erreur }}</span>{% endif %}</th>
+        {% for x in l.cellules %}
+          {% set c = x.c %}
+          <td class="{{ 'erreur' if x.erreur else 'ecart' if x.excel else 'propose' if x.propose }} {{ 'manque' if x.manque }}">
+            {% if c.type == 'choix' %}
+              <select name="{{ x.nom }}" aria-label="{{ c.libelle }} — {{ qui }}"
+                      {% if x.erreur %}aria-invalid="true"{% endif %}>
+                <option value=""></option>
+                {% if x.v and x.v not in (c.options or []) %}
+                  <option value="{{ x.v }}" selected>{{ x.v }} (hors liste)</option>{% endif %}
+                {% for o in c.options or [] %}
+                  <option {{ 'selected' if o == x.v }}>{{ o }}</option>{% endfor %}
+              </select>
+            {% elif c.type == 'date' %}
+              <input type="text" name="{{ x.nom }}" value="{{ x.v }}" class="date"
+                     inputmode="numeric" placeholder="jj/mm/aaaa" maxlength="10"
+                     autocomplete="off" aria-label="{{ c.libelle }} — {{ qui }}"
+                     {% if x.erreur %}aria-invalid="true"{% endif %}>
+            {% else %}
+              <input type="text" name="{{ x.nom }}" value="{{ x.v }}" autocomplete="off"
+                     aria-label="{{ c.libelle }} — {{ qui }}"
+                     {% if x.erreur %}aria-invalid="true"{% endif %}>
+            {% endif %}
+            {% if x.erreur %}<span class="note erreur">{{ x.erreur }}</span>
+            {% elif x.manque %}<span class="note erreur">à compléter</span>{% endif %}
+            {% if x.propose and not x.erreur %}<span class="note propose">proposé par l'Excel</span>{% endif %}
+            {% if x.excel %}<span class="note ecart">{{ x.excel }}</span>{% endif %}
+          </td>
+        {% endfor %}
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+
+  {% if libres %}
+  <h2>Lignes Excel non rattachées</h2>
+  <div class="carte">
+    <p class="indice" style="margin-top:0">Le nom ne désigne pas un seul dossier en poste.
+      Choisissez le dossier à compléter&nbsp;: seuls ses champs vides seront remplis, à l'enregistrement.</p>
+    <ul class="docs libres">
+    {% for p in libres %}
+      {% set x = 'x' ~ loop.index0 %}
+      <li>
+        <div class="qui"><b>{{ p.nom }}</b>
+          <div class="secondaire">{% if p.motif %}{{ p.motif }} · {% endif %}{{ p.valeurs|length }}
+            champ(s) reconnu(s){% if p.sources %} · {{ p.sources|join(', ') }}{% endif %}</div></div>
+        {% if p.erreur %}<p class="indice manque" style="flex-basis:100%;margin:0">{{ p.erreur }}</p>{% endif %}
+        <select name="{{ x }}" aria-label="Dossier pour {{ p.nom }}">
+          <option value="">— ne pas rattacher —</option>
+          {% for i in importes %}
+            <option value="{{ i.id }}" {{ 'selected' if i.id == p.choisi }}>{{ nom_de(i.champs) }}</option>
+          {% endfor %}
+        </select>
+        <input type="hidden" name="{{ x }}:_nom" value="{{ p.nom }}">
+        <input type="hidden" name="{{ x }}:_motif" value="{{ p.motif }}">
+        {% for fid, v in p.valeurs.items() %}
+          <input type="hidden" name="{{ x }}:{{ fid }}" value="{{ v }}">{% endfor %}
+      </li>
+    {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+
+  <div class="actions" style="margin-top:24px">
+    <button>Enregistrer</button>
+    <span class="indice" style="margin:0">Le nom ne se modifie pas ici : il sert à rapprocher l'Excel.</span>
+  </div>
+</form>
+<script>
+  // 1re erreur : souvent hors champ, le tableau défile en largeur
+  const fautive = document.querySelector('.saisie td.erreur input, .saisie td.erreur select')
+                  || document.querySelector('.saisie tr.ko th, .libres .manque');
+  if (fautive) {
+    fautive.scrollIntoView({ block: 'center', inline: 'center' });
+    fautive.focus?.({ preventScroll: true });
+  }
+  // Propositions de l'Excel ou saisie en cours : prévenir avant de quitter
+  const formulaire = document.getElementById('tableau-completer');
+  let enCours = formulaire.hasAttribute('data-en-attente');
+  formulaire.addEventListener('input', () => { enCours = true; });
+  document.addEventListener('submit', () => { enCours = false; });   // enregistrer ou relire un Excel
+  addEventListener('beforeunload', (e) => { if (enCours) e.preventDefault(); });
+</script>
+{% endif %}
+{% endblock %}

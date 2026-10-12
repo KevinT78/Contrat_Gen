@@ -45,15 +45,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import config  # noqa: E402
 
 DISTANT = [{
-    "nom": "Wing Store Bastille", "siren": "933 534 604",
+    "nom": "Zorba Grill Bastille", "siren": "222 222 222",
     "comptable_email": "addy@example.com", "ordre": 1,
-    "mentions": {"RaisonSociale": "WING STORE BASTILLE SAS"},
+    "mentions": {"RaisonSociale": "ZORBA GRILL BASTILLE SAS"},
     "etablissements": [{
-        "nom": "Bastille", "ordre": 0, "siret": "933 534 604 00014",
+        "nom": "Bastille", "ordre": 0, "siret": "222 222 222 00014",
         "groupe": "RESTAURANTS", "manager_email": "mark@example.com",
         "contrat": "", "mentions": {"AdresseEtablissement": "61 rue du Faubourg"},
     }, {
-        "nom": "Annexe", "ordre": 1, "siret": "933 534 604 00022",
+        "nom": "Annexe", "ordre": 1, "siret": "222 222 222 00022",
         "groupe": "", "manager_email": "annexe@example.com",
         "contrat": "depose", "mentions": {"AdresseEtablissement": "2 rue Y"},
     }],
@@ -99,14 +99,14 @@ lu = config.societes()
 assert len(APPELS) == 1 and APPELS[0][0] == "GET"
 assert "/rest/v1/societes?select=" in APPELS[0][1]
 # « Vide » (ordre 0) passe devant Bastille (ordre 1). Annexe apres Bastille.
-assert [s["nom"] for s in lu] == ["Vide", "Wing Store Bastille"], lu
+assert [s["nom"] for s in lu] == ["Vide", "Zorba Grill Bastille"], lu
 bastille = lu[1]
 assert bastille["etablissements"][0]["groupe"] == "RESTAURANTS"
 assert "contrat" not in bastille["etablissements"][0]
 assert bastille["etablissements"][1]["contrat"] == "depose"
 assert "groupe" not in bastille["etablissements"][1]
-assert config.manager("Wing Store Bastille / Bastille") == "mark@example.com"
-assert config.mode_contrat("Wing Store Bastille / Annexe") == "depose"
+assert config.manager("Zorba Grill Bastille / Bastille") == "mark@example.com"
+assert config.mode_contrat("Zorba Grill Bastille / Annexe") == "depose"
 assert fichier() == lu
 print("OK  lecture supabase : forme societes.json, fichier réécrit")
 
@@ -144,14 +144,14 @@ print("OK  panne récente : pas de nouvel appel")
 # --- sans supabase : l'écriture va dans le fichier --------------------------
 config.instance().pop("supabase")
 config._oublier_societes()
-config.sauver_etablissement(None, "Wing Store Bastille", None, {
-    "nom": "Comptoir", "siret": "933 534 604 00030",
+config.sauver_etablissement(None, "Zorba Grill Bastille", None, {
+    "nom": "Comptoir", "siret": "222 222 222 00030",
     "manager_email": "comptoir@example.com", "groupe": "RESTAURANTS",
     "mentions": {"AdresseEtablissement": "3 rue Z"},
 })
-assert config.manager("Wing Store Bastille / Comptoir") == "comptoir@example.com"
+assert config.manager("Zorba Grill Bastille / Comptoir") == "comptoir@example.com"
 try:
-    config.sauver_etablissement(None, "Wing Store Bastille", None, {
+    config.sauver_etablissement(None, "Zorba Grill Bastille", None, {
         "nom": "Comptoir", "siret": "1", "manager_email": "x@y.z",
         "mentions": {"AdresseEtablissement": "3 rue Z"},
     })
@@ -177,28 +177,28 @@ def ecriture(methode, url, headers, corps=None):
     if methode == "PATCH":
         return 200, b'[{"id": 9}]'
     return 200, json.dumps([{
-        "nom": "Wing Store Bastille", "siren": "933 534 604",
+        "nom": "Zorba Grill Bastille", "siren": "222 222 222",
         "comptable_email": "addy@example.com", "ordre": 0,
-        "mentions": {"RaisonSociale": "WING STORE BASTILLE SAS"},
+        "mentions": {"RaisonSociale": "ZORBA GRILL BASTILLE SAS"},
         "etablissements": [{
-            "nom": "Comptoir", "ordre": 1, "siret": "933 534 604 00030",
+            "nom": "Comptoir", "ordre": 1, "siret": "222 222 222 00030",
             "groupe": "RESTAURANTS", "manager_email": "nouveau@example.com",
             "contrat": "", "mentions": {"AdresseEtablissement": "3 rue Z"},
         }],
     }]).encode()
 
 config._TRANSPORT_SUPABASE = ecriture
-config.sauver_etablissement(("Wing Store Bastille", "Comptoir"), "Wing Store Bastille", {
-    "nom": "Wing Store Bastille", "siren": "933 534 604",
+config.sauver_etablissement(("Zorba Grill Bastille", "Comptoir"), "Zorba Grill Bastille", {
+    "nom": "Zorba Grill Bastille", "siren": "222 222 222",
     "comptable_email": "addy@example.com",
-    "mentions": {"RaisonSociale": "WING STORE BASTILLE SAS"},
+    "mentions": {"RaisonSociale": "ZORBA GRILL BASTILLE SAS"},
 }, {
-    "nom": "Comptoir", "siret": "933 534 604 00030", "groupe": "RESTAURANTS",
+    "nom": "Comptoir", "siret": "222 222 222 00030", "groupe": "RESTAURANTS",
     "manager_email": "nouveau@example.com",
     "mentions": {"AdresseEtablissement": "3 rue Z"},
 })
 patch = next(corps for methode, url, corps in JOURNAL
              if methode == "PATCH" and "/etablissements?" in url)
 assert patch["manager_email"] == "nouveau@example.com", patch
-assert config.manager("Wing Store Bastille / Comptoir") == "nouveau@example.com"
+assert config.manager("Zorba Grill Bastille / Comptoir") == "nouveau@example.com"
 print("OK  supabase : le mail du manager est écrit, puis relu")

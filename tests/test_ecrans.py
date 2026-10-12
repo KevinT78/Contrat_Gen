@@ -19,7 +19,7 @@ os.environ["DONNEES"] = tempfile.mkdtemp(prefix="contratgen-ecrans-")
 
 import config          # noqa: E402
 import store           # noqa: E402
-from app import app    # noqa: E402
+from app import app, _horodatage    # noqa: E402
 
 app.config["PROPAGATE_EXCEPTIONS"] = True
 for zone in ("soumissions",):
@@ -243,6 +243,9 @@ def main():
         texte = voir()
         assert depot not in texte and envoi not in texte, "dépôt encore proposé après le signé"
         assert "Déposé le" in texte, "date de dépôt du signé absente"
+        le = next(e["le"] for e in reversed(store.lire(uid)["journal"]) if e.get("vers") == "ContratSigne"
+                  or e.get("type") == "contrat_signe")
+        assert f"Déposé le {_horodatage(le)[:10]}" in texte, "date de dépôt en UTC, pas à l'heure locale"
         assert texte.index("Déposé le") > texte.index("Lien comptable"), "« Déposé le » pas sous Lien comptable"
         assert MANQUE not in ligne(ecran(c, "/salaries"), uid), "badge encore là dans Salariés"
     finally:

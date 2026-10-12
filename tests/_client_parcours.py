@@ -66,7 +66,7 @@ def couloir(c, etab, mode, poste, attendus):
     c.post(f"/dossier/{uid}/valider")
     item = store.lire(uid)
     # Contrat généré dès la validation (couloir « genere ») ; le couloir
-    # « depose » reste à ATraiter en attendant le dépôt du PDF myrhis.
+    # « depose » reste à ATraiter en attendant le dépôt du PDF du logiciel RH.
     # Avec une saisie_rh, la validation attend la RH : on génère avec ses valeurs.
     saisie_rh = mode == "genere" and config.saisie_rh()
     assert store.etat(item) == ("ContratPret" if mode == "genere" and not saisie_rh

@@ -10,7 +10,7 @@ mode console : data_demo/mails/*.eml. Identifiants RH : rh / demo-rh.
 Quatre dossiers amorcés pour que le suivi ne soit pas vide au moment de
 présenter, chacun arrêté à une étape différente :
   - BENALI Sarah   : demande reçue, à valider — parcours « contrat généré » à jouer en live
-  - SOARES Rui     : demande validée, établissement en couloir myrhis — « contrat déposé »
+  - SOARES Rui     : demande validée, établissement au contrat fait hors de l app — « contrat déposé »
                      à jouer en live : « Déposer le contrat » au lieu de « Générer »
   - NKEMBA Awa     : contrat généré, DPAE à faire, badge « signé manquant »
   - DUPONT Jean    : remis au cabinet (montre le lien comptable + mail hebdo)
@@ -127,7 +127,7 @@ def amorcer():
     uid = soumettre(c, saisie())
     assert store.etat(store.lire(uid)) == "Soumise"
 
-    # 4. couloir « contrat déposé » : l etablissement est en myrhis (societes.json), le
+    # 4. couloir « contrat déposé » : l etablissement est en « depose » (societes.json), le
     #    contrat est fait à la main hors app. Validé, en attente du dépôt — à
     #    jouer en live : l'écran propose « Déposer le contrat », pas « Générer ».
     uid = soumettre(c, saisie(

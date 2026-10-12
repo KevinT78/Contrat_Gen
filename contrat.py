@@ -4,9 +4,9 @@ Le template peut etre un .docx ou un .html ; le contrat PRODUIT est toujours un
 .docx (un .html rempli est rendu en Word via htmldocx). Le circuit RH, la
 remise au comptable et la signature ne manipulent donc qu'un seul format.
 
-`paragraphes` et `remplacer` sont repris de wingstop_/contrat.py (le seul bloc
+`paragraphes` et `remplacer` sont repris du générateur historique, hors dépôt (le seul bloc
 reellement reemployable, zero reseau) ; les regles de balisage calibrees sur la
-prose Wingstop ne sont PAS reprises -- ici les templates arrivent deja balises.
+prose d'un client ne sont PAS reprises -- ici les templates arrivent deja balises.
 """
 import io
 import re
@@ -160,7 +160,7 @@ def _nombre(v):
 
 def montant_fr(v):
     """1867.05 -> « 1 867,05 » ; 2500 -> « 2 500 ». Format des contrats client :
-    separateur de milliers = espace, ,00 supprime. (repris de wingstop_)"""
+    separateur de milliers = espace, ,00 supprime. (repris du generateur historique, hors depot)"""
     entier, _, cents = f"{float(v):.2f}".partition(".")
     milliers = f"{int(entier):,}".replace(",", " ")
     return milliers if cents == "00" else f"{milliers},{cents}"
@@ -401,14 +401,18 @@ def _restants(texte):
 def _verifier_critiques(nom, texte_brut, vals):
     """Un placeholder critique (champ requis, ou liste instance['critiques'])
     remplace par du VIDE ne laisse aucun {{}} a detecter -- le contrat sort avec
-    une ligne de paie blanche, sans signal (bug wingstop_ du 2026-08-25). On
+    une ligne de paie blanche, sans signal (bug du generateur historique hors depot, 2026-08-25). On
     refuse avant substitution, sur les placeholders reellement dans le template."""
     import config
     utilises = set(re.findall(r"\{\{(\w+)\}\}", texte_brut))
-    vides = sorted(c for c in config.critiques()
-                   if c in utilises and not str(vals.get(c, "")).strip())
+    vides = [c for c in config.critiques() if c in utilises and not str(vals.get(c, "")).strip()]
     if vides:
-        raise ValueError(f"valeurs vides dans {nom} : " + ", ".join(vides))
+        # la RH lit le message : le libellé du champ, pas le jeton du modèle
+        # (un critique hors champ, ex. le salaire de la grille, garde son jeton)
+        libelles = {c["placeholder"]: c["libelle"] for c in config.champs() if c.get("placeholder")}
+        rang = {ph: i for i, ph in enumerate(libelles)}          # ordre du formulaire
+        vides.sort(key=lambda v: (rang.get(v, len(rang)), v))
+        raise ValueError(f"valeurs vides dans {nom} : " + ", ".join(libelles.get(v, v) for v in vides))
 
 
 def _generer_docx(template, vals, dest, elaguer_lignes=False, retires=None):

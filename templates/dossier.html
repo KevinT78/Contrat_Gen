@@ -24,7 +24,7 @@
     {% if sep %}<hr class="sep">{% endif %}
     <p class="titre-carte">Contrat signé</p>
     {% if contrat_signe %}
-    <p style="margin:0" class="vide">Déposé le {{ date_fr(signe_le) }}.</p>
+    <p style="margin:0" class="vide">Déposé le {{ horodatage(signe_le)[:10] }}.</p>
     {% else %}
     {% if signature_esign %}
     <div class="actions">
@@ -90,13 +90,22 @@
   <p class="indice" style="flex-basis:100%">Dossier importé depuis le SharePoint : la date
     d'entrée n'y figure pas, saisissez-la pour calculer l'ancienneté.</p>
 </form>
+<div class="carte">
+  <div class="actions">
+    <form method="post" action="{{ url_for('generer_fiche', uid=item.id) }}">
+      <button class="discret">Générer la fiche salarié</button></form>
+    <a class="bouton discret" href="{{ url_for('completer', cle=valeur(item.champs, 'etablissement')) }}">Compléter les champs</a>
+  </div>
+  <p class="indice">La fiche est refusée tant qu'un champ obligatoire est vide : complétez-les
+    d'abord dans le tableau de l'établissement.</p>
+</div>
 {% endif %}
 {% if not sous_fiche %}
 <div class="carte">
   {% if item.purge %}
     <p class="titre-carte">Dossier purgé</p>
     <p style="margin:0" class="vide">Pièces effacées le
-      {{ date_fr(item.purge.le[:10]) }} (conservation {{ item.purge.jours }} jours).
+      {{ horodatage(item.purge.le)[:10] }} (conservation {{ item.purge.jours }} jours).
       Le journal ci-dessous est conservé ; aucune action n'est possible.</p>
 
   {% elif etat == 'Soumise' %}
@@ -132,7 +141,7 @@
 
   {% elif etat == 'Rejetee' %}
     <p class="titre-carte">Rejetée</p>
-    {% if refus %}<p style="margin:0">Rejetée le {{ date_fr(refus.le[:10]) }} —
+    {% if refus %}<p style="margin:0">Rejetée le {{ horodatage(refus.le)[:10] }} —
       {{ refus.motif }}.</p>{% endif %}
     {% if correction_ratee %}
     <p class="indice">Le mail n'est pas parti : le manager n'a PAS reçu le lien de
@@ -151,11 +160,11 @@
     <form method="post" action="{{ url_for('contrat_depose', uid=item.id) }}"
           enctype="multipart/form-data" class="actions">
       <div class="champ" style="flex:1 1 320px">
-        <label for="contrat">Contrat fait sur myrhis (PDF ou .docx)</label>
+        <label for="contrat">Contrat fait dans le logiciel RH (PDF ou .docx)</label>
         <input type="file" name="contrat" id="contrat" accept=".pdf,.docx"></div>
       <button>Déposer le contrat</button>
     </form>
-    <p class="indice">Cet établissement rédige ses contrats sur myrhis ; déposez
+    <p class="indice">Cet établissement rédige ses contrats dans le logiciel RH ; déposez
       le fichier ici pour poursuivre le parcours.</p>
     {% else %}
     <form method="post" action="{{ url_for('generer_contrat', uid=item.id) }}">
@@ -275,10 +284,11 @@
 <h2>Journal</h2>
 <div class="carte"><ul class="journal">
   {% for e in item.journal|reverse %}
-    <li><time>{{ date_fr(e.le[:10]) }} {{ e.le[11:16] }}</time>
+    <li><time>{{ horodatage(e.le) }}</time>
       {% if e.type %}<b>{{ e.type }}</b>{% else %}{{ libelle_etat(e.de) if e.de else 'création' }}
         → <b>{{ libelle_etat(e.vers) }}</b>{% endif %}
       {% if e.par %} par {{ e.par }}{% endif %}
+      {% if e.champs %} · {{ libelles_champs(e.champs) }}{% endif %}
       {% if e.motif %} · {{ e.motif }}{% endif %}
       {% if e.commentaire %} · « {{ e.commentaire }} »{% endif %}
       {% if e.ip %} · {{ e.ip }}{% endif %}</li>

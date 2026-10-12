@@ -25,7 +25,8 @@ sys.stdout.reconfigure(encoding="utf-8")
 RACINE = Path(__file__).resolve().parent.parent
 CODE = ["app.py", "config.py", "apparence.py", "contrat.py", "mails.py",
         "signature.py", "configurer.py", "store.py", "installer.py", "recap.py",
-        "purger.py", "placeholders.py", "doctor.py", "demo.py", "sharepoint.py"]
+        "purger.py", "placeholders.py", "doctor.py", "demo.py", "sharepoint.py",
+        "excel.py"]
 
 MENTIONS = ["RaisonSociale", "FormeCapital", "RCS", "SiegeSocial", "ConventionCollective"]
 

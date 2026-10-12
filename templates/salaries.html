@@ -14,7 +14,7 @@
 
 {% for cab, e in echecs_recap.items() %}
 <p class="msg erreur">Le mail hebdomadaire au cabinet {{ cab }} n'est pas parti le
-  {{ date_fr(e.le[:10]) }} ({{ e.motif }}) : {{ e.nombre }} dossier(s) en attente,
+  {{ horodatage(e.le)[:10] }} ({{ e.motif }}) : {{ e.nombre }} dossier(s) en attente,
   ils repartiront au prochain envoi réussi.</p>
 {% endfor %}
 
@@ -78,7 +78,7 @@
         <td class="secondaire">{{ cabinet(valeur(i.champs, 'etablissement')) or '—' }}</td>
         <td class="secondaire">{% if anciens %}{{ date_fr(date_sortie(i)) }}
           {% elif remis_le(i) %}{{ date_fr(remis_le(i)) }}
-          {% elif i.import_cle %}Importé le {{ date_fr(i.journal[0].le[:10]) }}
+          {% elif i.import_cle %}Importé le {{ horodatage(i.journal[0].le)[:10] }}
           {% else %}—{% endif %}</td>
       </tr>
     {% endfor %}

@@ -545,7 +545,7 @@ def url_publique():
 
 def mode_contrat(cle):
     """Couloir du schema, en donnee : 'genere' (Dark Kitchen) ou 'depose'
-    (Restaurant, contrat fait a la main sur myrhis). Absent = 'genere' -- y
+    (Restaurant, contrat fait a la main dans le logiciel RH). Absent = 'genere' -- y
     compris quand l'etablissement lui-meme a disparu de la config (dossier
     vieux ou purge) : un ecran dossier ne doit pas 500 pour ca."""
     try:

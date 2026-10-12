@@ -39,7 +39,7 @@ import shutil
 import threading
 import time
 from collections import Counter
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import config
@@ -223,8 +223,8 @@ TAILLE_MAX = 15 * 1024 * 1024
 def deposer(uid, bucket, role, fichier, extensions=EXTENSIONS, index=None):
     """Ecrit une piece sous un nom semantique. Un re-depot archive l'ancien.
 
-    `extensions` surcharge la liste blanche par defaut : le contrat venu de
-    myrhis est un PDF ou un .docx, mais on n'elargit PAS EXTENSIONS, qui
+    `extensions` surcharge la liste blanche par defaut : le contrat venu du
+    logiciel RH est un PDF ou un .docx, mais on n'elargit PAS EXTENSIONS, qui
     protege le formulaire public.
 
     `index` (optionnel) : rang 1..N pour les champs multi-fichiers. Le 1er
@@ -328,16 +328,25 @@ def est_remise(e):
             or e.get("type") == "renvoi_comptable")
 
 
+def _datee(e):
+    """Une remise fige son jour LOCAL (`jour`) : `le` est en UTC, et entre 0 h et
+    2 h à Paris il nommerait les fichiers du lot de la veille. Les entrées plus
+    anciennes, sans `jour`, gardent leur date UTC : leurs noms sont déjà partis."""
+    if est_remise(e):
+        e["jour"] = date.today().isoformat()
+    return e
+
+
 def date_remise(item, repli=True):
     """Jour (AAAA-MM-JJ) de la derniere remise/renvoi au comptable ; repli
     aujourd'hui (repli=False : "" -- un affichage ne doit pas dater du jour un
     dossier jamais remis, ex. importe). Fige la date des noms de fichiers : un
     cabinet qui telecharge le lot une semaine plus tard garde la date de la
     remise, pas celle du clic."""
-    jours = [e["le"][:10] for e in item["journal"] if est_remise(e)]
+    jours = [e.get("jour") or e["le"][:10] for e in item["journal"] if est_remise(e)]
     if jours:
         return jours[-1]
-    return datetime.now(timezone.utc).date().isoformat() if repli else ""
+    return date.today().isoformat() if repli else ""
 
 
 def _qui(item):
@@ -463,7 +472,7 @@ def _deposer_champ(uid, c, fichiers_recus):
     """Depose le(s) fichier(s) recu(s) pour un champ piece_jointe.
 
     `fichiers_recus` peut etre un MultiDict (request.files) ou un simple dict
-    (import myrhis, tests). Le multi-fichiers n'est possible que sur le premier.
+    (import du logiciel RH, tests). Le multi-fichiers n'est possible que sur le premier.
     """
     if c.get("max_fichiers", 1) > 1 and hasattr(fichiers_recus, "getlist"):
         recus = fichiers_recus.getlist(c["id"])
@@ -693,8 +702,8 @@ def transition(uid, vers, par, **extra):
         if vers not in TRANSITIONS.get(de, set()):
             raise ValueError(f"transition interdite : {de} -> {vers}")
         d = _rep(item)
-        item["journal"].append({"de": de, "vers": vers,
-                                "le": maintenant(), "par": par, **extra})
+        item["journal"].append(_datee({"de": de, "vers": vers,
+                                       "le": maintenant(), "par": par, **extra}))
         _ecrire(d, item)
         return item
 
@@ -710,13 +719,36 @@ def completer_champs(uid, nouveaux):
         return item
 
 
+def completer(uid, nouveaux, par, type, vides_seulement=False, effacer=False):
+    """Complete un dossier importe (tableau ou Excel de « Compléter les
+    dossiers »). Une valeur vide n'efface que si `effacer` (saisie de la RH,
+    l'appelant garde le verrou optimiste) ; `vides_seulement` ne remplit que
+    les champs encore vides. Le journal porte les ids des champs, jamais leurs
+    valeurs. -> [ids ecrits]."""
+    with _verrou(uid):
+        item = lire(uid)
+        # noter() recopie l'etat : sur un Parti, l'entree masquerait la date de sortie
+        if not item or not item.get("import_cle") or etat(item) != "RemisComptable":
+            raise ValueError("seul un dossier importé, en poste, se complète ici")
+        ch = item["champs"]
+        faits = {k: v for k, v in nouveaux.items()
+                 if (v != "" or effacer) and v != ch.get(k, "")
+                 and not (vides_seulement and ch.get(k))}
+        if faits:
+            item["champs"] = {**ch, **faits}
+            item["journal"].append({"de": etat(item), "vers": etat(item), "le": maintenant(),
+                                    "par": par, "type": type, "champs": sorted(faits)})
+            _ecrire(_rep(item), item)
+        return sorted(faits)
+
+
 def noter(uid, **entree):
     """Entree de journal sans changement d'etat (acces au lot, mail parti...)."""
     with _verrou(uid):
         item = lire(uid)
         d = _rep(item)
-        item["journal"].append({"de": etat(item), "vers": etat(item),
-                                "le": maintenant(), **entree})
+        item["journal"].append(_datee({"de": etat(item), "vers": etat(item),
+                                       "le": maintenant(), **entree}))
         _ecrire(d, item)
 
 
@@ -737,7 +769,7 @@ def bump_epoch(uid, cle):
 # que LIRE et lister.
 
 _CHAMPS_GARDES = ("etablissement", "poste", "date_debut")   # roles que /suivi lit
-_JOURNAL_GARDE = ("le", "de", "vers", "par", "type")
+_JOURNAL_GARDE = ("le", "jour", "de", "vers", "par", "type")
 
 
 def _entree_etat_courant(item):

@@ -118,7 +118,7 @@ def test_poste_sans_modele_signale_avant_la_mise_en_service():
 
 
 def test_valeur_critique_vide_refuse_le_contrat():
-    """Le mode d'échec de wingstop_ : un contrat qui sort avec une ligne de paie
+    """Le mode d'échec du générateur historique, hors dépôt : un contrat qui sort avec une ligne de paie
     blanche. Poste absent de la grille -> pas de salaire -> refus, pas un .docx
     silencieusement troué."""
     ecrire({"templates": {"Manager": "contrat.txt", "Leavers": "contrat.txt"},
