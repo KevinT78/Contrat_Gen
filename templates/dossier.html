@@ -87,8 +87,12 @@
     <input type="date" name="date_entree" id="date_entree"
            value="{{ valeur(item.champs, 'date_debut') }}" required></div>
   <button class="discret">Enregistrer</button>
+  {% if valeur(item.champs, 'date_debut') %}
+  <p class="indice" style="flex-basis:100%">Sert à calculer l'ancienneté.</p>
+  {% else %}
   <p class="indice" style="flex-basis:100%">Dossier importé depuis le SharePoint : la date
     d'entrée n'y figure pas, saisissez-la pour calculer l'ancienneté.</p>
+  {% endif %}
 </form>
 <div class="carte">
   <div class="actions">

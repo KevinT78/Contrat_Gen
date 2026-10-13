@@ -201,7 +201,10 @@
   // frappe de la RH, y compris celle réaffichée après un refus : seule perte
   // irrécupérable, donc seule gardée par le navigateur
   let saisie = formulaire.hasAttribute('data-saisie');
-  formulaire.addEventListener('input', () => { enCours = saisie = true; });
+  // la case « Masquer les dossiers complets » filtre l'affichage, ce n'est pas une saisie
+  formulaire.addEventListener('input', (e) => {
+    if (e.target.id !== 'masquer-complets') enCours = saisie = true;
+  });
   document.addEventListener('submit', () => { enCours = saisie = false; });   // enregistrer ou relire un Excel
   // Navigation dans l'app : fenêtre à nous, centrée. Le beforeunload natif (texte
   // et position imposés par le navigateur) ne garde que la saisie manuelle, pour

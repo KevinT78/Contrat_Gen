@@ -20,6 +20,7 @@
 12. [Exploitation](#12-exploitation)
 13. [Tests](#13-tests)
 14. [Étendre une instance](#14-étendre-une-instance)
+15. [Dossiers importés : SharePoint et Excel](#15-dossiers-importés-sharepoint-et-excel)
 
 ---
 
@@ -93,9 +94,12 @@ Contrat_Gen/
 ├── placeholders.py         # Fiche des {{Jetons}} valides, dérivée de la config
 ├── doctor.py               # Génère un contrat d'essai par croisement de la config
 ├── recap.py                # Mail hebdomadaire au cabinet comptable (cron)
+├── sharepoint.py           # Import des salariés déjà en poste depuis un SharePoint (optionnel)
+├── excel.py                # Lecture des exports Excel RH pour compléter les dossiers importés
+├── requirements-sharepoint.txt  # msal + requests, seulement avec un bloc `sharepoint`
 ├── purger.py               # Aperçu de la purge en ligne de commande (lecture seule)
 ├── demo.py                 # Démo sur config.demo/ et data_demo/
-├── templates/              # 9 pages Jinja2 (formulaire, login, suivi, dossier, lot…)
+├── templates/              # Pages Jinja2 (formulaire, suivi, dossier, lot, recuperer, completer…)
 ├── config/                 # Instance de démonstration versionnée (fixture des tests)
 ├── config.exemple/         # Squelette copié par installer.py
 ├── config.demo/            # Configuration riche pour demo.py (modèles HTML, grille)
@@ -114,6 +118,8 @@ Contrat_Gen/
 | `contrat.py` | Valeurs des jetons, règles dérivées, formats, génération `.docx` | config |
 | `config.py` | Chargement JSON, rôles du formulaire, mentions, grille, garde-fou | contrat, store (imports locaux : le cycle est assumé) |
 | `mails.py` | Modèles `.txt`, transport SMTP (STARTTLS vérifié) ou console | config, store |
+| `sharepoint.py` | Connexion Microsoft (device flow), lecture Graph, import en tâche de fond | config, store (`msal`, `requests` à la demande) |
+| `excel.py` | Lecture `.xlsx` (stdlib), conversion des colonnes vers les champs du formulaire | config, sharepoint (noms) |
 
 ---
 
@@ -175,7 +181,9 @@ Chaque entrée porte au minimum `de`, `vers`, `le` (ISO 8601 UTC) et `par`. Une 
 }
 ```
 
-Types d'événements écrits par `store.noter()` : `fiche_salarie`, `fiche_echouee`, `mail_echoue`, `signature_envoyee`, `contrat_signe` (contrat signé déposé, non bloquant, seulement en `RemisComptable`, sans changer d'état ; exclu de la copie `COMPTA/` et du lot par `store.fichiers_compta()`), `renvoi_comptable`, `correction_renvoyee` (lien de correction renvoyé après un mail de rejet raté), `acces_lot`. S'y ajoute `purge`, posé par `store.purger()` au moment où il allège le journal. Un rejet ajoute `motif` et `commentaire` ; une correction ajoute `motif: "correction"`.
+Types d'événements écrits par `store.noter()` : `fiche_salarie`, `fiche_echouee`, `mail_echoue`, `signature_envoyee`, `contrat_signe` (contrat signé déposé, non bloquant, seulement en `RemisComptable`, sans changer d'état ; exclu de la copie `COMPTA/` et du lot par `store.fichiers_compta()`), `renvoi_comptable`, `correction_renvoyee` (lien de correction renvoyé après un mail de rejet raté), `acces_lot`. S'y ajoute `purge`, posé par `store.purger()` au moment où il allège le journal. Les dossiers importés ajoutent `import` (première entrée du journal), `date_entree`, `correction` et `completion_excel` (voir [section 15](#15-dossiers-importés-sharepoint-et-excel)).
+
+Une remise au comptable est reconnue par `store.est_remise()` : `vers == RemisComptable` **et** `de != RemisComptable`, ou `renvoi_comptable`. `noter()` écrit aussi `vers: RemisComptable` sur un dossier déjà remis (accès au lot, contrat signé…) : ces notes ne sont pas des remises, sans quoi l'ouverture du lot par le cabinet le renverrait au récapitulatif suivant. Une remise fige en plus son **jour local** dans `jour` (`le` est en UTC : entre 0 h et 2 h à Paris, il nommerait les fichiers du lot de la veille) ; `store.date_remise()` lit `jour` avant `le`. Un rejet ajoute `motif` et `commentaire` ; une correction ajoute `motif: "correction"`.
 
 ![Le journal tel qu'affiché dans la fiche du dossier](pdf/img/15-journal.png)
 
@@ -231,7 +239,7 @@ Sur la même machine, le PID est sondé (vivant ou mort). Depuis une autre machi
 
 | Fichier | Contenu |
 |---------|---------|
-| `instance.json` | Identité du client, secret HMAC, URL publique, mails, comptes, motifs de rejet, modèles par poste, règles dérivées, saisie RH, stockage, conservation |
+| `instance.json` | Identité du client, secret HMAC, URL publique, mails, comptes, motifs de rejet, modèles par poste, règles dérivées, saisie RH, stockage, conservation, `sharepoint` (optionnel) |
 | `formulaire.json` | Champs du formulaire public et rôles |
 | `societes.json` | Sociétés, établissements, mentions légales, couloir de contrat, adresses du manager et du cabinet. Avec un bloc `supabase`, c'est la **copie de secours** de la base (voir [Sociétés et établissements dans Supabase](#sociétés-et-établissements-dans-supabase)) |
 | `theme.json` | **Optionnel** — direction artistique du client : palette, logo, favicon. Absent = la DA d'origine |
@@ -288,6 +296,7 @@ Notes :
 - `stockage.mode` vaut `local` (répertoire `data/` de l'instance) ou `dossier` avec une clé `chemin` (répertoire synchronisé).
 - Le contrat signé ne bloque rien (à recueillir tout de même) : la DPAE se déclare dès `ContratPret`. `store.signe_manquant()` décide à la fois du badge « signé manquant » (« Salariés ») et de l'autorisation du dépôt manuel ou de l'envoi Yousign : état dans `store.SIGNE_DEPOSABLE` (`RemisComptable` seulement : dépôt depuis la fiche salarié), dossier non purgé, aucun signé déjà déposé. L'ancienne clé `signature.avant_dpae` est ignorée ; `doctor` la signale comme obsolète sans changer son verdict. Les dossiers déjà écrits à `ContratSigne` s'affichent sur l'étape « Contrat prêt » et passent à la DPAE.
 - `conservation` absent = aucune purge. `jours` et `jours_candidature` sont des entiers strictement positifs ; `apres` liste des états de `store.ETATS`.
+- `sharepoint` : facultatif ; absent = pas de boutons « Récupérer les dossiers » ni « Compléter les dossiers » dans l'onglet Établissements. Clés détaillées en [section 15](#15-dossiers-importés-sharepoint-et-excel).
 - `critiques` : jetons qui doivent avoir une valeur non vide à la génération, en plus des champs requis du formulaire.
 - `saisie_rh` : jetons qu'aucun champ ne fournit ; la RH les saisit sur l'écran « À traiter » avant de générer.
 - `fiche_salarie` : facultatif. Absent, le modèle générique `modeles/fiche_salarie.docx` (versé avec le code, hors `config/`) sert par défaut : état civil, titre de séjour, coordonnées, poste et contrat, disponibilités, pièces. À la génération, une ligne **de tableau** dont aucun mot-clé n'a de valeur (absent de la config, ou réponse vide) est retirée, et une section vide disparaît avec son titre ; `doctor` liste les lignes que la config n'alimente pas. L'élagage ne concerne que les tableaux : un mot-clé placé dans la prose, un titre ou un en-tête reste obligatoire et fait refuser la fiche s'il n'est pas alimenté. Deux lignes acceptent deux noms de mot-clé : `{{NumSS}}`/`{{NumeroSecu}}` et `{{Domicile}}`/`{{Adresse}}`. Ses **mots-clés** ne sont donc pas vérifiés au démarrage — l'élagage les rend facultatifs — mais sa **présence** l'est : `modeles/fiche_salarie.docx` manquant refuse le démarrage, sinon la fiche échouerait à chaque validation. Un modèle déclaré par le client est vérifié mot-clé par mot-clé, comme un contrat.
@@ -570,6 +579,10 @@ Liste blanche d'extensions (`.pdf`, `.jpg`, `.jpeg`, `.png` ; `.docx` en plus po
 | GET | `/etablissements` | Liste des établissements : adresse, mail, SIRET |
 | GET, POST | `/etablissements/nouveau` | Créer un établissement, dans une société existante ou une société neuve |
 | GET, POST | `/etablissements/modifier?cle=Société / Établissement` | Modifier un établissement et, avec lui, la fiche de sa société |
+| GET, POST | `/etablissements/recuperer?cle=…` | Importer les salariés d'un établissement depuis le SharePoint (404 sans bloc `sharepoint`) |
+| GET, POST | `/etablissements/completer?cle=…` | Tableau des champs à compléter des dossiers importés ; l'enregistrement est le POST |
+| POST | `/etablissements/completer/excel` | Lire des exports Excel et **proposer** leurs valeurs (rien n'est écrit) |
+| POST | `/sharepoint/connexion`, `/sharepoint/deconnexion` | Ouvrir ou fermer la session Microsoft de la RH |
 | GET | `/dossier/<uid>` | Fiche d'un dossier |
 | GET | `/dossier/<uid>/fichier/<bucket>/<nom>` | Téléchargement d'un fichier |
 | POST | `/dossier/<uid>/valider` | Accepter : ouvre le dossier, fiche salarié, rappel DPAE, contrat si couloir généré |
@@ -583,6 +596,8 @@ Liste blanche d'extensions (`.pdf`, `.jpg`, `.jpeg`, `.png` ; `.docx` en plus po
 | POST | `/dossier/<uid>/remettre` | Remettre au cabinet : copie dans `COMPTA/` |
 | POST | `/dossier/<uid>/renvoyer` | Refaire la copie et révoquer le lien du cabinet |
 | POST | `/dossier/<uid>/abandonner` | Abandonner |
+| POST | `/dossier/<uid>/date-entree` | Saisir la date d'entrée d'un dossier importé |
+| POST | `/dossier/<uid>/fiche` | Générer la fiche salarié d'un dossier importé, ses champs complétés |
 | GET, POST | `/purger` | Aperçu puis exécution de la purge |
 
 ---
@@ -695,6 +710,8 @@ python tests/test_configurer.py       # bilan, assistant, comptes, test SMTP
 python tests/test_doctor.py           # couverture de configuration
 python tests/test_purge.py            # éligibilité, effacement, journal conservé
 python tests/test_signature.py        # Yousign contre un transport factice
+python tests/test_import.py           # import SharePoint (transport Graph factice), doublons, reprise
+python tests/test_excel.py            # lecture .xlsx, conversion, rapprochement, écran « Compléter »
 ```
 
 Les tests utilisent `config/` (fixture versionnée, client fictif) ou construisent une configuration temporaire. `test_clients.py` vérifie que tout nouveau module racine est bien couvert : y ajouter tout nouveau `.py` à la racine.
@@ -737,3 +754,76 @@ Les tests utilisent `config/` (fixture versionnée, client fictif) ou construise
 ---
 
 *Contrat_Gen — édition du 16 septembre 2026*
+
+---
+
+## 15. Dossiers importés : SharePoint et Excel
+
+Un salarié embauché avant l'outil a déjà un dossier en ordre ailleurs. Deux boutons de l'onglet **Établissements** le font entrer dans l'application sans repasser par le parcours : **Récupérer les dossiers** (SharePoint) puis **Compléter les dossiers** (tableau et exports Excel). Tout est inactif sans bloc `sharepoint` dans `instance.json`.
+
+### Le bloc `sharepoint`
+
+```json
+"sharepoint": {
+  "site": "https://acme.sharepoint.com/sites/rh",
+  "racine": "DOSSIERS SALARIES",
+  "ignorer": ["Anciens", "Archives"],
+  "mots_ignores": ["restaurant"],
+  "postes": {"Chefs d'équipe": "Manager", "Direction": ""},
+  "dossiers": {"ACME Sud / Marseille Prado": "RESTAURANTS/Marseille"}
+}
+```
+
+| Clé | Rôle |
+|-----|------|
+| `site` | Adresse du site (`https://<tenant>.sharepoint.com/…`) — obligatoire |
+| `racine` | Dossier qui contient les groupes ; arborescence lue : `<racine>/<groupe>/<établissement>/<poste>/<salarié>/` — obligatoire |
+| `client_id` | Facultatif : application Azure du client. Absent = le client public Office, sans consentement administrateur |
+| `ignorer` | Sous-dossiers sautés à tout niveau (salariés partis, copies) |
+| `mots_ignores` | Mots trop courants pour rapprocher un établissement d'un dossier |
+| `postes` | Dossier de poste SharePoint → poste du formulaire (`""` : poste laissé vide) |
+| `dossiers` | « Société / Établissement » → `GROUPE/Dossier`, quand le nom ne suffit pas |
+
+`config._verifier_sharepoint()` en refuse la forme au démarrage. `configurer.py` avertit si `msal` n'est pas installé, ou si le bloc coexiste avec `stockage.mode = "dossier"` (voir plus bas).
+
+Installation : `pip install -r requirements.txt -r requirements-sharepoint.txt`. Sans le bloc, l'application n'importe jamais `msal` ni `requests`.
+
+### Récupérer les dossiers (`sharepoint.py`)
+
+1. **Connexion Microsoft** : *device flow* MSAL. La RH saisit un code sur le site de Microsoft avec son propre compte ; l'application ne voit jamais de mot de passe. Le jeton est mis en cache dans `DONNEES/sharepoint-jeton.json`, effacé par **Se déconnecter**.
+2. **Dossier de l'établissement** : jamais choisi par la RH. Dans l'ordre : le dossier déjà lié par un import précédent, celui écrit dans `sharepoint.dossiers`, sinon le seul dossier nettement le plus ressemblant (`_ressemblance`). Ambigu ou introuvable : rien n'est proposé, l'installateur renseigne `dossiers`. Un dossier lié à un autre établissement n'est jamais rendu, et le dossier posté est revérifié côté serveur (404 sinon).
+3. **Liste à cocher** : un salarié par dossier. Déjà importé : non cochable. Même nom qu'un salarié du parcours normal : **signalé et décoché par défaut, jamais bloqué** — un vrai homonyme reste importable.
+4. **Import en tâche de fond**, un seul à la fois pour toute l'application (deux établissements pointant le même dossier passeraient sinon tous deux le test d'idempotence). L'écran affiche l'avancement.
+
+Pris dans chaque dossier salarié : les fichiers à sa racine et ceux des sous-dossiers `CONTRAT` et `FICHE PERSONNELLE` (tolérant à la graphie). **Rien d'autre** (dossiers médicaux, disciplinaires). Un fichier de plus de 50 Mo est laissé à la RH et signalé ; l'import s'arrête avant de laisser moins de 1 Go de disque libre.
+
+`store.importer()` crée le dossier directement à l'état `RemisComptable` : tout s'écrit dans `DONNEES/.import/<uid>` puis est déplacé d'un bloc, donc un échec ne laisse aucun dossier à moitié né ; `store.vider_imports()` nettoie les chantiers d'un arrêt brutal. La clé de source (`import_cle` = `sharepoint:<id du dossier>`) rend l'import rejouable sans doublon. Les fichiers gardent leur nom d'origine, raccourci pour que le chemin final tienne sous 240 caractères. Seuls quatre champs sont remplis (`sharepoint.champs_de()`) : établissement, nom, poste (dossier de poste, via `postes` ou une option du formulaire au pluriel près) et temps de travail, lu dans le suffixe du dossier salarié (« DUPONT Marie (18h) » → `18H`, `analyser_nom()`) s'il figure dans les options du champ.
+
+Conséquences sur un dossier importé (`import_cle` présent) :
+
+| Aspect | Comportement |
+|--------|--------------|
+| Pièces manquantes, « signé manquant » | Jamais affichés : les rôles des fichiers sont inconnus, le dossier était en ordre à la source |
+| Lien et mail du cabinet | Masqués et refusés : le cabinet le connaît déjà, un clic l'enverrait en double au mail hebdomadaire |
+| Récapitulatif hebdomadaire | Absent : l'entrée `import` a `de == vers`, `est_remise()` ne la compte pas |
+| Purge | Jamais tant qu'il est en poste : seulement une fois `Parti` (si `Parti` figure dans `conservation.apres`) |
+| Fichiers hors liste blanche (`.html`, `.svg`…) | Toujours servis en pièce jointe, jamais affichés dans le navigateur |
+
+### Compléter les dossiers (`excel.py`)
+
+Le SharePoint ne donne ni état civil, ni contrat, ni date d'entrée : `/etablissements/completer` affiche un tableau des champs **requis** du formulaire (y compris sous condition) pour les dossiers importés, en poste, de l'établissement. Le nom nomme le dossier et sert de clé de rapprochement : il ne se modifie pas.
+
+- **Saisie directe** : une cellule vidée efface. Une cellule invalide (date non `jj/mm/aaaa`, valeur hors liste) bloque tout l'enregistrement (422) : rien n'est écrit. Un **verrou optimiste** par ligne (`v:<uid>`, empreinte des champs) refuse d'écraser une ligne enregistrée ailleurs depuis l'affichage.
+- **Excel** : la RH envoie un ou plusieurs exports `.xlsx` (logiciel RH, planning). Rien n'est écrit ni conservé : les valeurs sont **proposées** dans les cellules vides, la RH vérifie puis enregistre. Une cellule déjà remplie qui diffère affiche « Excel : … » sans être touchée.
+- **Lecture** : stdlib seule (un `.xlsx` est un zip de XML), 1re feuille ; chaque ligne contenant « Nom » et « Prénom » ouvre un en-tête valable jusqu'au suivant ; 20 Mo maximum par membre du zip. Les colonnes reconnues (`excel.convertir`) sont converties vers les champs que **le formulaire du client possède** ; une valeur non reconnue est un *rejet*, affiché et jamais écrit. Plusieurs valeurs différentes pour une même personne forment un *conflit*, jamais rempli.
+- **Rapprochement** par `sharepoint.cle_nom` (mots du nom sans ordre, accents ni casse). Zéro ou plusieurs dossiers en poste à ce nom : la ligne est « non rattachée » et la RH choisit le dossier à la main. Un nom sans dossier en poste mais qui correspond à un salarié `Parti` est ignoré, plutôt que proposé au rattachement d'un autre dossier.
+- **Journal** : `correction` (tableau) ou `completion_excel` (rattachement manuel, champs vides seulement). Il porte les **identifiants** des champs écrits, jamais leurs valeurs. `store.completer()` refuse tout dossier qui n'est pas importé et en poste (sur un `Parti`, la note masquerait la date de sortie).
+
+Sur la fiche d'un dossier importé : **Date d'entrée** (`/dossier/<uid>/date-entree` ; le SharePoint ne la donne pas) et **Générer la fiche salarié** (refusée tant qu'un champ obligatoire est vide ; une fiche venue du SharePoint sous le même nom n'est jamais remplacée).
+
+### Sécurité
+
+- Le jeton Microsoft donne accès au SharePoint de la RH. Avec `stockage.mode = "dossier"`, `DONNEES/` est le dossier synchronisé : le jeton partirait avec. D'où l'avertissement de `configurer.py` et la consigne de se déconnecter après chaque import.
+- Toutes ces routes exigent la session RH (`@rh`) ; un `cle` d'établissement inconnu, ou un bloc `sharepoint` absent, répond 404.
+- Les envois Excel sont limités par `MAX_CONTENT_LENGTH` ; au-delà, un message dans l'écran plutôt que la page brute (413).
+- Les heures du journal s'affichent à l'heure locale du serveur (`_horodatage`), pas en UTC.
