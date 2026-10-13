@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 474" font-family="Segoe UI, Arial, sans-serif">
+  <!-- Une instance en production : un seul process web, un second process
+       hebdomadaire (recap.py) qui ne fait que lire les dossiers. Le verrou
+       .serveur-actif.json est dans data/ pour couvrir le cas du dossier
+       synchronise partage entre deux machines. -->
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#475569"/>
+    </marker>
+  </defs>
+
+  <rect x="10" y="10" width="390" height="44" rx="8" fill="#0d4437"/>
+  <text x="205" y="38" text-anchor="middle" fill="#fff" font-size="14" font-weight="600">Navigateurs : manager, RH, cabinet</text>
+  <line x1="205" y1="54" x2="205" y2="80" stroke="#475569" stroke-width="2" marker-end="url(#a)"/>
+  <text x="215" y="72" font-size="12.5" fill="#475569">HTTPS</text>
+
+  <rect x="10" y="84" width="390" height="56" rx="8" fill="#475569"/>
+  <text x="205" y="107" text-anchor="middle" fill="#fff" font-size="14" font-weight="600">Reverse proxy (Caddy…)</text>
+  <text x="205" y="127" text-anchor="middle" fill="#e2e8f0" font-size="12">porte le TLS, transmet l'IP d'origine</text>
+  <line x1="205" y1="140" x2="205" y2="166" stroke="#475569" stroke-width="2" marker-end="url(#a)"/>
+  <text x="215" y="158" font-size="12.5" fill="#475569">HTTP local, PROXIES=1</text>
+
+  <rect x="10" y="170" width="390" height="62" rx="8" fill="#1e293b"/>
+  <text x="205" y="194" text-anchor="middle" fill="#fff" font-size="15" font-weight="600" font-family="Consolas, monospace">python app.py</text>
+  <text x="205" y="216" text-anchor="middle" fill="#cbd5e1" font-size="12">waitress, 1 process, 4 threads · 127.0.0.1:5000</text>
+
+  <rect x="450" y="170" width="180" height="62" rx="8" fill="#b45309"/>
+  <text x="540" y="196" text-anchor="middle" fill="#fff" font-size="14" font-weight="600">Serveur SMTP</text>
+  <text x="540" y="216" text-anchor="middle" fill="#fde68a" font-size="12">STARTTLS vérifié</text>
+  <line x1="400" y1="201" x2="446" y2="201" stroke="#475569" stroke-width="2" marker-end="url(#a)"/>
+
+  <line x1="110" y1="232" x2="110" y2="266" stroke="#475569" stroke-width="2" marker-end="url(#a)"/>
+  <text x="118" y="254" font-size="12" fill="#475569">lit (écrit peu)</text>
+  <line x1="300" y1="232" x2="300" y2="266" stroke="#475569" stroke-width="2" marker-end="url(#a)"/>
+  <text x="308" y="254" font-size="12" fill="#475569">lit, écrit</text>
+
+  <rect x="10" y="270" width="190" height="72" rx="8" fill="#1e293b"/>
+  <text x="105" y="294" text-anchor="middle" fill="#fff" font-size="14" font-weight="600" font-family="Consolas, monospace">config/</text>
+  <text x="105" y="313" text-anchor="middle" fill="#cbd5e1" font-size="12">CONFIG_DIR</text>
+  <text x="105" y="330" text-anchor="middle" fill="#cbd5e1" font-size="12">relu au redémarrage</text>
+  <rect x="210" y="270" width="190" height="72" rx="8" fill="#1e293b"/>
+  <text x="305" y="294" text-anchor="middle" fill="#fff" font-size="14" font-weight="600" font-family="Consolas, monospace">data/</text>
+  <text x="305" y="313" text-anchor="middle" fill="#cbd5e1" font-size="12">DONNEES, local ou synchronisé</text>
+  <text x="305" y="330" text-anchor="middle" fill="#cbd5e1" font-size="11.5" font-family="Consolas, monospace">.serveur-actif.json</text>
+
+  <rect x="10" y="390" width="390" height="56" rx="8" fill="#475569"/>
+  <text x="205" y="413" text-anchor="middle" fill="#fff" font-size="14" font-weight="600">recap.py, une fois par semaine</text>
+  <text x="205" y="433" text-anchor="middle" fill="#e2e8f0" font-size="12">second process : lit les dossiers, n'en modifie aucun</text>
+  <line x1="305" y1="390" x2="305" y2="346" stroke="#475569" stroke-width="2" marker-end="url(#a)"/>
+  <path d="M400,418 L540,418 L540,236" fill="none" stroke="#475569" stroke-width="2" marker-end="url(#a)"/>
+  <text x="548" y="330" font-size="12" fill="#475569">mail</text>
+  <text x="548" y="346" font-size="12" fill="#475569">hebdo</text>
+
+  <text x="320" y="466" text-anchor="middle" font-size="12" fill="#64748b" font-style="italic">Un seul serveur par stockage : le verrou refuse un second démarrage, même depuis une autre machine.</text>
+</svg>

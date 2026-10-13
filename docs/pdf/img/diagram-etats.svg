@@ -1,9 +1,9 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 620 354" font-family="Segoe UI, Arial, sans-serif">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 620 412" font-family="Segoe UI, Arial, sans-serif">
   <!-- Chaine verticale : le viewBox etroit est ce qui rend le texte lisible une
        fois le SVG reduit a la largeur de page (170,9 mm). En une ligne
        horizontale de 1180 unites, tout tombait sous 7 pt.
        Trois colonnes : ce qui fait avancer a gauche, les etats au centre, les
-       sorties a droite. Hauteur tenue sous ~120 mm pour que la figure reste sur
+       sorties a droite. Hauteur tenue sous ~140 mm pour que la figure reste sur
        la page de son paragraphe (page-break-inside: avoid).
        Pas de legende en tete : le paragraphe qui precede la figure dit deja
        qu'une etape franchie ne se refait pas. -->
@@ -69,11 +69,10 @@
   <!-- abandon : un rail avec un ergot par état concerné, au lieu de cinq
        courbes qui se croisaient et traversaient la légende -->
   <g stroke="#64748b" stroke-width="1.5" stroke-dasharray="5,4" fill="none">
-    <line x1="418" y1="113" x2="418" y2="323"/>
+    <line x1="418" y1="113" x2="418" y2="253"/>
     <line x1="400" y1="113" x2="418" y2="113"/>
     <line x1="400" y1="183" x2="418" y2="183"/>
     <line x1="400" y1="253" x2="418" y2="253"/>
-    <line x1="400" y1="323" x2="418" y2="323"/>
   </g>
   <line x1="418" y1="183" x2="444" y2="183" stroke="#64748b" stroke-width="1.5" stroke-dasharray="5,4" marker-end="url(#flGris)"/>
   <rect x="450" y="160" width="160" height="46" rx="8" fill="#64748b"/>
@@ -81,12 +80,23 @@
   <g font-size="11" fill="#64748b">
     <text x="450" y="224">« Abandonner le dossier »,</text>
     <text x="450" y="239">de « À traiter » jusqu'à</text>
-    <text x="450" y="254">« Remis au comptable ».</text>
+    <text x="450" y="254">« DPAE faite » inclus.</text>
     <text x="450" y="269">Irréversible.</text>
   </g>
   <g font-size="11" fill="#94a3b8" font-style="italic">
-    <text x="450" y="296">Rejetée et Abandonnée :</text>
-    <text x="450" y="311">états inactifs, grisés</text>
-    <text x="450" y="326">dans le suivi.</text>
+    <text x="170" y="374">Rejetée et Abandonnée :</text>
+    <text x="170" y="389">états inactifs, grisés</text>
+    <text x="170" y="404">dans le suivi.</text>
+  </g>
+
+  <!-- départ : hors du parcours d'embauche, d'où une sortie latérale et non
+       une étape de plus dans la chaîne -->
+  <line x1="400" y1="323" x2="444" y2="323" stroke="#64748b" stroke-width="1.5" stroke-dasharray="5,4" marker-end="url(#flGris)"/>
+  <rect x="450" y="300" width="160" height="46" rx="8" fill="#475569"/>
+  <text x="530" y="329" text-anchor="middle" fill="#fff" font-size="14" font-weight="600">Parti</text>
+  <g font-size="11" fill="#64748b">
+    <text x="450" y="364">plus tard, au départ du</text>
+    <text x="450" y="379">salarié : « Archiver</text>
+    <text x="450" y="394">dans LEAVERS »</text>
   </g>
 </svg>

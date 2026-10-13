@@ -34,7 +34,7 @@ Chaque demande d'embauche est un **dossier** qui avance d'étape en étape. Une 
 
 | Acteur | Rôle |
 |--------|------|
-| **Manager** | Remplit le formulaire public et joint les pièces du candidat. Reçoit le lien de correction en cas de rejet. |
+| **Manager** | Remplit le formulaire public et joint les pièces du candidat. Reçoit un mail quand la demande est acceptée, et un lien de correction si elle est rejetée. |
 | **Service RH** | Accepte ou rejette la demande, suit le dossier, dépose le contrat signé et l'accusé DPAE, remet le dossier au cabinet. |
 | **Système** | Envoie les mails, génère la fiche salarié et le contrat, copie le dossier pour le cabinet. |
 | **Cabinet comptable** | Reçoit chaque semaine un mail avec un lien par dossier remis, sans compte à créer. |
@@ -109,7 +109,7 @@ Cliquez sur **« Envoyer la demande »**. Si une information manque ou qu'un fic
 
 ![[étroit] La confirmation affichée après l'envoi](pdf/img/02-confirmation.png)
 
-Le service RH reçoit aussitôt un mail « nouvelle demande » avec le lien vers le dossier. Le manager, lui, n'est recontacté qu'en cas de rejet (voir §9).
+Le service RH reçoit aussitôt un mail « nouvelle demande » avec le lien vers le dossier. Le manager reçoit ensuite un mail quand la demande est acceptée, ou un mail avec un lien de correction si elle est rejetée (voir §9).
 
 ---
 
@@ -121,7 +121,7 @@ Rendez-vous sur `/login` avec l'identifiant et le mot de passe remis à l'instal
 
 ![[étroit] L'écran de connexion](pdf/img/03-login.png)
 
-> **Attention :** après 10 tentatives ratées en 15 minutes, la connexion est bloquée temporairement depuis votre adresse.
+> **Attention :** après 10 tentatives de connexion en 15 minutes, réussies ou non, la suivante est refusée pendant quelques minutes depuis votre adresse.
 
 ### Le tableau de bord « Demandes d'embauche »
 
@@ -163,10 +163,11 @@ Sur un dossier à l'état **« Soumise »**, la carte « Décision » propose **
 
 **Ce que fait l'acceptation, en une seule fois :**
 
-1. Le dossier passe à **« À traiter »** et rejoint l'arborescence des dossiers salariés (société / établissement / poste / NOM Prénom). Les pièces reçoivent un nom lisible (« Carte vitale - NOM Prénom.pdf »).
+1. Le dossier passe à **« À traiter »** et rejoint l'arborescence des dossiers salariés (groupe / établissement / poste / NOM Prénom). Les pièces reçoivent un nom lisible (« Carte vitale - NOM Prénom.pdf »).
 2. La **fiche salarié** est générée (pièce « Fiche salarié » dans les documents produits) : au modèle du client s'il en a un, sinon à un modèle générique fourni avec l'application.
-3. Un **mail de rappel DPAE** part au service RH (ou à l'adresse dédiée si elle est configurée), avec ce qu'il faut pour déclarer : nom, poste, date de début, employeur et SIRET.
-4. En couloir **contrat généré** sans saisie RH, le **contrat est produit immédiatement** et le dossier passe directement à **« Contrat prêt »**.
+3. Un **mail de confirmation** part au manager de l'établissement (ou à la RH si l'établissement n'a pas d'adresse).
+4. Un **mail de rappel DPAE** part au service RH (ou à l'adresse dédiée si elle est configurée), avec ce qu'il faut pour déclarer : nom, poste, date de début, employeur et SIRET.
+5. En couloir **contrat généré** sans saisie RH, le **contrat est produit immédiatement** et le dossier passe directement à **« Contrat prêt »**.
 
 ![Juste après l'acceptation : la fenêtre récapitule ce qui a été fait (1), la frise a avancé (2), la carte d'action passe à la DPAE (3)](pdf/img/07-accepte.png)
 
@@ -189,7 +190,7 @@ Les pièces du salarié sont dans le dossier : https://…/dossier/01M2N3D81N4G�
 Une fois la DPAE faite, déposez-y l'accusé.
 ```
 
-> **Attention :** si le message après acceptation indique « rappel DPAE NON parti » ou « contrat NON généré », le dossier est bien ouvert mais l'action a échoué. La raison est dans le journal du dossier (mail refusé, modèle de contrat manquant, valeur obligatoire vide).
+> **Attention :** si le message après acceptation indique « rappel DPAE NON parti » ou « contrat NON généré », le dossier est bien ouvert mais l'action a échoué. Pour le contrat, la raison est donnée dans la fenêtre (modèle manquant, valeur obligatoire vide) ; pour un mail, elle est notée dans le journal du dossier.
 
 ---
 
@@ -197,7 +198,7 @@ Une fois la DPAE faite, déposez-y l'accusé.
 
 ### Couloir « contrat généré »
 
-Le contrat est produit depuis le modèle associé au poste (fichier `.docx` ou `.html` de la configuration) : les jetons `{{Nom}}`, `{{DateDebut}}`, `{{SalaireChiffres}}`… sont remplacés par les données du formulaire, la grille de salaire et les mentions légales de la société. Le résultat est toujours un fichier **Word (.docx)**, nommé « Contrat - NOM Prénom.docx ».
+Le contrat est produit depuis le modèle associé au poste (fichier `.docx` ou `.html` de la configuration) : les jetons `{{NomPrenom}}`, `{{DateDebut}}`, `{{SalaireChiffres}}`… sont remplacés par les données du formulaire, la grille de salaire et les mentions légales de la société. Le résultat est toujours un fichier **Word (.docx)**, nommé « Contrat - NOM Prénom.docx ».
 
 Deux cas où la RH intervient à l'état **« À traiter »** :
 
@@ -230,7 +231,7 @@ Le contrat signé ne bloque ni la DPAE, ni la remise au cabinet, mais il doit ê
 
 Le dossier ne change pas d'état : le bloc quitte le haut de la fiche et « Déposé le … » s'affiche sous « Lien comptable ». Le dépôt se fait une seule fois. Tant qu'il manque, le badge **« signé manquant »** le rappelle dans « Salariés ». Il reste au dossier RH : il n'est **pas transmis au cabinet comptable**, ni dans la copie, ni dans le lien de téléchargement. Il n'est plus possible de le déposer une fois le salarié parti.
 
-> **Note :** une signature électronique intégrée (Yousign) existe en option. Si elle est activée dans la configuration, le bloc propose en plus **« Envoyer à la signature »** puis **« Vérifier la signature »**, au même endroit que le dépôt manuel ; le contrat signé est alors récupéré automatiquement.
+> **Note :** une signature électronique intégrée (Yousign) existe en option. Si elle est activée dans la configuration, le bloc propose en plus **« Envoyer à la signature »** puis **« Vérifier la signature »**, au même endroit que le dépôt manuel ; le contrat signé est récupéré en cliquant sur « Vérifier la signature ».
 
 ---
 
@@ -281,7 +282,7 @@ Sur un dossier remis, la carte « Lien comptable » propose **« Refaire la copi
 
 ### Le mail hebdomadaire au cabinet
 
-Une fois par semaine (tâche planifiée à l'installation), chaque cabinet reçoit la liste des dossiers remis depuis son dernier mail, avec un **lien personnel par dossier**, valable **30 jours**. Le service RH est en copie. Si l'envoi échoue, un message rouge l'indique en haut de l'écran « Salariés », et les dossiers repartent avec le mail suivant. La commande peut aussi être lancée à la main :
+Une fois par semaine (tâche que l'installateur doit planifier sur le serveur), chaque cabinet reçoit la liste des dossiers remis depuis son dernier mail, avec un **lien personnel par dossier**, valable **30 jours**. Le service RH est en copie. Si l'envoi échoue, un message rouge l'indique en haut de l'écran « Salariés », et les dossiers repartent avec le mail suivant. La commande peut aussi être lancée à la main :
 
 ```bash
 python recap.py              # dossiers remis depuis le dernier mail réussi
@@ -338,15 +339,17 @@ Le lien ouvre le formulaire **pré-rempli**, avec le motif et le commentaire en 
 
 ## 10. Abandonner un dossier
 
-À partir de l'état « À traiter » et jusqu'à « Remis au comptable », le bas de la fiche propose **« Abandonner le dossier »** (désistement du candidat, embauche annulée). Le dossier passe à **« Abandonnée »** : plus aucune action n'est possible, le journal et les pièces sont conservés jusqu'à la purge. Une demande encore à l'état « Soumise » se rejette, elle ne s'abandonne pas.
+À partir de l'état « À traiter » et jusqu'à « DPAE faite », le bas de la fiche propose **« Abandonner le dossier »** (désistement du candidat, embauche annulée). Le dossier passe à **« Abandonnée »** : plus aucune action n'est possible, le journal et les pièces sont conservés jusqu'à la purge. Une demande encore à l'état « Soumise » se rejette, elle ne s'abandonne pas.
 
-> **Attention :** l'abandon est irréversible. Sur un dossier déjà remis, le lien du cabinet est révoqué.
+> **Attention :** l'abandon est irréversible. Un dossier déjà remis au cabinet ne s'abandonne plus : quand le salarié part, on l'archive (voir §11).
 
 ---
 
 ## 11. Les salariés
 
-L'onglet **« Salariés »** (`/salaries`) liste les dossiers arrivés au bout du parcours, groupés par établissement.
+L'onglet **« Salariés »** (`/salaries`) liste les dossiers remis au cabinet, groupés par établissement. Deux vues : **En poste** et **Anciens salariés**. Une recherche et un filtre par établissement aident à retrouver quelqu'un.
+
+**Quand un salarié part :** sur sa fiche, la carte « Départ du salarié » demande la date de sortie (et un motif, facultatif). **« Archiver dans LEAVERS »** range son dossier avec les anciens salariés ; la colonne « Remis le » devient alors « Sorti le ».
 
 ![La vue « Salariés »](pdf/img/20-salaries.png)
 
@@ -354,9 +357,9 @@ L'onglet **« Salariés »** (`/salaries`) liste les dossiers arrivés au bout d
 |---------|---------|
 | **Salarié** | Cliquer ouvre la fiche du dossier. |
 | **Poste**, **Contrat** | Poste et type de contrat (CDI, CDD). |
-| **Début**, **Ancienneté** | Date de début et temps écoulé depuis. |
+| **Début**, **Ancienneté** | Date de début et temps écoulé depuis. Dossier importé sans date d'entrée : « — » et ancienneté « à compléter ». |
 | **Cabinet** | Adresse du cabinet comptable de la société. |
-| **Remis le** | Date de la remise au cabinet. |
+| **Remis le** | Date de la remise au cabinet. Dossier importé : « Importé le … ». |
 
 ---
 
@@ -364,7 +367,7 @@ L'onglet **« Salariés »** (`/salaries`) liste les dossiers arrivés au bout d
 
 L'onglet **« Établissements »** (`/etablissements`) est la liste des sites pour lesquels on peut faire une demande d'embauche. C'est là qu'on **ajoute un établissement** ou qu'on **change son adresse mail**, sans toucher aux fichiers de configuration ni redémarrer l'application.
 
-La liste affiche, pour chaque établissement : son nom (avec sa société en dessous), son adresse, le **mail de l'établissement** et un bouton **Modifier**. Le mail de l'établissement est celui qui reçoit le lien de correction d'un rejet et l'avis de validation. S'il manque, ces mails partent à la RH.
+La liste affiche, pour chaque établissement : son nom (avec sa société en dessous), son adresse, le **mail de l'établissement** et un bouton **Modifier**. Si l'application est reliée à votre SharePoint, deux boutons s'ajoutent : **Récupérer les dossiers** et **Compléter les dossiers** (voir ci-dessous). Le mail de l'établissement est celui qui reçoit le lien de correction d'un rejet et l'avis de validation. S'il manque, ces mails partent à la RH.
 
 ![L'onglet « Établissements »](pdf/img/22-etablissements.png)
 
@@ -378,19 +381,73 @@ La liste affiche, pour chaque établissement : son nom (avec sa société en des
 
 ![Le formulaire d'ajout d'un établissement](pdf/img/23-etablissement-nouveau.png)
 
-Tous les champs signalés sont obligatoires : l'écran refuse l'enregistrement et dit lequel manque. Deux établissements d'une même société ne peuvent pas porter le même nom.
+Sont obligatoires : le nom, le SIRET et l'adresse de l'établissement ; pour une société, le SIREN, le mail du cabinet et les mentions raison sociale, forme et capital, siège, représentant, ville de signature et convention collective. Le groupe, le greffe, le RCS et la région de mobilité sont facultatifs. S'il manque un champ, l'écran refuse l'enregistrement et dit lequel. Deux établissements d'une même société ne peuvent pas porter le même nom.
 
 ### Modifier un établissement
 
-Cliquer sur son nom (ou **Modifier**). On peut changer tous les champs, y compris les informations de la société : **les mentions légales et le cabinet comptable valent pour tous les établissements de cette société**, les modifier les change donc pour tous.
+Cliquer sur son nom (ou **Modifier**). On peut changer tous les champs, y compris les informations de la société, mais pas rattacher l'établissement à une autre société : **les mentions légales et le cabinet comptable valent pour tous les établissements de cette société**, les modifier les change donc pour tous.
 
 > **Attention :** changer le **nom** d'un établissement ou d'une société ne renomme pas les dossiers déjà envoyés, et le menu du formulaire n'affiche plus l'ancien nom. Pour un dossier en cours, mieux vaut ne pas renommer. Si les règles de modèle de contrat (`templates` dans `instance.json`) citent l'ancien nom, elles doivent être mises à jour : sinon l'application refuse de redémarrer en le signalant.
 
 Il n'y a pas de suppression depuis l'écran : un établissement qui ferme se retire dans la configuration ou la base (voir la [documentation technique](DOCUMENTATION-TECHNIQUE.md#sociétés-et-établissements-dans-supabase)).
 
+### Récupérer les dossiers des salariés déjà en poste
+
+Les salariés embauchés avant l'outil ont leur dossier sur le SharePoint. **Récupérer les dossiers** les fait entrer dans l'application, un établissement à la fois. Le bouton n'existe que si l'installateur a relié l'application au SharePoint.
+
+1. Cliquer sur **Récupérer les dossiers** en face de l'établissement.
+2. **Se connecter** : l'écran affiche un code et l'adresse d'une page Microsoft. Ouvrir la page, saisir le code (le bouton **Copier le code** évite de le recopier), puis se connecter avec **votre** compte. L'application ne voit jamais votre mot de passe. L'écran passe seul à l'étape suivante.
+3. L'application trouve le dossier SharePoint de l'établissement et liste ses salariés, avec leur poste et le dossier d'où ils viennent. Ils sont **tous cochés** : décocher ceux qui ne travaillent plus dans l'établissement (un clic n'importe où sur la ligne suffit). Le bouton indique le nombre retenu, par exemple **Importer 5 salariés**.
+    - Un salarié qui porte le **même nom** qu'un dossier de l'application est marqué **déjà dans l'app**, avec un lien vers sa fiche, et arrive décoché. Ne le cocher que s'il s'agit d'un homonyme.
+    - Les sous-dossiers que l'installateur a déclarés à ignorer (par exemple « Leavers », pour les anciens salariés) ne sont pas listés : l'écran le rappelle.
+4. Cliquer sur le bouton **Importer**. L'écran montre l'avancement et se recharge tout seul ; vous pouvez le quitter, l'import continue. Un seul import tourne à la fois.
+5. À la fin, la carte **Dernier import** donne le nombre de dossiers créés et propose **Compléter les dossiers** et **Voir les salariés**. Dans la liste, les salariés importés sont marqués **déjà importé** et ne sont plus cochables. Un salarié laissé de côté reste proposé : on peut l'importer plus tard.
+6. **Se déconnecter** une fois fini : cela efface l'accès Microsoft du serveur.
+
+![La liste d'un établissement : tous cochés, sauf l'homonyme d'un dossier existant](pdf/img/24-recuperer.png)
+
+![La carte affichée à la fin de l'import](pdf/img/25-recuperer-fini.png)
+
+Ce qui est repris : les fichiers à la racine du dossier du salarié et ceux de ses sous-dossiers **CONTRAT** et **FICHE PERSONNELLE**, sous leur nom d'origine. Les autres sous-dossiers (arrêts maladie, par exemple) ne sont pas lus. Le **poste** vient du dossier où le salarié est rangé (« Managers », « Equipiers polyvalents »…) et le **temps de travail** du nom de son dossier quand il l'indique, par exemple « MARTIN Camille (35h) ». Rien d'autre. Un fichier de plus de 50 Mo n'est pas repris : l'écran dit lequel, à récupérer à la main.
+
+Un salarié importé apparaît dans **Salariés** comme remis au cabinet, avec « Importé le … ». Il n'a ni pièce « manquante » ni « contrat signé manquant », et n'est **pas** envoyé au cabinet : celui-ci le connaît déjà.
+
+### Compléter les dossiers importés
+
+Le SharePoint ne donne ni état civil, ni date d'entrée, ni type de contrat. **Compléter les dossiers** affiche, pour un établissement, un tableau : une ligne par salarié importé encore en poste, une colonne par information obligatoire du formulaire (y compris celles qui ne le sont que dans certains cas). Sous chaque nom, le nombre de champs qui restent à remplir (« 10 champs à compléter ») ou **Complet** ; les cases vides obligatoires sont soulignées en rouge. Le tableau est plus large que l'écran : il défile vers la droite, la colonne des noms reste en place. Quand des dossiers sont complets, la case **Masquer les dossiers complets** les retire de la vue.
+
+**À la main.** Remplir les cellules, puis cliquer sur **Enregistrer** en bas de l'écran. Le bandeau confirme, par exemple « 3 champ(s) enregistré(s) ». Une cellule vidée efface la valeur à l'enregistrement. Si une cellule est invalide (date qui n'est pas au format jj/mm/aaaa, valeur hors liste), **rien** n'est enregistré : le bandeau l'annonce en rouge, la cellule fautive est encadrée avec la raison en dessous, et ce que vous avez tapé reste affiché. Corriger, puis enregistrer de nouveau.
+
+![Une date invalide : rien n'est enregistré, la cellule dit pourquoi](pdf/img/28-completer-erreur.png)
+
+**Depuis les exports Excel** du logiciel RH ou du planning :
+
+1. **Parcourir…** : choisir un ou plusieurs fichiers `.xlsx`, puis **Lire les fichiers**.
+2. Le bandeau fait le bilan : dossiers rapprochés, valeurs proposées, lignes non rattachées. Les salariés sont retrouvés par leur nom. Leurs valeurs sont **proposées** dans les cellules vides, sur fond vert avec la mention « proposé par l'Excel ». Une cellule déjà remplie n'est jamais remplacée.
+3. Sur fond orange, une note « Excel : … » signale ce qui demande votre avis, sans rien changer : l'Excel dit autre chose que la cellule, deux fichiers se contredisent (« Excel : 20H / 24H »), ou une valeur n'est pas reconnue (« Excel : 17.5 (non reconnu) »). Trancher à la main.
+4. Vérifier, corriger, puis **Enregistrer**. Rien n'est enregistré avant ce clic, et les fichiers ne sont pas conservés.
+
+![Le tableau après lecture de deux exports Excel : valeurs proposées en vert, lignes non rattachées en dessous](pdf/img/26-completer.png)
+
+![Fin du même tableau : en orange, l'Excel contredit la cellule ou n'est pas reconnu](pdf/img/27-completer-excel.png)
+
+**Lignes non rattachées.** Un nom de l'Excel qui ne correspond à aucun dossier en poste, ou à plusieurs, est listé sous le tableau avec le fichier d'où il vient. Choisir le dossier dans la liste, ou laisser « ne pas rattacher ». À l'enregistrement, seules les cellules **vides** de ce dossier sont remplies.
+
+Quitter la page sans avoir enregistré (lien, menu) ouvre la fenêtre « Ce tableau n'est pas enregistré » : **Rester** pour revenir au tableau, **Changer de page** pour abandonner ce qui a été saisi ou lu dans les Excel.
+
+> **Attention :** si quelqu'un a enregistré la même ligne entre-temps, **rien** n'est enregistré : cette ligne est rechargée avec ses valeurs, refaire ses modifications puis enregistrer de nouveau.
+
+**Sur la fiche d'un salarié importé**, trois actions :
+
+- **Date d'entrée** : c'est la même valeur que la colonne « Date de début de contrat » du tableau, déjà affichée si elle est connue. Elle sert à calculer l'ancienneté dans **Salariés**.
+- **Compléter les champs** : ouvre le tableau de l'établissement.
+- **Générer la fiche salarié** : produit le document « Fiche salarié - NOM PRÉNOM.docx », ajouté aux pièces du dossier. Tant qu'un champ obligatoire est vide, la fiche est refusée et le message liste les champs manquants (« Fiche non générée : valeurs vides … : Civilité, Date de naissance… »).
+
+![La fiche d'un salarié importé, juste après la génération de sa fiche](pdf/img/29-fiche-importe.png)
+
 ### Si l'enregistrement échoue
 
-Le message « L'enregistrement n'a pas abouti. Réessayez dans un moment. » signale une panne de la base : rien n'a été enregistré, il suffit de recommencer plus tard. Si cela dure, prévenir l'installateur.
+En ajoutant ou en modifiant un établissement, le message « L'enregistrement n'a pas abouti. Réessayez dans un moment. » signale une panne (base de données ou fichier) : rien n'a été enregistré, il suffit de recommencer plus tard. Si cela dure, prévenir l'installateur.
 
 ---
 
@@ -400,7 +457,7 @@ Si une règle de conservation est configurée (bloc `conservation` de la configu
 
 ### Dossiers concernés
 
-Un dossier est proposé à la purge quand il est dans l'un des états listés dans la règle (typiquement Remis au comptable, Rejetée, Abandonnée) depuis plus longtemps que la durée configurée. Une durée distincte s'applique aux demandes jamais acceptées.
+Un dossier est proposé à la purge quand il est dans l'un des états listés dans la règle (typiquement Remis au comptable, Rejetée, Abandonnée) depuis plus longtemps que la durée configurée. Une durée distincte peut s'appliquer aux demandes restées à l'état « Soumise ». Un salarié importé n'est jamais purgé tant qu'il est en poste.
 
 ### Procédure
 
@@ -412,7 +469,7 @@ Un dossier est proposé à la purge quand il est dans l'un des états listés da
 
 **Ce qui est effacé :** toutes les pièces (identité, RIB, contrats, accusé, fiche salarié) et la copie comptable. Les liens du cabinet et de correction sont révoqués.
 
-**Ce qui est conservé :** le journal réduit à ses changements d'état (date, étape, auteur), avec une entrée « purge » — les commentaires libres, les motifs de rejet et les adresses IP en sont retirés ; et, des informations du dossier, l'établissement, le poste et la date de début.
+**Ce qui est conservé :** toutes les entrées du journal, réduites à la date, l'étape, l'auteur et le type d'événement, avec une entrée « purge » — les commentaires libres, les motifs de rejet et les adresses IP en sont retirés ; et, des informations du dossier, l'établissement, le poste et la date de début.
 
 **Le nom du salarié est effacé, lui aussi :** c'est une donnée personnelle. Le dossier ne s'identifie plus que par son identifiant, et son répertoire est renommé `purge-<identifiant>`. La fiche reste consultable et indique la date de purge ; elle ne permet plus de savoir de qui il s'agissait.
 

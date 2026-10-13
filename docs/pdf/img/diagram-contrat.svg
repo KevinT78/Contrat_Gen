@@ -1,0 +1,70 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 476" font-family="Segoe UI, Arial, sans-serif">
+  <!-- Gauche : d'ou viennent les valeurs des jetons. Droite : la chaine de
+       contrat.remplir(), du choix du modele au .docx. Les six sources
+       convergent sur la boite remplir() plutot que d'etre reliees au modele. -->
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#475569"/>
+    </marker>
+  </defs>
+
+  <text x="10" y="20" font-size="13" fill="#334155" font-weight="600">Sources des {{Jetons}}</text>
+  <g font-size="12.5">
+    <rect x="10" y="32"  width="236" height="44" rx="6" fill="#1e293b"/>
+    <text x="22" y="51"  fill="#fff">Champs du formulaire</text>
+    <text x="22" y="68"  fill="#a7c4ba" font-size="11.5" font-family="Consolas, monospace">{{NomPrenom}} {{DateDebut}}</text>
+    <rect x="10" y="84"  width="236" height="44" rx="6" fill="#1e293b"/>
+    <text x="22" y="103" fill="#fff">Mentions société, établissement</text>
+    <text x="22" y="120" fill="#a7c4ba" font-size="11.5" font-family="Consolas, monospace">{{RaisonSociale}} {{Siret}}</text>
+    <rect x="10" y="136" width="236" height="44" rx="6" fill="#1e293b"/>
+    <text x="22" y="155" fill="#fff">Grille de salaire</text>
+    <text x="22" y="172" fill="#a7c4ba" font-size="11.5" font-family="Consolas, monospace">{{SalaireChiffres}} → Lettres</text>
+    <rect x="10" y="188" width="236" height="44" rx="6" fill="#1e293b"/>
+    <text x="22" y="207" fill="#fff">Saisie RH (saisie_rh)</text>
+    <text x="22" y="224" fill="#a7c4ba" font-size="11.5" >jetons propres au client</text>
+    <rect x="10" y="240" width="236" height="44" rx="6" fill="#1e293b"/>
+    <text x="22" y="259" fill="#fff">Règles dérivées (derives)</text>
+    <text x="22" y="276" fill="#a7c4ba" font-size="11.5" font-family="Consolas, monospace">{{Nationalite}} {{DureeMensuelle}}</text>
+    <rect x="10" y="292" width="236" height="44" rx="6" fill="#1e293b"/>
+    <text x="22" y="311" fill="#fff">Calculées par le moteur</text>
+    <text x="22" y="328" fill="#a7c4ba" font-size="11.5" font-family="Consolas, monospace">{{Aujourdhui}} {{PiecesFournies}}</text>
+  </g>
+  <g stroke="#94a3b8" stroke-width="1.5" fill="none">
+    <path d="M246,54 C270,54 270,184 288,184"/>
+    <path d="M246,106 C270,106 270,184 288,184"/>
+    <path d="M246,158 C270,158 270,184 288,184"/>
+    <path d="M246,210 C270,210 270,184 288,184"/>
+    <path d="M246,262 C270,262 270,184 288,184"/>
+    <path d="M246,314 C270,314 270,184 288,184"/>
+  </g>
+  <line x1="286" y1="184" x2="298" y2="184" stroke="#475569" stroke-width="2" marker-end="url(#a)"/>
+
+  <rect x="300" y="32" width="330" height="58" rx="8" fill="#475569"/>
+  <text x="465" y="55" text-anchor="middle" fill="#fff" font-size="14" font-weight="600">Choix du modèle (templates)</text>
+  <text x="465" y="76" text-anchor="middle" fill="#e2e8f0" font-size="12">1re règle dont tous les « quand » correspondent</text>
+  <line x1="465" y1="90" x2="465" y2="150" stroke="#475569" stroke-width="2" marker-end="url(#a)"/>
+
+  <rect x="300" y="154" width="330" height="62" rx="8" fill="#0d4437"/>
+  <text x="465" y="179" text-anchor="middle" fill="#fff" font-size="15" font-weight="600" font-family="Consolas, monospace">contrat.remplir()</text>
+  <text x="465" y="201" text-anchor="middle" fill="#a7c4ba" font-size="12.5">calcule les valeurs, remplace chaque {{Jeton}}</text>
+  <line x1="465" y1="216" x2="465" y2="244" stroke="#475569" stroke-width="2" marker-end="url(#a)"/>
+
+  <rect x="300" y="248" width="160" height="62" rx="6" fill="#1e293b"/>
+  <text x="380" y="272" text-anchor="middle" fill="#fff" font-size="13" font-weight="600">modèle .docx</text>
+  <text x="380" y="293" text-anchor="middle" fill="#cbd5e1" font-size="11.5">python-docx, runs gardés</text>
+  <rect x="470" y="248" width="160" height="62" rx="6" fill="#1e293b"/>
+  <text x="550" y="272" text-anchor="middle" fill="#fff" font-size="13" font-weight="600">modèle .html</text>
+  <text x="550" y="293" text-anchor="middle" fill="#cbd5e1" font-size="11.5">texte puis htmldocx</text>
+  <line x1="380" y1="310" x2="440" y2="340" stroke="#475569" stroke-width="2" marker-end="url(#a)"/>
+  <line x1="550" y1="310" x2="490" y2="340" stroke="#475569" stroke-width="2" marker-end="url(#a)"/>
+
+  <rect x="340" y="344" width="250" height="44" rx="8" fill="#b45309"/>
+  <text x="465" y="372" text-anchor="middle" fill="#fff" font-size="14" font-weight="600">contrat toujours en .docx</text>
+
+  <rect x="10" y="404" width="620" height="62" rx="8" fill="#f1f5f9" stroke="#cbd5e1"/>
+  <g font-size="12" fill="#334155">
+    <text x="22" y="425"><tspan font-weight="600">Contrôles :</tspan> config.verifier() refuse au démarrage un jeton sans source ;</text>
+    <text x="22" y="444">doctor.py génère un contrat pour chaque croisement (poste, temps partiel, établissement…) ;</text>
+    <text x="22" y="460">placeholders.py écrit la liste des jetons valides (PLACEHOLDERS.md).</text>
+  </g>
+</svg>

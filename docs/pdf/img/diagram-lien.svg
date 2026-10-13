@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 452" font-family="Segoe UI, Arial, sans-serif">
+  <!-- Haut : le jeton decoupe en ses cinq parties (store.signer). Bas : les
+       controles de store.verifier_lien, dans l'ordre du code ; chacun peut
+       refuser le lien, d'ou la colonne rouge a droite. -->
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#475569"/>
+    </marker>
+    <marker id="r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#b91c1c"/>
+    </marker>
+  </defs>
+
+  <text x="10" y="20" font-size="13" fill="#334155" font-weight="600">Le jeton (store.signer)</text>
+  <g font-size="12.5" text-anchor="middle">
+    <rect x="10"  y="30" width="112" height="52" rx="6" fill="#0d4437"/>
+    <text x="66"  y="52" fill="#fff" font-weight="600">usage</text>
+    <text x="66"  y="71" fill="#a7c4ba" font-size="11.5" font-family="Consolas, monospace">correction</text>
+    <rect x="128" y="30" width="112" height="52" rx="6" fill="#1e293b"/>
+    <text x="184" y="52" fill="#fff" font-weight="600">ULID</text>
+    <text x="184" y="71" fill="#cbd5e1" font-size="11.5">du dossier</text>
+    <rect x="246" y="30" width="112" height="52" rx="6" fill="#1e293b"/>
+    <text x="302" y="52" fill="#fff" font-weight="600">émis le</text>
+    <text x="302" y="71" fill="#cbd5e1" font-size="11.5">horodatage</text>
+    <rect x="364" y="30" width="112" height="52" rx="6" fill="#1e293b"/>
+    <text x="420" y="52" fill="#fff" font-weight="600">epoch</text>
+    <text x="420" y="71" fill="#cbd5e1" font-size="11.5">du dossier</text>
+    <rect x="482" y="30" width="148" height="52" rx="6" fill="#b45309"/>
+    <text x="556" y="52" fill="#fff" font-weight="600">signature</text>
+    <text x="556" y="71" fill="#fde68a" font-size="11.5">HMAC-SHA256, 32 hex</text>
+  </g>
+  <text x="320" y="102" text-anchor="middle" font-size="12" fill="#64748b" font-style="italic">séparés par des points ; usages : correction (manager), lot_comptable (cabinet)</text>
+
+  <text x="10" y="136" font-size="13" fill="#334155" font-weight="600">À chaque ouverture (store.verifier_lien)</text>
+  <g font-size="12.5">
+    <rect x="10" y="148" width="420" height="40" rx="6" fill="#1e293b"/>
+    <text x="24" y="173" fill="#fff">1. Signature recalculée avec le secret de l'instance</text>
+    <line x1="220" y1="188" x2="220" y2="204" stroke="#475569" stroke-width="2" marker-end="url(#a)"/>
+    <rect x="10" y="206" width="420" height="40" rx="6" fill="#1e293b"/>
+    <text x="24" y="231" fill="#fff">2. Usage attendu par la route (pas de lien croisé)</text>
+    <line x1="220" y1="246" x2="220" y2="262" stroke="#475569" stroke-width="2" marker-end="url(#a)"/>
+    <rect x="10" y="264" width="420" height="40" rx="6" fill="#1e293b"/>
+    <text x="24" y="289" fill="#fff">3. Émis il y a moins de 30 jours</text>
+    <line x1="220" y1="304" x2="220" y2="320" stroke="#475569" stroke-width="2" marker-end="url(#a)"/>
+    <rect x="10" y="322" width="420" height="40" rx="6" fill="#1e293b"/>
+    <text x="24" y="347" fill="#fff">4. epoch égal à celui écrit dans le dossier</text>
+    <line x1="220" y1="362" x2="220" y2="378" stroke="#475569" stroke-width="2" marker-end="url(#a)"/>
+    <rect x="10" y="380" width="420" height="40" rx="6" fill="#0d4437"/>
+    <text x="24" y="405" fill="#fff" font-weight="600">Accès accordé (lot : journalisé avec l'IP)</text>
+  </g>
+
+  <g stroke="#b91c1c" stroke-width="1.5">
+    <line x1="430" y1="168" x2="470" y2="168"/><line x1="430" y1="226" x2="470" y2="226"/>
+    <line x1="430" y1="284" x2="470" y2="284"/><line x1="430" y1="342" x2="470" y2="342"/>
+    <line x1="470" y1="168" x2="470" y2="342"/>
+    <line x1="470" y1="255" x2="486" y2="255" marker-end="url(#r)"/>
+  </g>
+  <rect x="490" y="226" width="140" height="58" rx="6" fill="#b91c1c"/>
+  <text x="560" y="250" text-anchor="middle" fill="#fff" font-size="13" font-weight="600">Lien refusé</text>
+  <text x="560" y="270" text-anchor="middle" fill="#fecaca" font-size="11.5">au premier échec</text>
+
+  <text x="10" y="442" font-size="12" fill="#64748b" font-style="italic">Révoquer = incrémenter l'epoch : link_epoch à chaque rejet ; lien_comptable_epoch au renvoi, à l'abandon, à la purge.</text>
+</svg>

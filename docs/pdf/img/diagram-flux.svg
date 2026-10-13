@@ -38,7 +38,7 @@
 
   <rect x="150" y="220" width="520" height="165" rx="8" fill="#1e293b"/>
   <text x="410" y="245" text-anchor="middle" fill="#fff" font-size="14" font-weight="600">data/DOSSIERS SALARIES/</text>
-  <text x="410" y="266" text-anchor="middle" fill="#a7c4ba" font-size="12.5" font-family="Consolas, monospace">&lt;Société&gt;/&lt;Établissement&gt;/&lt;Poste&gt;/&lt;NOM Prénom&gt;/</text>
+  <text x="410" y="266" text-anchor="middle" fill="#a7c4ba" font-size="12.5" font-family="Consolas, monospace">&lt;Groupe&gt;/&lt;Établissement&gt;/&lt;Poste&gt;/&lt;NOM Prénom&gt;/</text>
   <g font-size="12.5" fill="#cbd5e1" font-family="Consolas, monospace">
     <text x="180" y="296">dossier.json         journal append-only, état courant</text>
     <text x="180" y="318">FICHE PERSONNELLE/   pièces du candidat, fiche salarié</text>
@@ -50,7 +50,7 @@
 
   <rect x="150" y="433" width="520" height="95" rx="8" fill="#1e293b"/>
   <text x="410" y="458" text-anchor="middle" fill="#fff" font-size="14" font-weight="600">data/COMPTA/</text>
-  <text x="410" y="479" text-anchor="middle" fill="#a7c4ba" font-size="12.5" font-family="Consolas, monospace">&lt;SOCIÉTÉ&gt;/&lt;ÉTABLISSEMENT&gt;/&lt;POSTE&gt;/&lt;NOM Prénom - ULID&gt;/</text>
+  <text x="410" y="479" text-anchor="middle" fill="#a7c4ba" font-size="12.5" font-family="Consolas, monospace">&lt;GROUPE&gt;/&lt;ÉTABLISSEMENT&gt;/&lt;POSTE&gt;/&lt;NOM Prénom - ULID&gt;/</text>
   <text x="410" y="501" text-anchor="middle" fill="#cbd5e1" font-size="12.5" font-family="Consolas, monospace">FICHE PERSONNELLE/ · CONTRAT/</text>
   <text x="410" y="519" text-anchor="middle" fill="#cbd5e1" font-size="12.5">copie de travail du cabinet, le dossier d'origine reste intact</text>
   <line x1="410" y1="528" x2="410" y2="572" stroke="#475569" stroke-width="2" marker-end="url(#a)"/>

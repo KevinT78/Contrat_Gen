@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 614" font-family="Segoe UI, Arial, sans-serif">
+  <!-- Deux temps : Recuperer (sharepoint.py, store.importer) puis Completer
+       (excel.py, store.completer). Les notes a droite disent la regle de
+       chaque etape ; la boite verte est l'etat du dossier une fois importe. -->
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#475569"/>
+    </marker>
+  </defs>
+
+  <text x="10" y="20" font-size="13" fill="#334155" font-weight="600">1. Récupérer les dossiers (sharepoint.py)</text>
+  <g font-size="12.5">
+    <rect x="10" y="32" width="300" height="44" rx="6" fill="#1e293b"/>
+    <text x="24" y="59" fill="#fff">Connexion Microsoft (device flow)</text>
+    <rect x="10" y="94" width="300" height="44" rx="6" fill="#1e293b"/>
+    <text x="24" y="121" fill="#fff">Dossier SharePoint de l'établissement</text>
+    <rect x="10" y="156" width="300" height="44" rx="6" fill="#1e293b"/>
+    <text x="24" y="183" fill="#fff">Liste des salariés à cocher</text>
+    <rect x="10" y="218" width="300" height="44" rx="6" fill="#1e293b"/>
+    <text x="24" y="245" fill="#fff">Import en tâche de fond</text>
+    <rect x="10" y="280" width="300" height="56" rx="6" fill="#0d4437"/>
+    <text x="24" y="303" fill="#fff" font-weight="600">Dossier à l'état RemisComptable</text>
+    <text x="24" y="323" fill="#a7c4ba" font-size="12">nom, poste et heures remplis</text>
+  </g>
+  <g stroke="#475569" stroke-width="2">
+    <line x1="160" y1="76" x2="160" y2="92" marker-end="url(#a)"/>
+    <line x1="160" y1="138" x2="160" y2="154" marker-end="url(#a)"/>
+    <line x1="160" y1="200" x2="160" y2="216" marker-end="url(#a)"/>
+    <line x1="160" y1="262" x2="160" y2="278" marker-end="url(#a)"/>
+  </g>
+  <g font-size="11.5" fill="#475569">
+    <text x="326" y="50">avec le compte Microsoft de la RH ;</text>
+    <text x="326" y="66">l'app ne voit jamais le mot de passe</text>
+    <text x="326" y="112">trouvé par l'application,</text>
+    <text x="326" y="128">jamais choisi par la RH</text>
+    <text x="326" y="174">déjà importé : grisé ;</text>
+    <text x="326" y="190">même nom qu'un dossier existant : décoché</text>
+    <text x="326" y="236">un seul import à la fois ;</text>
+    <text x="326" y="252">le relancer ne crée pas de doublon</text>
+    <text x="326" y="303">jamais envoyé au cabinet,</text>
+    <text x="326" y="319">qui le connaît déjà</text>
+  </g>
+
+  <line x1="10" y1="360" x2="630" y2="360" stroke="#e2e8f0" stroke-width="1"/>
+  <text x="10" y="386" font-size="13" fill="#334155" font-weight="600">2. Compléter les dossiers (excel.py)</text>
+
+  <rect x="10" y="400" width="290" height="56" rx="6" fill="#1e293b"/>
+  <text x="155" y="423" text-anchor="middle" fill="#fff" font-size="13" font-weight="600">Tableau de saisie</text>
+  <text x="155" y="443" text-anchor="middle" fill="#cbd5e1" font-size="12">une ligne par importé en poste</text>
+  <rect x="340" y="400" width="290" height="56" rx="6" fill="#b45309"/>
+  <text x="485" y="423" text-anchor="middle" fill="#fff" font-size="13" font-weight="600">Exports Excel (.xlsx)</text>
+  <text x="485" y="443" text-anchor="middle" fill="#fde68a" font-size="12">rapprochés par le nom</text>
+  <line x1="485" y1="456" x2="485" y2="476" stroke="#475569" stroke-width="2" marker-end="url(#a)"/>
+  <rect x="340" y="480" width="290" height="44" rx="6" fill="#475569"/>
+  <text x="485" y="500" text-anchor="middle" fill="#fff" font-size="12">valeurs proposées dans les cases vides,</text>
+  <text x="485" y="516" text-anchor="middle" fill="#e2e8f0" font-size="12">rien n'est écrit</text>
+  <line x1="155" y1="456" x2="260" y2="540" stroke="#475569" stroke-width="2" marker-end="url(#a)"/>
+  <line x1="485" y1="524" x2="380" y2="540" stroke="#475569" stroke-width="2" marker-end="url(#a)"/>
+
+  <rect x="170" y="544" width="300" height="60" rx="8" fill="#0d4437"/>
+  <text x="320" y="568" text-anchor="middle" fill="#fff" font-size="14" font-weight="600">Enregistrer (store.completer)</text>
+  <text x="320" y="589" text-anchor="middle" fill="#a7c4ba" font-size="12">noté dans le journal du dossier</text>
+</svg>

@@ -597,6 +597,8 @@ de frappe, c'est le logo que personne n'a copié dans l'instance.
 | `installer.py` | crée l'instance d'un nouveau client depuis `config.exemple/` |
 | `placeholders.py` | fiche des `{{Jetons}}` à remettre au client, dérivée de sa config |
 | `recap.py` | mail hebdomadaire au cabinet : dossiers remis + liens de lot (CLI, à mettre en cron) |
+| `sharepoint.py` | bouton « Récupérer les dossiers » : import des salariés déjà en poste depuis un SharePoint (Microsoft Graph, connexion par code) ; actif seulement avec un bloc `sharepoint` dans `instance.json` — `requirements-sharepoint.txt` |
+| `excel.py` | bouton « Compléter les dossiers » : lecture des exports `.xlsx` de la RH (stdlib), valeurs proposées puis enregistrées par la RH |
 | `purger.py` | pendant lecture seule de la purge : éligibles, orphelins, avertissement drive (CLI) |
 | `doctor.py` | couverture de la config, vérifiée en produisant les contrats |
 | `configurer.py` | bilan de config lisible (avec avertissements de mise en production), assistant interactif, ajout de comptes, envoi de test SMTP |
@@ -605,6 +607,8 @@ de frappe, c'est le logo que personne n'a copié dans l'instance.
 | `tests/test_signature.py` | `signature.py` contre un transport factice |
 | `tests/test_clients.py` | plusieurs clients factices, une instance chacun, étanches |
 | `tests/test_produit.py` | balisage client refusé si mal écrit, fiche dérivée, config versionnée, `conservation` malformée refusée, refus de démarrer à deux, règle `templates` dont un `quand` ne peut jamais correspondre refusée |
+| `tests/test_import.py` | import SharePoint contre un transport Graph factice : fichiers retenus, doublons, reprise, disque, dossier lié |
+| `tests/test_excel.py` | lecture `.xlsx`, conversion vers les champs, rapprochement par nom, écran « Compléter » |
 | `tests/test_purge.py` | parcours complet → purge → nom/NIR/adresse absents partout, rejouable, jeton de lot révoqué |
 | `tests/test_mails.py` | mode console, override `MAILS_MODE`, STARTTLS+login imposés dès qu'un identifiant SMTP est présent |
 | `tests/test_configurer.py` | bilan sous cp1252 (sous-processus, pipe), avertissements non bloquants, assistant scripté, comptes, envoi de test contre un faux relais SMTP |
