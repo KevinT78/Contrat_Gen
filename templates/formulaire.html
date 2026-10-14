@@ -17,7 +17,8 @@
   {% for c in schema.champs %}
     {% set v = champs.get(c.id) or c.defaut or '' %}
     <div class="champ {{ 'pleine' if c.type in ('texte_long', 'piece_jointe') }}"
-         {% if c.requis_si %}data-si="{{ c.requis_si[0] }}" data-vaut="{{ c.requis_si[1] }}"{% endif %}>
+         {% set cond = c.requis_si or c.visible_si %}
+         {% if cond %}data-si="{{ cond[0] }}" data-vaut="{{ cond[1] }}"{% endif %}>
     <label for="{{ c.id }}">{{ c.libelle }}{% if c.requis or c.requis_si %} *{% endif %}
       {% if c.aide %}<span class="aide">— {{ c.aide }}</span>{% endif %}</label>
     {% if c.type == 'choix' %}
@@ -75,7 +76,7 @@
 </form>
 <script>
 document.addEventListener('DOMContentLoaded', function () {
-  // Champs conditionnels (requis_si) : masqués tant que la condition n'est pas
+  // Champs conditionnels (requis_si / visible_si) : masqués tant que la condition n'est pas
   // remplie. Le serveur revalide de toute façon ; ici c'est du confort.
   // Une date masquée n'est plus contrôlée (disabled) : un reste de saisie à moitié
   // tapé bloquerait l'envoi sur un `pattern` que personne ne voit. Les autres
