@@ -3,9 +3,9 @@
     python tests/test_import.py
 
 Un salarié dont le dossier était en ordre ailleurs (SharePoint) naît à
-RemisComptable, au même chemin qu'un dossier validé, fichiers sous leur nom
+RemisComptable, rangé comme un dossier validé, fichiers sous leur nom
 d'origine, sans pièce manquante, sans partir au récap hebdo du comptable.
-Rejouable, et un échec ne laisse rien. Écrit dans un dossier temporaire.
+Rejouable, et un échec ne laisse rien. Écrit dans une base vide.
 """
 import os
 import sys
@@ -15,11 +15,12 @@ from pathlib import Path
 
 sys.stdout.reconfigure(encoding="utf-8")
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from _outils import base_mongo  # noqa: E402
+base_mongo("import")
 TEMP = tempfile.mkdtemp(prefix="contratgen-import-")
 os.environ["DONNEES"] = TEMP
 
 import config   # noqa: E402
-import purger   # noqa: E402
 import recap    # noqa: E402
 import store    # noqa: E402
 
@@ -42,24 +43,23 @@ uid = store.importer(champs("Dupont", "Jean"), "sp:DUP", ENTREE, [
     f("pieces", "page.html", b"<script>"), f("pieces", LONG), f("pieces", 'a:b?.pdf'),
     f("contrat", "Contrat_de_travail.pdf")])
 item = store.lire(uid)
-d = Path(item["_dir"])
 
 # 1. au bon endroit, au bon état, journal d'import
-rel = d.relative_to(config.DONNEES).parts
-assert rel[0] == store.DOSSIERS and rel[-3:] == ("Lille Grand Place", "Manager", "DUPONT Jean"), rel
+rel = store._hierarchie(item)
+assert item["zone"] == "documents" and rel[1:] == ("Lille Grand Place", "Manager", "DUPONT Jean"), rel
 assert store.etat(item) == "RemisComptable"
 assert item["journal"][0]["type"] == "import" and item["journal"][0]["par"] == "rh"
 assert uid in {i["id"] for i in store.tout()}, "invisible pour /salaries"
 print("ok  dossier créé à RemisComptable :", "/".join(rel))
 
-# 2. fichiers sous leur nom d'origine, rien d'écrasé, noms sûrs et raccourcis
+# 2. fichiers sous leur nom d'origine, rien d'écrasé, noms sûrs
 pieces, contrat = store.fichiers(item, "pieces"), store.fichiers(item, "contrat")
 assert "CNI recto.jpg" in pieces and "CNI recto (2).jpg" in pieces, pieces
 assert "page.html" in pieces and "a-b-.pdf" in pieces, pieces
 assert contrat == ["Contrat_de_travail.pdf"], contrat
 longs = [p for p in pieces if p.startswith("Attestation")]
-assert len(longs) == 1 and longs[0].endswith(".pdf"), longs
-assert len(str(d / store.BUCKETS["pieces"] / longs[0])) <= 240, len(str(d / longs[0]))
+assert longs == [LONG], longs
+assert store.ouvrir(uid, "pieces", "CNI recto (2).jpg") == b"autre"
 print("ok  fichiers gardés tels quels :", len(pieces), "pièces,", len(contrat), "contrat")
 
 # 3. un dossier importé n'attend rien ; un dossier normal sans pièce, si
@@ -70,7 +70,18 @@ print("ok  aucune pièce manquante, aucun « signé manquant »")
 # 4. rejouable
 assert store.importer(champs("Dupont", "Jean"), "sp:DUP", ENTREE, []) is None
 assert sum(1 for i in store.tout() if i.get("import_cle") == "sp:DUP") == 1
-print("ok  second import de la même clé : rien")
+
+def concurrent():
+    # un second import de la même clé gagne la course entre la vérification et insert_one
+    store.db().dossiers.insert_one({"_id": "RIVAL", "import_cle": "sp:COURSE", "journal": []})
+    return b"%PDF x"
+
+
+fichiers_avant = store.db().fichiers.count_documents({})
+assert store.importer(champs("Course", "Eva"), "sp:COURSE", ENTREE, [("pieces", "a.pdf", concurrent)]) is None
+assert store.db().fichiers.count_documents({}) == fichiers_avant, "fichiers du perdant restés en base"
+store.db().dossiers.delete_one({"_id": "RIVAL"})
+print("ok  second import de la même clé : rien, même en course (index unique)")
 
 # 5. hors du récap hebdo du comptable, alors qu'il est daté d'aujourd'hui
 seuil = datetime.now(timezone.utc) - timedelta(days=7)
@@ -85,29 +96,36 @@ def casse():
     raise OSError("réseau coupé")
 
 
-avant = len(store.tout())
+avant, fichiers_avant = len(store.tout()), store.db().fichiers.count_documents({})
 try:
     store.importer(champs("Martin", "Lea"), "sp:MAR", ENTREE, [f("pieces", "ok.pdf"), ("pieces", "x.pdf", casse)])
     raise AssertionError("l'erreur devait remonter")
 except OSError:
     pass
-assert len(store.tout()) == avant and not any((config.DONNEES / store.IMPORT).glob("*"))
-assert purger.orphelins() == [], purger.orphelins()
+assert len(store.tout()) == avant and store.db().fichiers.count_documents({}) == fichiers_avant
 assert store.importer(champs("Martin", "Lea"), "sp:MAR", ENTREE, [f("pieces", "ok.pdf")])
 print("ok  échec : rien de créé, relance possible")
 
-# 7. un chantier abandonné (arrêt brutal) est vidé
-(config.DONNEES / store.IMPORT / "VIEUX").mkdir(parents=True)
-store.vider_imports()
-assert not (config.DONNEES / store.IMPORT).exists()
-print("ok  chantiers d'un import interrompu vidés")
+# 7. les fichiers d'un import interrompu (arrêt brutal) sont vidés après une heure
+vieux = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat(timespec="seconds")
+store.db().fichiers.insert_many([
+    {"uid": "VIEUX", "bucket": "pieces", "nom": "a.pdf", "octets": b"x", "le": vieux},
+    {"uid": "VIEUX", "bucket": "contrat", "nom": "b.pdf", "octets": b"x", "le": vieux},
+    {"uid": "RECENT", "bucket": "pieces", "nom": "a.pdf", "octets": b"x", "le": store.maintenant()}])
+store.db().fichiers.update_many({"uid": uid}, {"$set": {"le": vieux}})     # vieux, mais avec dossier
+gardes = store.db().fichiers.count_documents({"uid": uid})
+assert store.vider_orphelins() == 1
+assert not store.db().fichiers.count_documents({"uid": "VIEUX"}), "orphelin ancien gardé"
+assert store.db().fichiers.count_documents({"uid": "RECENT"}) == 1, "dépôt en cours effacé"
+assert store.db().fichiers.count_documents({"uid": uid}) == gardes, "fichiers d'un dossier effacés"
+store.db().fichiers.delete_many({"uid": "RECENT"})
+print("ok  fichiers d'un import interrompu vidés, dépôts en cours et dossiers intacts")
 
-# 8. le cycle de vie normal continue : départ -> LEAVERS
+# 8. le cycle de vie normal continue : départ -> Parti
 store.archiver(uid, "rh", "2026-10-01", "démission")
 parti = store.lire(uid)
-assert store.etat(parti) == "Parti"
-assert Path(parti["_dir"]).relative_to(config.DONNEES).parts[0] == store.LEAVERS
-print("ok  archivable en LEAVERS")
+assert store.etat(parti) == "Parti" and store.fichiers(parti, "pieces") == pieces
+print("ok  archivable (Parti), pièces gardées")
 
 # 9. un fichier importé hors liste blanche se télécharge, jamais inline
 import app  # noqa: E402
@@ -307,7 +325,7 @@ assert "Tous les salariés de ce dossier sont déjà importés" in s and "Import
 uid_ana = ana["id"]
 f = page(f"/dossier/{uid_ana}")
 assert "Déposer le contrat signé" not in f, "dépôt du contrat signé proposé sur un importé"
-assert "Refaire la copie et le lien" not in f, "envoi au cabinet proposé sur un importé"
+assert "Renvoyer le lien" not in f, "envoi au cabinet proposé sur un importé"
 assert "Date d'entrée" in f and "Contrat et documents" in f
 c.post(f"/dossier/{uid_ana}/renvoyer")
 assert not any(e.get("type") == "renvoi_comptable" for e in store.lire(uid_ana)["journal"]), "importé envoyé au cabinet"
@@ -421,7 +439,7 @@ if vrai_msal:
 assert not any("msal" in a for a in configurer.avertissements()), "contrôle : msal installé"
 sp._conn.clear()
 sp._conn["etat"] = "vierge"
-print("ok  déjà dans l'app décoché, > 50 Mo laissé à la RH, Leavers sous un poste ignoré, msal absent lisible")
+print("ok  déjà dans l'app décoché, > taille max laissé à la RH, Leavers sous un poste ignoré, msal absent lisible")
 
 # 20. cas limites de la revue du 11/10
 store.creer_soumission({"etablissement": ETAB, "nom_naissance": "Second", "prenom": "Ana"}, {})
@@ -457,7 +475,7 @@ for sid in ("S9", "S10"):
     sp._un_salarie(ETAB, SP_ETAB, {"id": sid, "nom": f"BORNE {sid}", "dossier": "x", "heures": "", "poste": ""},
                    arbre.get, "rh", set())
 sp.ouvrir, sp._import["etat"] = vrai_ouvrir, "fini"
-assert ouverts == ["L50", "NS"], "50 Mo pile ou taille absente : non importés"
+assert ouverts == ["L50", "NS"], "taille max pile ou taille absente : non importés"
 s10 = next(i for i in store.tout() if i.get("import_cle") == sp.cle("S10"))
 assert store.fichiers(s10, "pieces") == [] and len(sp._import["erreurs"]) == 1, sp._import
 assert "BORNE S10 : video.mp4 (60 Mo) non importé" in page(f"/etablissements/recuperer?cle={ETAB}"), \
@@ -476,22 +494,6 @@ sp._msal, sp.compte = None, lambda: "rh@acme.test"
 anciens = page("/salaries?anciens=1")                  # DUPONT : importé, archivé sans date d'entrée
 assert f"/dossier/{uid}" in anciens and "à compléter" not in anciens, \
     "ancien « à compléter » alors que la date ne se saisit plus après l'archivage"
-print("ok  homonyme importable, nom unique, bornes 50 Mo, dossier tout trop gros, msal retiré sans 500")
-
-# 21. disque presque plein (stockage sur un VPS) : l'import s'arrête net, avant d'écrire, et reprend ensuite
-import shutil  # noqa: E402
-
-ARBRE["EQ"] += [D("DISQUE Un", "SD1"), D("DISQUE Deux", "SD2")]
-ARBRE["SD1"] = ARBRE["SD2"] = []
-vrai_disk = shutil.disk_usage
-shutil.disk_usage = lambda p: types.SimpleNamespace(total=0, used=0, free=sp.MARGE_DISQUE // 2)
-assert sp.lancer_import(ETAB, SP_ETAB, ["SD1", "SD2"], "rh")
-av = attendre()
-shutil.disk_usage = vrai_disk
-assert (av["crees"], av["fait"]) == (0, 0) and len(av["erreurs"]) == 1, av
-assert av["erreurs"][0].startswith("Espace disque insuffisant"), av["erreurs"]
-assert sp.lancer_import(ETAB, SP_ETAB, ["SD1", "SD2"], "rh")
-assert attendre()["crees"] == 2, "relance après libération de place"
-print("ok  disque presque plein : import arrêté avant d'écrire, relance possible")
+print("ok  homonyme importable, nom unique, bornes de taille, dossier tout trop gros, msal retiré sans 500")
 
 print("\nOK test_import")

@@ -25,6 +25,8 @@ BASE = Path(tempfile.mkdtemp(prefix="contratgen-doctor-"))
 os.environ["CONFIG_DIR"] = str(BASE / "config")
 os.environ["DONNEES"] = str(BASE / "data")
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from _outils import base_mongo  # noqa: E402
+base_mongo("doctor")
 
 from werkzeug.security import generate_password_hash          # noqa: E402
 import config                                                 # noqa: E402

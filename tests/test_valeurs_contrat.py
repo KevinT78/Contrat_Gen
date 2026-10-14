@@ -32,6 +32,8 @@ sys.stdout.reconfigure(encoding="utf-8")
 sys.stderr.reconfigure(encoding="utf-8")
 RACINE = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(RACINE))
+from _outils import base_mongo  # noqa: E402
+base_mongo("valeurs_contrat")
 
 TMP = Path(tempfile.mkdtemp(prefix="contratgen-valeurs-"))
 CLIENT = TMP / "config"

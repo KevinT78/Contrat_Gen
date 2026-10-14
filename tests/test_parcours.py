@@ -2,24 +2,28 @@
 
     python tests/test_parcours.py
 
-Écrit dans un dossier temporaire, ne touche jamais data/.
+Écrit dans une base vide (mongomock par défaut) et un dossier temporaire
+(mails), ne touche jamais data/.
   - couloir Dark Kitchen : Lille Grand Place, contrat généré
   - couloir Restaurant   : Marseille Prado, contrat déposé
 Contrat signé non bloquant, déposé après la remise sans changer d'état. Fiche salarié générée dans contrat/ dès la
 validation. recap.py liste le salarié de la semaine. Plus les refus attendus.
 """
+import copy
 import email
 import os
 import re
 import sys
 import tempfile
-import zipfile
 from datetime import date
 from io import BytesIO
 from pathlib import Path
+from zipfile import ZipFile
 
 sys.stdout.reconfigure(encoding="utf-8")
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from _outils import base_mongo  # noqa: E402
+base_mongo("parcours")
 TEMP = tempfile.mkdtemp(prefix="contratgen-test-")
 os.environ["DONNEES"] = TEMP
 
@@ -78,15 +82,15 @@ def piece_refusee(_c):
     Client dédié : l'erreur met les bonnes pièces de côté (brouillon), rien ne
     doit fuiter dans la session d'un appelant qui réutilise son client."""
     c = app.test_client()
-    avant = {d.name for d in (config.DONNEES / "soumissions").glob("*/")}
+    avant = (store.db().dossiers.count_documents({}), store.db().fichiers.count_documents({}))
     r = c.post("/", data={**base_saisie("ACME Restauration / Lille Grand Place"),
                           "identite": piece(), "carte_vitale": piece(),
                           "rib": (BytesIO(b"PK"), "rib.docx")},
                content_type="multipart/form-data")
     assert r.status_code == 200 and "format .docx refusé" in r.text, \
         (r.status_code, r.text[:300])
-    apres = {d.name for d in (config.DONNEES / "soumissions").glob("*/")}
-    assert apres == avant, f"soumission orpheline créée : {apres - avant}"
+    apres = (store.db().dossiers.count_documents({}), store.db().fichiers.count_documents({}))
+    assert apres == avant, f"soumission ou pièces orphelines créées : {avant} -> {apres}"
 
 
 def couloir_dark_kitchen(c):
@@ -107,20 +111,16 @@ def couloir_dark_kitchen(c):
                            "rib": piece()}, content_type="multipart/form-data")
     assert "Correction envoyée" in r.text
     assert c.get(lien).status_code == 410, "lien de correction encore vivant"
-    assert (Path(store.lire(uid)["_dir"]) / "_versions").is_dir(), "re-dépôt non archivé"
+    assert store.fichiers(store.lire(uid), "_versions"), "re-dépôt non archivé"
 
     # validation -> dossier + fiche salarié + contrat généré dans la foulée
     c.post(f"/dossier/{uid}/valider")
     item = store.lire(uid)
-    assert item["_zone"] == "documents" and store.etat(item) == "ContratPret"
+    assert item["zone"] == "documents" and store.etat(item) == "ContratPret"
     assert dernier_mail("demande_validee").startswith("rh@example.com\n"), \
         "établissement sans manager_email : l'avis de validation doit aller à mails.rh"
-    assert Path(item["_dir"]).relative_to(config.DONNEES).as_posix() == \
-        "DOSSIERS SALARIES/DARK KITCHENS/Lille Grand Place/Manager/MARTIN Camille", item["_dir"]
-    assert store.chemin(uid, "pieces").name == "FICHE PERSONNELLE"
-    assert store.chemin(uid, "contrat").name == "CONTRAT"
-    store._carte.clear()                      # uid -> chemin par le seul disque
-    assert store.lire(uid)["_dir"] == item["_dir"], "scan de resolution KO"
+    assert store._hierarchie(item) == ("DARK KITCHENS", "Lille Grand Place", "Manager",
+                                       "MARTIN Camille"), store._hierarchie(item)
     # dossier validé : noms lisibles « <Libellé> - NOM Prénom.ext »
     assert store.fichiers_role(item, "pieces", "fiche-salarie") == \
         ["Fiche salarié - MARTIN Camille.docx"], store.fichiers(item, "pieces")
@@ -146,7 +146,7 @@ def couloir_dark_kitchen(c):
     import contrat as moteur
     nom_ct = store.fichiers_role(item, "contrat", "contrat")[0]
     assert nom_ct == "Contrat - MARTIN Camille.docx", nom_ct
-    doc = Document(str(store.chemin(item["id"], "contrat", nom_ct)))
+    doc = Document(BytesIO(store.ouvrir(item["id"], "contrat", nom_ct)))
     texte = "\n".join(p.text for p in moteur.paragraphes(doc))
     assert "{{" not in texte, "contrat troué"
     for attendu in ("Camille MARTIN", "1er octobre 2026", "2450",
@@ -160,22 +160,19 @@ def couloir_dark_kitchen(c):
            content_type="multipart/form-data")
     assert store.etat(store.lire(uid)) == "DpaeFaite"
 
-    # remise : plus de mail par dossier -- copie dans data/compta/, lien dans
-    # le mail hebdo. Le lot porte contrat, fiche salarié, accusé.
+    # remise : plus de mail par dossier, lien dans le mail hebdo. Le lot porte
+    # contrat, fiche salarié, accusé, chacun renommé « <libellé> - Nom - date ».
     c.post(f"/dossier/{uid}/remettre")
     item = store.lire(uid)
     assert store.etat(item) == "RemisComptable"
     assert not list((config.DONNEES / "mails").glob("*-avis_comptable.eml")), \
         "un mail par dossier est encore parti à la remise"
-    # Arbo COMPTA : profonde (GROUPE/ETABLISSEMENT/POSTE/NOM PRENOM - id) et en
-    # capitales sans accents ; chaque fichier renommé « <libellé> - Nom - date ».
-    copie = (config.DONNEES / "COMPTA" / "DARK KITCHENS" / "LILLE GRAND PLACE"
-             / "MANAGER" / f"MARTIN CAMILLE - {uid}")
-    assert copie.is_dir(), f"arbo compta absente : {copie}"
-    attendu = sorted(f"{store.BUCKETS_COMPTA[b]}/{store.nom_export(item, b, n)}"
+    attendu = sorted(f"{store.BUCKETS[b]}/{store.nom_export(item, b, n)}"
                      for b in ("pieces", "contrat") for n in store.fichiers(item, b))
-    presents = sorted(p.relative_to(copie).as_posix()
-                      for p in copie.rglob("*") if p.is_file())
+    lot = "http://localhost/lot/" + store.signer("lot_comptable", uid,
+                                                 item.get("lien_comptable_epoch", 0))
+    anonyme = app.test_client()
+    presents = sorted(ZipFile(BytesIO(anonyme.get(lot + "/zip").data)).namelist())
     assert presents == attendu, (presents, attendu)
     assert all(re.search(r" - MARTIN Camille - \d{4}-\d{2}-\d{2}\.\w+$", n)
                for n in presents), presents
@@ -184,11 +181,6 @@ def couloir_dark_kitchen(c):
     assert remise.get("jour") == date.today().isoformat(), remise
     assert all(f" - {date.today().isoformat()}." in n for n in presents), presents
     assert {"FICHE PERSONNELLE", "CONTRAT"} == {n.split("/")[0] for n in presents}
-    lot = "http://localhost/lot/" + store.signer("lot_comptable", uid,
-                                                 item.get("lien_comptable_epoch", 0))
-    anonyme = app.test_client()
-    z = zipfile.ZipFile(BytesIO(anonyme.get(lot + "/zip").data))
-    assert sorted(z.namelist()) == attendu, z.namelist()
 
     # Le lot est public (possession du lien = accès) et un contrat peut être un
     # .html rempli de valeurs venues du formulaire public, sans échappement :
@@ -236,7 +228,6 @@ def couloir_restaurant(c):
     c.post(f"/dossier/{uid}/remettre")
     item = store.lire(uid)
     assert store.etat(item) == "RemisComptable"
-    assert (config.DONNEES / "COMPTA" / "RESTAURANTS" / "MARSEILLE PRADO").is_dir()
     return uid
 
 
@@ -297,33 +288,10 @@ def dpae_sans_signature(c):
 
 
 def depart_leaver(c, uid):
-    """Départ d'un salarié remis au comptable : déplacement réel vers LEAVERS/,
-    rejouable si l'écriture du journal échoue APRÈS le move (disque plein...),
+    """Départ d'un salarié remis au comptable : état Parti, pièces gardées,
     visible seulement dans /salaries?anciens=1, écran détail sans 500, et un
     second archivage refusé proprement une fois Parti (pas de 500)."""
-    item = store.lire(uid)
-    avant = Path(item["_dir"])
-    rel = avant.relative_to(config.DONNEES / store.DOSSIERS)
-
-    # Rejouable (store.archiver) : un echec d'ecriture apres le move laisse le
-    # dossier sous LEAVERS/ mais encore a RemisComptable -- le second appel ne
-    # doit pas re-deplacer, seulement rejouer l'ecriture.
-    reel_ecrire = store._ecrire
-    store._ecrire = lambda *a: (_ for _ in ()).throw(OSError("disque plein (test)"))
-    try:
-        try:
-            store.archiver(uid, "test", "2026-09-30")
-            assert False, "l'échec d'écriture simulé n'a pas levé"
-        except OSError:
-            pass
-    finally:
-        store._ecrire = reel_ecrire
-    store._carte.clear()
-    item = store.lire(uid)
-    assert store.etat(item) == "RemisComptable", "état changé malgré l'échec d'écriture"
-    assert Path(item["_dir"]) == config.DONNEES / store.LEAVERS / rel, \
-        "dossier non déplacé malgré l'échec d'écriture"
-    assert not avant.exists(), "ancien répertoire encore présent"
+    pieces = store.fichiers(store.lire(uid), "pieces")
 
     c.post(f"/dossier/{uid}/archiver", data={"date_sortie": "31/02/2026"})
     assert store.etat(store.lire(uid)) == "RemisComptable", "date de sortie impossible acceptée"
@@ -331,9 +299,7 @@ def depart_leaver(c, uid):
     item = store.lire(uid)
     assert store.etat(item) == "Parti", item["journal"][-1]
     assert store.date_sortie(item) == "2026-09-30", "date de sortie saisie jj/mm/aaaa mal stockée"
-    assert not avant.exists(), "ancien répertoire encore sous DOSSIERS SALARIES"
-    apres = Path(item["_dir"])
-    assert apres == config.DONNEES / store.LEAVERS / rel, apres
+    assert store.fichiers(item, "pieces") == pieces, "pièces perdues à l'archivage"
 
     assert c.get("/suivi").text.find(uid) == -1, "encore visible dans /suivi"
     assert uid not in c.get("/salaries").text, "encore dans les salariés en poste"
@@ -345,7 +311,44 @@ def depart_leaver(c, uid):
     r = c.post(f"/dossier/{uid}/archiver", data={"date_sortie": "2026-10-01"},
                follow_redirects=True)
     assert r.status_code == 200, "second archivage : 500 au lieu d'un refus propre"
-    assert store.etat(store.lire(uid)) == "Parti"
+    journal = store.lire(uid)["journal"]
+    assert journal[-1]["vers"] == "Parti"
+    assert sum(e["vers"] == "Parti" for e in journal) == 1, journal
+
+
+def cas_double_dpae():
+    """Deux écrivains sur le même dossier : le second a lu l'état AVANT
+    l'écriture du premier. Le compare-and-swap de store._journaliser le force à
+    relire : une seule entrée DpaeFaite, et le second lève « transition
+    interdite » au lieu d'écrire par-dessus."""
+    champs = {config.role("nom_naissance"): "Martin", config.role("prenom"): "Camille",
+              config.role("etablissement"): "ACME Restauration / Lille Grand Place",
+              config.role("poste"): "Manager"}
+    uid = store.creer_soumission(champs, {})
+    store.valider(uid, "test")
+    store.transition(uid, "ContratPret", "test")
+    perime = store.lire(uid)
+    store.transition(uid, "DpaeFaite", "test")
+    vrai, servi = store.lire, []
+
+    def lire_perime(u):
+        if not servi:
+            servi.append(u)
+            return copy.deepcopy(perime)
+        return vrai(u)
+
+    store.lire = lire_perime
+    try:
+        store.transition(uid, "DpaeFaite", "test")
+        leve = None
+    except ValueError as e:
+        leve = e
+    finally:
+        store.lire = vrai
+    journal = store.lire(uid)["journal"]
+    assert servi, "l'item périmé n'a pas été servi : le test ne prouve rien"
+    assert sum(e["vers"] == "DpaeFaite" for e in journal) == 1, journal
+    assert leve and "transition interdite" in str(leve), leve
 
 
 def fiche_generique_sans_cle(c):
@@ -360,7 +363,7 @@ def fiche_generique_sans_cle(c):
         assert noms, "fiche générique non produite"
         from docx import Document
         import contrat as moteur
-        doc = Document(str(store.chemin(uid, "pieces", noms[0])))
+        doc = Document(BytesIO(store.ouvrir(uid, "pieces", noms[0])))
         texte = "\n".join(p.text for p in moteur.paragraphes(doc))
         assert "{{" not in texte, "fiche générique trouée"
         # NumeroSecu / Adresse : synonymes de NumSS / Domicile dans le modele
@@ -403,7 +406,7 @@ def contrat_peut_citer_les_pieces_jointes(c):
         from docx import Document
         import contrat as moteur
         texte = "\n".join(p.text for p in moteur.paragraphes(
-            Document(str(store.chemin(uid, "contrat", noms[0])))))
+            Document(BytesIO(store.ouvrir(uid, "contrat", noms[0])))))
         assert "{{" not in texte, f"contrat troué : {texte}"
         assert "Pièces fournies :" in texte, texte
     finally:
@@ -495,6 +498,7 @@ def main():
     dpae_sans_signature(c)
     recap_liste_la_semaine([dk, resto])
     depart_leaver(c, dk)               # apres recap : Parti sort de remis_depuis()
+    cas_double_dpae()
 
     # lien forgé
     anonyme = app.test_client()

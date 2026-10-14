@@ -18,6 +18,8 @@ from pathlib import Path
 sys.stdout.reconfigure(encoding="utf-8")
 sys.stderr.reconfigure(encoding="utf-8")
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from _outils import base_mongo  # noqa: E402
+base_mongo("login")
 os.environ["DONNEES"] = tempfile.mkdtemp(prefix="contratgen-login-")
 os.environ["PROXIES"] = "1"        # ce fichier teste la config « derriere Caddy »
 

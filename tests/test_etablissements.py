@@ -47,6 +47,8 @@ HASH = ("pbkdf2:sha256:1000000$fzF3PX6YMJA6xP2K$"
 }], ensure_ascii=False), encoding="utf-8")
 
 sys.path.insert(0, str(RACINE))
+from _outils import base_mongo  # noqa: E402
+base_mongo("etablissements")
 import config  # noqa: E402
 from app import app  # noqa: E402
 

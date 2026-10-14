@@ -14,6 +14,8 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from _outils import base_mongo  # noqa: E402
+base_mongo("login_sans_proxy")
 os.environ["DONNEES"] = tempfile.mkdtemp(prefix="contratgen-noproxy-")
 os.environ.pop("PROXIES", None)
 

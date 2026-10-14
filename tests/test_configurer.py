@@ -21,6 +21,8 @@ BASE = Path(tempfile.mkdtemp(prefix="contratgen-configurer-"))
 CONF = BASE / "config"
 (CONF / "contrats").mkdir(parents=True)
 sys.path.insert(0, str(RACINE))
+from _outils import base_mongo  # noqa: E402
+base_mongo("configurer")
 
 from werkzeug.security import generate_password_hash, check_password_hash  # noqa: E402
 

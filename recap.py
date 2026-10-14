@@ -92,9 +92,8 @@ def par_cabinet(items):
 
 def lire_etat():
     """{cabinet: {"depuis": iso, "echec": {"le", "motif", "nombre"}?}} -- ecrit
-    par recap.py SEUL, lu par l'app (bandeau Salaries). Jamais dans dossier.json :
-    recap.py tourne dans un second process, et store._verrou n'exclut que les
-    threads d'un meme process (une entree de journal y serait perdue)."""
+    par recap.py SEUL, lu par l'app (bandeau Salaries). Jamais dans un dossier :
+    l'etat d'envoi est celui du cabinet, pas d'un salarie."""
     f = config.RECAP_ETAT
     try:
         return json.loads(f.read_text(encoding="utf-8"))

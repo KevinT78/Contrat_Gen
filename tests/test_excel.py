@@ -19,6 +19,8 @@ from xml.sax.saxutils import escape
 
 sys.stdout.reconfigure(encoding="utf-8")
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from _outils import base_mongo  # noqa: E402
+base_mongo("excel")
 os.environ["DONNEES"] = tempfile.mkdtemp(prefix="contratgen-excel-")
 
 import config   # noqa: E402
@@ -483,10 +485,8 @@ r = post(**{f"{leroy}:nom_prenom": "PIRATE", f"{leroy}:etablissement": AUTRE, f"
             f"{leroy}:telephone": "   "})
 d = store.lire(leroy)["champs"]
 assert d["nom_prenom"] == "LEROY Ana" and d["etablissement"] == ETAB and d["telephone"] == "", "espaces = vide"
-with store._verrou(nouveau):                                 # valeurs anciennes hors format
-    it = store.lire(nouveau)
-    it["champs"].update(date_naissance="1er mai 1990", poste="Assistant manager")
-    store._ecrire(store._rep(it), it)
+store.db().dossiers.update_one({"_id": nouveau}, {"$set": {      # valeurs anciennes hors format
+    "champs.date_naissance": "1er mai 1990", "champs.poste": "Assistant manager"}})
 s = page(c.get(f"/etablissements/completer?cle={ETAB}"))
 assert "Assistant manager (hors liste)" in s, "choix hors liste affiché vide"
 assert 'value="1er mai 1990"' in s
@@ -511,10 +511,8 @@ print("ok  rattachement : autre établissement ignoré, valeur forgée = 422 ré
 # 9h. fiche : parti, purgé, inconnu ; établissement retiré de la config
 assert c.post(f"/dossier/{martin2}/fiche").status_code == 400, "fiche sur un Parti"
 assert c.post("/dossier/INCONNU/fiche").status_code == 404
-with store._verrou(martin1):
-    it = store.lire(martin1)
-    it["purge"] = {"le": store.maintenant(), "jours": 0}
-    store._ecrire(store._rep(it), it)
+store.db().dossiers.update_one({"_id": martin1},
+                               {"$set": {"purge": {"le": store.maintenant(), "jours": 0}}})
 assert c.post(f"/dossier/{martin1}/fiche").status_code == 400, "fiche sur un purgé"
 assert f"/dossier/{martin1}" not in page(c.get(f"/etablissements/completer?cle={ETAB}")), "purgé listé"
 vrai_mentions = config.mentions

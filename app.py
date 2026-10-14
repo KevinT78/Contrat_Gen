@@ -56,16 +56,12 @@ CONTRAT_EXT = {".pdf", ".docx"}          # contrat venu du logiciel RH / PDF sig
 # disque) et /login. Pas de captcha (le vrai destinataire du formulaire est un
 # manager, pas un spammeur), mais un minimum de garde-fou contre bots et flood.
 #
-# MONO-PROCESS IMPOSE : ces pots -- comme store._verrou -- vivent en memoire.
-# Sous plusieurs process les plafonds seraient divises d'autant, et pire,
-# store._verrou cesserait d'exclure quoi que ce soit (perte d'entrees de
-# journal). C'est pourquoi `python app.py` demarre waitress, mono-process par
-# construction (voir le bas de ce fichier). Attention : `app` reste un objet
-# WSGI importable, donc `gunicorn app:app` ou `waitress-serve --processes=N`
-# cassent l'invariant SANS RIEN SIGNALER -- il est tenu par la facon de
-# lancer, pas par le code. Passer a plusieurs process exige d'abord un verrou
-# fichier dans store et un compteur partage ici.
-# Voir le meme avertissement a store._verrou.
+# Ces pots vivent en memoire, comme l'etat d'import/connexion SharePoint et
+# le cache de config. `python app.py` demarre waitress, mono-process. Sous
+# plusieurs process (`gunicorn app:app`...), aucune donnee ne se perd (le
+# journal s'ecrit par compare-and-swap en base, cf. store._journaliser) : les
+# plafonds sont seulement multiplies par le nombre de process, et la
+# progression d'un import SharePoint n'est visible que du process qui le mene.
 _POT_PAR_IP = defaultdict(list)          # formulaire public : {ip: [timestamps]}
 _FENETRE = 300                           # 5 minutes
 _PLAFOND = 10                            # max soumissions / fenetre
@@ -1308,7 +1304,7 @@ def _avis_manager_validee(item):
 
 def _rappel_dpae(item):
     """Effet de la validation, pas un etat : le rappel part dans la meme requete
-    (pas de cron = pas de second process ecrivain, cf. store._verrou), avec les
+    (pas de cron a deployer), avec les
     donnees que la DPAE reclame et qui sont deja dans le dossier."""
     conf = config.instance()["mails"]
     champs = item["champs"]
@@ -1580,15 +1576,12 @@ def dpae_faite(uid):
 @app.post("/dossier/<uid>/remettre")
 @rh
 def remettre(uid):
-    # Plus de mail par dossier : la remise DUPLIQUE le dossier dans data/compta/
-    # et le cabinet recoit un seul mail hebdomadaire (recap.py) avec un lien
-    # de lot par dossier remis dans la semaine.
-    item = _transition(uid, "RemisComptable")
-    if not item:
+    # Plus de mail par dossier : le cabinet recoit un seul mail hebdomadaire
+    # (recap.py) avec un lien de lot par dossier remis dans la semaine. Le lot
+    # se construit a la demande depuis les pieces du dossier.
+    if not _transition(uid, "RemisComptable"):
         return redirect(url_for("detail", uid=uid))
-    dest = store.copier_compta(item)
-    flash(f"Dossier remis au cabinet comptable — copie dans "
-          f"{dest.relative_to(config.DONNEES)}.", "popup")
+    flash("Dossier remis au cabinet comptable.", "popup")
     flash("Le cabinet recevra le lien dans le mail hebdomadaire ; le salarié est "
           "désormais dans « Salariés ».", "popup")
     return redirect(url_for("suivi"))               # pop-up par-dessus le Suivi d'embauche
@@ -1602,10 +1595,9 @@ def renvoyer(uid):
         flash("Dossier importé : il ne part pas au cabinet comptable.", "erreur")
         return redirect(url_for("detail", uid=uid))
     store.bump_epoch(uid, "lien_comptable_epoch")             # tue l'ancien lien
-    # noter AVANT la copie : nom_export lit la date du dernier renvoi dans le journal.
+    # nom_export date les fichiers du lot par ce renvoi (dernier du journal)
     store.noter(uid, type="renvoi_comptable", par=session["utilisateur"])
-    store.copier_compta(store.lire(uid))
-    flash("Copie refaite, l'ancien lien est révoqué ; le dossier repartira dans "
+    flash("Nouveau lien prêt, l'ancien est révoqué ; le dossier repartira dans "
           "le prochain mail hebdomadaire.", "ok")
     return redirect(url_for("detail", uid=uid))
 
@@ -1613,8 +1605,8 @@ def renvoyer(uid):
 @app.post("/dossier/<uid>/archiver")
 @rh
 def archiver(uid):
-    """Depart du salarie : deplace le dossier vers LEAVERS/ (onglet « Anciens
-    salariés »). Terminal, comme abandonner()."""
+    """Depart du salarie : etat Parti (onglet « Anciens salariés »).
+    Terminal, comme abandonner()."""
     date_sortie = _date_iso((request.form.get("date_sortie") or "").strip())
     if not date_sortie:
         flash("La date de sortie est obligatoire, au format jj/mm/aaaa.", "erreur")
@@ -1625,7 +1617,7 @@ def archiver(uid):
     except ValueError as e:
         flash(str(e), "erreur")
         return redirect(url_for("detail", uid=uid))
-    flash("Départ enregistré, dossier archivé dans LEAVERS.", "ok")
+    flash("Départ enregistré, dossier archivé dans les anciens salariés.", "ok")
     return redirect(url_for("detail", uid=uid))
 
 
@@ -1698,8 +1690,7 @@ def lot(jeton):
 def lot_zip(jeton):
     item = store.verifier_lien(jeton, "lot_comptable") or abort(410)
     store.noter(item["id"], type="acces_lot", par=None, ip=request.remote_addr)
-    # Le zip entier est assemble en RAM (tampon) avant l'envoi -- c'etait deja
-    # le cas quand on streamait depuis le disque. z.writestr ajoute au pic, le
+    # Le zip entier est assemble en RAM (tampon) avant l'envoi. z.writestr ajoute au pic, le
     # temps d'une iteration, un fichier decompresse (<= store.TAILLE_MAX, 15 Mo).
     # simplification volontaire : suffisant a 1-2 utilisateurs et lien par
     # dossier ; passer a un flux (store + z.open) si le lot grossit.
@@ -1707,7 +1698,7 @@ def lot_zip(jeton):
     with zipfile.ZipFile(tampon, "w", zipfile.ZIP_DEFLATED) as z:
         for bucket in ("pieces", "contrat"):        # jamais _versions
             for nom in store.fichiers_compta(item, bucket):
-                z.writestr(f"{store.BUCKETS_COMPTA[bucket]}/{store.nom_export(item, bucket, nom)}",
+                z.writestr(f"{store.BUCKETS[bucket]}/{store.nom_export(item, bucket, nom)}",
                            store.ouvrir(item["id"], bucket, nom))
     tampon.seek(0)
     return send_file(tampon, mimetype="application/zip", as_attachment=True,
@@ -1724,11 +1715,10 @@ def lot_fichier(jeton, bucket, nom):
 
 
 # --- verrou multi-machine ----------------------------------------------
-# store._verrou n'exclut qu'a l'interieur d'un process : deux serveurs pointes
-# sur le meme stockage (trivial avec un dossier synchronise) perdent des
-# entrees de journal EN SILENCE. Trois champs et un horodatage previennent
-# l'erreur de deploiement -- pas portalocker : on ne cherche pas a arbitrer une
-# course, juste a refuser un second demarrage.
+# Herite du stockage disque, retire avec DONNEES (lot 3 de la bascule Mongo) :
+# refuse un second serveur sur le meme dossier de donnees (recap, mails, jeton
+# SharePoint y vivent encore). Trois champs et un horodatage -- on ne cherche
+# pas a arbitrer une course, juste a refuser un second demarrage.
 _VERROU_TTL = 300          # s : verrou d'une AUTRE machine, non sondable -> perime
                            # au-dela. Sur la meme machine, la mort du pid tranche.
 
@@ -1826,6 +1816,7 @@ def demarrer():
     # ressemble a un dossier synchronise. Le garde-fou constate, il ne repare pas.
     for zone in ("soumissions", store.DOSSIERS):
         (config.DONNEES / zone).mkdir(parents=True, exist_ok=True)
+    store.vider_orphelins()
     port = int(os.environ.get("PORT", 5000))
     if os.environ.get("DEBUG"):
         # Developpement local seulement : serveur Werkzeug + debugger interactif.
@@ -1840,9 +1831,8 @@ def demarrer():
         _verrou_serveur()
         # Production : waitress. Choisi plutot que gunicorn parce qu'il tourne
         # aussi sous Windows (gunicorn depend de fcntl, absent la) et surtout
-        # parce qu'il est MONO-PROCESS multi-thread par construction : la
-        # contrainte de store._verrou est alors garantie par le serveur, pas
-        # par un drapeau qu'un fichier de service peut ecraser.
+        # parce qu'il est MONO-PROCESS multi-thread par construction : les
+        # plafonds de rate-limit en memoire restent exacts (cf. _POT_PAR_IP).
         from waitress import serve
         # 127.0.0.1 par defaut, comme app.run() avant lui : l'app se sert
         # DERRIERE un reverse proxy qui porte le TLS, elle ne s'expose pas

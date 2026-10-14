@@ -42,6 +42,8 @@ INSTANCE = {
     json.dumps(LOCALE, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from _outils import base_mongo  # noqa: E402
+base_mongo("supabase_societes")
 import config  # noqa: E402
 
 DISTANT = [{

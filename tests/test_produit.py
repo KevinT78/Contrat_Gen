@@ -26,6 +26,8 @@ BASE = Path(tempfile.mkdtemp(prefix="contratgen-produit-"))
 os.environ["CONFIG_DIR"] = str(BASE / "config")
 os.environ["DONNEES"] = str(BASE / "data")
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from _outils import base_mongo  # noqa: E402
+base_mongo("produit")
 
 from werkzeug.security import generate_password_hash          # noqa: E402
 import apparence                                              # noqa: E402
@@ -724,9 +726,8 @@ def test_theme_atteint_la_page_et_les_fichiers_sont_servis():
 
 
 def test_second_serveur_sur_le_meme_stockage_refuse():
-    """store._verrou est intra-process : deux serveurs sur le même stockage
-    perdent des entrées de journal en silence. Le fichier .serveur-actif.json
-    refuse le second démarrage tant qu'il est frais."""
+    """Deux serveurs sur le même dossier de données : le fichier
+    .serveur-actif.json refuse le second démarrage tant qu'il est frais."""
     ecrire()
     config.DONNEES.mkdir(parents=True, exist_ok=True)
     import app as application

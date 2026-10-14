@@ -15,6 +15,8 @@ from pathlib import Path
 sys.stdout.reconfigure(encoding="utf-8")
 sys.stderr.reconfigure(encoding="utf-8")
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from _outils import base_mongo  # noqa: E402
+base_mongo("ecrans")
 os.environ["DONNEES"] = tempfile.mkdtemp(prefix="contratgen-ecrans-")
 
 import config          # noqa: E402
@@ -194,10 +196,10 @@ def main():
     ancien = soumettre(c, ETAB_DEPOSE)
     c.post(f"/dossier/{ancien}/valider")
     c.post(f"/dossier/{ancien}/contrat-depose", data={"contrat": piece()}, **fichier)
-    item = store.lire(ancien)
-    item["journal"].append({"de": "ContratPret", "vers": "ContratSigne",
-                            "le": store.maintenant(), "par": "rh"})
-    store._ecrire(Path(item["_dir"]), item)
+    store.db().dossiers.update_one({"_id": ancien}, {
+        "$push": {"journal": {"de": "ContratPret", "vers": "ContratSigne",
+                              "le": store.maintenant(), "par": "rh"}},
+        "$set": {"etat": "ContratSigne"}})
     assert store.etat(store.lire(ancien)) == "ContratSigne"
     texte = ecran(c, f"/dossier/{ancien}")
     frise = etapes(texte)

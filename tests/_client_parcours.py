@@ -17,6 +17,8 @@ from pathlib import Path
 RACINE = sys.argv[1]
 SPEC = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
 sys.path.insert(0, RACINE)
+from _outils import base_mongo  # noqa: E402
+base_mongo("client_parcours")
 sys.stdout.reconfigure(encoding="utf-8")
 
 import config          # noqa: E402
@@ -95,7 +97,7 @@ def couloir(c, etab, mode, poste, attendus):
     if not config.instance().get("fiche_salarie"):
         from docx import Document
         import contrat as moteur
-        doc = Document(str(store.chemin(item["id"], "pieces", noms_fiche[0])))
+        doc = Document(io.BytesIO(store.ouvrir(item["id"], "pieces", noms_fiche[0])))
         texte = "\n".join(p.text for p in moteur.paragraphes(doc))
         assert "{{" not in texte, "fiche générique trouée"
         # etab = « Societe / Etablissement » : la fiche montre l'etablissement
@@ -106,7 +108,7 @@ def couloir(c, etab, mode, poste, attendus):
         from docx import Document
         import contrat as moteur
         nom_ct = store.fichiers_role(item, "contrat", "contrat")[0]
-        doc = Document(str(store.chemin(item["id"], "contrat", nom_ct)))
+        doc = Document(io.BytesIO(store.ouvrir(item["id"], "contrat", nom_ct)))
         texte = "\n".join(p.text for p in moteur.paragraphes(doc))
         assert "{{" not in texte, "contrat troué"
         for a in attendus:
@@ -141,8 +143,6 @@ def couloir(c, etab, mode, poste, attendus):
     from urllib.parse import quote
     assert anonyme.get(f"/lot/{jeton}/fichier/contrat/{quote(signe[0])}").status_code == 404, \
         "contrat signé téléchargeable par le lien du cabinet"
-    copie = store.copier_compta(item)
-    assert not (copie / "CONTRAT" / export).exists(), "contrat signé copié dans COMPTA/"
     lot = html.unescape(anonyme.get(f"/lot/{jeton}").text)
     assert poste in lot and etab in lot, "page du lot comptable : champ lu en dur"
     assert "Contrat signé" not in lot, "contrat signé listé sur la page du lot"

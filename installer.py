@@ -50,8 +50,7 @@ def main(nom, cible, drive=None):
                      f"dossier répliqué par le client de synchronisation.")
         drive.mkdir(exist_ok=True)
         # Meme refus que sur config/ : deux instances sur le meme dossier drive
-        # fusionneraient leurs dossiers salaries, et `store._verrou` ne protege
-        # qu'a l'interieur d'un process -- entrees de journal perdues.
+        # y melangeraient leurs fichiers d'etat (recap, mails, jeton SharePoint).
         if any(drive.iterdir()):
             sys.exit(f"{drive} n'est pas vide — donnez un dossier neuf : "
                      f"deux instances sur le même dossier perdraient des données.")

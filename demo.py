@@ -27,6 +27,9 @@ RACINE = Path(__file__).resolve().parent
 os.environ.setdefault("CONFIG_DIR", str(RACINE / "config.demo"))
 os.environ.setdefault("DONNEES", str(RACINE / "data_demo"))
 os.environ.setdefault("PORT", "5000")
+# base en memoire (requirements-dev.txt), videe a chaque lancement ; un MONGO_URI deja pose gagne
+os.environ.setdefault("MONGO_URI", "mongomock://")
+os.environ.setdefault("MONGO_DB", "contratgen-demo")
 sys.stdout.reconfigure(encoding="utf-8")
 # stderr AUSSI : le refus ci-dessous part par sys.exit(), donc sur stderr, et
 # sortirait en cp1252 illisible des que la sortie n'est pas un vrai terminal.

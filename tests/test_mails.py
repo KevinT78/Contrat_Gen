@@ -19,6 +19,8 @@ from pathlib import Path
 
 sys.stdout.reconfigure(encoding="utf-8")
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from _outils import base_mongo  # noqa: E402
+base_mongo("mails")
 os.environ["DONNEES"] = tempfile.mkdtemp(prefix="contratgen-mails-")
 
 import config          # noqa: E402
