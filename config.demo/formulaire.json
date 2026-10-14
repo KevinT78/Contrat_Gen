@@ -64,7 +64,7 @@
     {"id": "carte_vitale", "libelle": "Attestation de carte vitale", "type": "piece_jointe",
      "role": "carte-vitale", "requis": true},
     {"id": "rib", "libelle": "RIB", "type": "piece_jointe", "role": "rib", "requis": true},
-    {"id": "cni", "libelle": "Carte Nationale d'Identité (recto-verso)", "type": "piece_jointe",
+    {"id": "cni", "libelle": "Pièce d'identité (recto-verso)", "type": "piece_jointe",
      "role": "identite", "requis": true, "max_fichiers": 2},
     {"id": "justif_domicile", "libelle": "Justificatif de domicile", "type": "piece_jointe",
      "role": "justif-domicile", "requis": true}
