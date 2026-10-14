@@ -90,8 +90,9 @@ Instance « {nom} » créée dans {cible}
   Compte RH : rh / {mdp}      <- noté une seule fois, ici
 
 À compléter avant de servir (le démarrage refuse tant que ce n'est pas fait) :
-  1. {config}/societes.json  — sociétés, SIRET, mentions légales, cabinet comptable ;
-     "contrat": "genere" (contrat produit par l'app) ou "depose" (fait à la main)
+  1. sociétés et établissements (SIRET, mentions légales, cabinet comptable), en base :
+     CONFIG_DIR={config} python configurer.py --assister
+     ou, depuis un fichier : python configurer.py importer-societes <fichier.json>
   2. {config}/instance.json  — bloc "mails" (SMTP + destinataires), puis "mode": "smtp"
   3. {config}/formulaire.json — les champs propres au client, et leur placeholder
   4. python placeholders.py  — génère la fiche des {{{{Jetons}}}} à envoyer au client,

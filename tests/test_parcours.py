@@ -460,7 +460,7 @@ def contrat_peut_citer_les_pieces_jointes(c):
 
 
 def valider_survit_a_un_etablissement_retire(c):
-    """Un établissement fermé, retiré de societes.json, alors qu'un vieux
+    """Un établissement fermé, retiré des sociétés, alors qu'un vieux
     dossier attend encore : la validation ne doit pas rendre un 500.
 
     config.mentions() lève KeyError sur une clé inconnue. L'appel était HORS du
@@ -472,7 +472,7 @@ def valider_survit_a_un_etablissement_retire(c):
     garde = config.societes()
     try:
         # l'établissement disparaît entre la soumission et la validation
-        config._CACHE["societes.json"] = [
+        config._CACHE["societes"] = [
             {**s, "etablissements": [e for e in s["etablissements"]
                                      if e["nom"] != "Paris Opéra"]}
             for s in garde]
@@ -481,13 +481,13 @@ def valider_survit_a_un_etablissement_retire(c):
         r = c.post(f"/dossier/{uid}/valider")
         assert r.status_code != 500, "500 sur /valider (établissement retiré)"
     finally:
-        config._CACHE["societes.json"] = garde
+        config._CACHE["societes"] = garde
 
     item = store.lire(uid)
     assert store.etat(item) != "Soumis", "la validation n'a pas eu lieu"
     echecs = [e for e in item["journal"] if e.get("type") == "fiche_echouee"]
     assert echecs, "échec de fiche non tracé dans le journal"
-    assert "societes.json" in echecs[-1]["motif"], echecs[-1]
+    assert "absent des sociétés" in echecs[-1]["motif"], echecs[-1]
 
 
 def rejet_part_au_manager_de_l_etablissement(c):

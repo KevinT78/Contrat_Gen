@@ -4,6 +4,7 @@
     python configurer.py --assister      # pose les questions pour ce qu'il sait remplir
     python configurer.py compte <ident>  # ajoute ou remplace un compte de connexion
     python configurer.py mail <adresse>  # envoi de test en SMTP, même en mode console
+    python configurer.py importer-societes <fichier.json>  # charge des sociétés en base
 
 Piloté par CONFIG_DIR comme doctor.py. Le bilan est le garde-fou de démarrage
 (config.verifier()) rendu lisible AVANT de lancer le serveur : chaque manque
@@ -45,7 +46,7 @@ FICHIERS = {"secret": "config/instance.json",
             "poste «": "config/instance.json", "url": "config/instance.json",
             "stockage": "config/instance.json", "conservation": "config/instance.json",
             "theme.json": "config/theme.json",
-            "établissements": "config/societes.json",
+            "établissements": "en base : python configurer.py --assister",
             "roles": "config/formulaire.json", "grille": "config/grille.json",
             "fiche salarié": "modeles/fiche_salarie.docx"}
 REPARABLES = ("secret", "stockage", "conservation", "url", "mails", "comptes",
@@ -125,20 +126,16 @@ def avertissements():
         out.append("mails.mode = « console » : aucun mail ne part. En production : "
                    "« smtp », après un essai avec `configurer.py mail <adresse>`  "
                    "[config/instance.json]")
-    if config.supabase_actif():
-        out.append("sociétés lues depuis Supabase : un établissement s'ajoute dans "
-                   "la base. societes.json est réécrit tout seul, c'est la copie "
-                   "de secours si Supabase ne répond pas")
     sans_manager = [f"{s['nom']} / {e['nom']}" for s in config.societes()
                     for e in s["etablissements"] if not e.get("manager_email")]
     if sans_manager:
         out.append(f"manager_email absent ({', '.join(sans_manager)}) : le lien de "
                    "correction d'un rejet et l'avis de validation partent à la RH "
-                   "(mails.rh), qui devra transmettre  [config/societes.json]")
+                   "(mails.rh), qui devra transmettre  [écran Établissements]")
     if not m.get("comptable_defaut"):
         if sans_cabinet := [s["nom"] for s in config.societes() if not s.get("comptable_email")]:
             out.append(f"aucun cabinet comptable pour {', '.join(sans_cabinet)} : le mail "
-                       "hebdomadaire (recap.py) échouera  [config/societes.json]")
+                       "hebdomadaire (recap.py) échouera  [écran Établissements]")
     url = config.url_publique()
     if url and not url.startswith("https://"):
         out.append(f"url « {url} » n'est pas en https : les liens des mails "
@@ -187,6 +184,27 @@ def compte(ident):
         print(f"ÉCHEC — {e}")
         return 1
     print(f"Compte « {ident} » écrit en base.")
+    return 0
+
+
+def importer_societes(chemin):
+    """Charge un fichier JSON [{nom, siren, ..., etablissements: [...]}] en base :
+    chaque société remplace celle de même nom, les autres restent."""
+    try:
+        liste = json.loads(open(chemin, encoding="utf-8").read())
+    except (OSError, ValueError) as e:
+        print(f"ÉCHEC — {chemin} illisible : {e}")
+        return 1
+    if not isinstance(liste, list) or not all(
+            isinstance(s, dict) and isinstance(s.get("nom"), str) for s in liste):
+        print(f"ÉCHEC — {chemin} : une liste de sociétés, chacune avec un « nom », est attendue")
+        return 1
+    try:
+        config.importer_societes(liste)
+    except RuntimeError as e:     # pas de base : le dire, pas une trace
+        print(f"ÉCHEC — {e}")
+        return 1
+    print(f"{len(liste)} société(s) écrite(s) en base.")
     return 0
 
 
@@ -275,8 +293,22 @@ def _reparer_etablissements(_raisons):
         soc["etablissements"].append(etab)
         if not _demander("Un autre établissement ? [o/N]").lower().startswith("o"):
             break
-    if soc["etablissements"]:
-        _ecrire("societes.json", lambda d: (d or []) + [soc])
+    etabs = soc.pop("etablissements")
+    try:
+        existe = any(s.get("nom") == nom for s in config.societes())
+    except RuntimeError as e:                   # pas de base
+        print(f"  ÉCHEC — {e}")
+        return
+    if existe:
+        print(f"  « {nom} » existe déjà : établissements ajoutés à cette société, "
+              "sa fiche (SIREN, cabinet, mentions) n'est pas modifiée.")
+    fiche = None if existe else soc
+    for etab in etabs:
+        try:
+            config.sauver_etablissement(None, nom, fiche, etab)
+            fiche = None                        # société créée par le premier
+        except ValueError as e:                 # doublon : les suivants passent quand même
+            print(f"  « {etab['nom']} » ignoré — {e}")
 
 
 REPARATIONS = {"secret": _reparer_secret, "stockage": _reparer_stockage,
@@ -317,4 +349,6 @@ if __name__ == "__main__":
         sys.exit(compte(args[1]))
     if len(args) == 2 and args[0] == "mail":
         sys.exit(mail(args[1]))
+    if len(args) == 2 and args[0] == "importer-societes":
+        sys.exit(importer_societes(args[1]))
     sys.exit(__doc__)

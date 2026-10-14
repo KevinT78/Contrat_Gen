@@ -32,8 +32,6 @@ sys.stdout.reconfigure(encoding="utf-8")
 sys.stderr.reconfigure(encoding="utf-8")
 RACINE = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(RACINE))
-from _outils import base_mongo  # noqa: E402
-base_mongo("valeurs_contrat")
 
 TMP = Path(tempfile.mkdtemp(prefix="contratgen-valeurs-"))
 CLIENT = TMP / "config"
@@ -168,7 +166,7 @@ MODELES = {
 
 (CLIENT / "instance.json").write_text(json.dumps(INSTANCE, ensure_ascii=False), encoding="utf-8")
 (CLIENT / "formulaire.json").write_text(json.dumps(FORMULAIRE, ensure_ascii=False), encoding="utf-8")
-(CLIENT / "societes.json").write_text(json.dumps(SOCIETES, ensure_ascii=False), encoding="utf-8")
+(CLIENT / "societes.amorce.json").write_text(json.dumps(SOCIETES, ensure_ascii=False), encoding="utf-8")
 (CLIENT / "grille.json").write_text(json.dumps(GRILLE, ensure_ascii=False), encoding="utf-8")
 for nom, corps in MODELES.items():
     (CLIENT / "contrats" / nom).write_text(corps, encoding="utf-8")
@@ -176,6 +174,8 @@ for nom, corps in MODELES.items():
 # CONFIG_DIR AVANT l'import : config.py le lit au chargement du module.
 os.environ["CONFIG_DIR"] = str(CLIENT)
 os.environ["DONNEES"] = str(TMP / "data")
+from _outils import base_mongo  # noqa: E402
+base_mongo("valeurs_contrat")      # CONFIG_DIR posé : charge les SOCIETES ci-dessus
 
 import config    # noqa: E402
 import contrat   # noqa: E402

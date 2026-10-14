@@ -2,18 +2,16 @@
 fichiers sous config/, jamais en code.
 
 Un client = une copie de ce dépôt. `python installer.py "<Client>"` remet
-config/ à blanc et génère les secrets ; on remplit ensuite societes.json,
-instance.json et on dépose les .docx.
+config/ à blanc et génère les secrets ; on remplit ensuite instance.json,
+les sociétés en base (configurer.py) et on dépose les .docx.
 """
 import json
 import os
 import re
-import threading
 import time
-import urllib.error
-import urllib.request
 from pathlib import Path
-from urllib.parse import quote
+
+from pymongo.errors import DuplicateKeyError
 
 from apparence import resoudre
 
@@ -26,8 +24,7 @@ MDP_PAR_DEFAUT = "demo"          # l'ancien mot de passe de démo — refusé au
 # Version du FORMAT de config/, pas du produit. Le code est un paquet versionne,
 # config/ vit chez le client : une config ecrite pour un format qu'on ne
 # comprend plus doit refuser de demarrer en disant quoi faire, pas se faire
-# reecrire dans le dos. Exception : avec un bloc `supabase`, societes.json est
-# la copie de secours, reecrite apres chaque lecture reussie.
+# reecrire dans le dos.
 CONFIG_VERSION = 1
 
 # Cache simple plutot que lru_cache : `recharger()` a besoin de reposer
@@ -50,317 +47,57 @@ def formulaire():
     return _lire("formulaire.json")
 
 
-# Supabase, quand instance.json a un bloc `supabase` : source des societes.
-# Relu au plus toutes les 2 minutes. Une panne ne retente pas a chaque page :
-# 30 s sur la copie locale. `_TRANSPORT_SUPABASE` est le seul point d'injection
-# des tests, sur le modele de signature._TRANSPORT.
-_SUPABASE_TTL = 120
-_SUPABASE_REPRISE = 30
-_SUPABASE_ESSAI = None          # None : jamais tente. Un monotonic() a 0
-_SUPABASE_OK = False            # sauterait la premiere lecture au demarrage.
-_verrou_societes = threading.Lock()
-_TRANSPORT_SUPABASE = None      # (methode, url, headers) -> (statut, bytes)
-
-
-def supabase_actif():
-    """True si instance.json designe un projet Supabase (url + cle)."""
-    return _bloc_supabase() is not None
-
-
-def _bloc_supabase():
-    try:
-        b = instance().get("supabase")
-    except (OSError, ValueError, KeyError, TypeError):
-        return None
-    if not isinstance(b, dict):
-        return None
-    url = b.get("url") if isinstance(b.get("url"), str) else ""
-    cle = b.get("cle") if isinstance(b.get("cle"), str) else ""
-    url, cle = url.strip().rstrip("/"), cle.strip()
-    if not url or not cle:
-        return None
-    return url, cle
-
-
-def _appel_supabase(url, cle, methode="GET", corps=None):
-    entetes = {"apikey": cle, "Authorization": f"Bearer {cle}",
-               "Accept": "application/json"}
-    data = None
-    if corps is not None:
-        entetes["Content-Type"] = "application/json"
-        entetes["Prefer"] = "return=representation"
-        data = json.dumps(corps, ensure_ascii=False).encode()
-    if _TRANSPORT_SUPABASE:
-        statut, brut = _TRANSPORT_SUPABASE(methode, url, entetes, data)
-    else:                                                    # pragma: no cover
-        req = urllib.request.Request(url, data=data, headers=entetes, method=methode)
-        try:
-            with urllib.request.urlopen(req, timeout=8) as r:
-                statut, brut = r.status, r.read()
-        except urllib.error.HTTPError as e:
-            statut, brut = e.code, e.read()
-    if statut == 409:
-        raise ValueError("Ce nom est déjà utilisé.")
-    if statut >= 300:
-        raise RuntimeError(f"HTTP {statut}")
-    return brut
-
-
-def _objet(v):
-    if isinstance(v, dict):
-        return v
-    if isinstance(v, str) and v.strip():
-        try:
-            o = json.loads(v)
-        except json.JSONDecodeError:
-            return {}
-        return o if isinstance(o, dict) else {}
-    return {}
-
-
-def _forme_etablissement(e):
-    etab = {"nom": e["nom"]}
-    if (e.get("groupe") or "").strip():
-        etab["groupe"] = e["groupe"].strip()
-    etab["siret"] = e.get("siret") or ""
-    etab["manager_email"] = e.get("manager_email") or ""
-    if (e.get("contrat") or "").strip() and e["contrat"].strip() != "genere":
-        etab["contrat"] = e["contrat"].strip()
-    etab["mentions"] = _objet(e.get("mentions"))
-    return etab
-
-
-def _forme_societes(lignes):
-    """Lignes PostgREST -> la meme liste que societes.json."""
-    lignes = sorted(lignes, key=lambda s: (s.get("ordre") or 0, s.get("nom") or ""))
-    out = []
-    for s in lignes:
-        etabs = sorted(s.get("etablissements") or [],
-                       key=lambda e: (e.get("ordre") or 0, e.get("nom") or ""))
-        out.append({"nom": s["nom"], "siren": s.get("siren") or "",
-                    "comptable_email": s.get("comptable_email") or "",
-                    "mentions": _objet(s.get("mentions")),
-                    "etablissements": [_forme_etablissement(e) for e in etabs]})
-    return out
-
-
-def _societes_utilisables(data):
-    """Une reponse vide ou tronquee ne doit pas ecraser la copie locale :
-    verifier() refuserait alors de demarrer, et le dernier bon fichier aurait
-    disparu."""
-    if not isinstance(data, list) or not data:
-        return False
-    for s in data:
-        if not isinstance(s, dict) or not (s.get("nom") or "").strip():
-            return False
-        etabs = s.get("etablissements")
-        if not isinstance(etabs, list):
-            return False
-        if any(not isinstance(e, dict) or not (e.get("nom") or "").strip() for e in etabs):
-            return False
-    return any(s["etablissements"] for s in data)
-
-
-def _ecrire_secours_societes(data):
-    dest = CLIENT / "societes.json"
-    texte = json.dumps(data, ensure_ascii=False, indent=2) + "\n"
-    if dest.exists() and dest.read_text(encoding="utf-8") == texte:
-        return False
-    tmp = dest.with_suffix(".json.tmp")
-    tmp.write_text(texte, encoding="utf-8")
-    os.replace(tmp, dest)
-    return True
-
-
-def _societes_distantes(url, cle):
-    select = ("nom,siren,comptable_email,mentions,ordre,"
-              "etablissements(nom,siret,groupe,manager_email,contrat,mentions,ordre)")
-    adresse = f"{url}/rest/v1/societes?select={quote(select, safe='(),')}&order=ordre.asc"
-    lignes = json.loads(_appel_supabase(adresse, cle))
-    if not isinstance(lignes, list):
-        raise RuntimeError("réponse inattendue")
-    return _forme_societes(lignes)
-
-
-def _rafraichir_societes(url, cle):
-    """Met a jour le cache et la copie locale. -> la liste servie, toujours."""
-    global _SUPABASE_ESSAI, _SUPABASE_OK
-    _SUPABASE_ESSAI = time.monotonic()
-    try:
-        distant = _societes_distantes(url, cle)
-    except Exception as e:                       # noqa: BLE001 — repli sur le fichier
-        _SUPABASE_OK = False
-        print(f"[supabase] lecture impossible ({type(e).__name__}: {e}), "
-              "copie locale conservée", flush=True)
-        return _lire("societes.json")
-    if not _societes_utilisables(distant):
-        _SUPABASE_OK = False
-        print("[supabase] réponse inutilisable, copie locale conservée", flush=True)
-        return _lire("societes.json")
-    _SUPABASE_OK = True
-    _CACHE["societes.json"] = distant
-    try:
-        if _ecrire_secours_societes(distant):
-            print("[supabase] copie locale des sociétés mise à jour", flush=True)
-    except OSError as e:
-        print(f"[supabase] copie locale non écrite ({e})", flush=True)
-    return distant
+_SOCIETES_TTL = 60
+_societes_lu = 0.0
 
 
 def societes():
-    """Societes et etablissements.
+    """Societes et etablissements : la collection `societes`, triee par `ordre`,
+    sans `_id` ni `ordre` : [{nom, siren, comptable_email, mentions,
+    etablissements: [{nom, siret, groupe?, manager_email, contrat?, mentions}]}].
 
-    Sans bloc `supabase` : societes.json. Avec un bloc : Supabase est la source,
-    societes.json la copie de secours (ecrasee apres une lecture reussie, gardee
-    si Supabase ne repond pas ou renvoie une liste vide)."""
-    bloc = _bloc_supabase()
-    if not bloc:
-        return _lire("societes.json")
-    with _verrou_societes:
-        maintenant = time.monotonic()
-        if (_SUPABASE_OK and "societes.json" in _CACHE and _SUPABASE_ESSAI is not None
-                and maintenant - _SUPABASE_ESSAI < _SUPABASE_TTL):
-            return _CACHE["societes.json"]
-        if (_SUPABASE_ESSAI is not None and not _SUPABASE_OK
-                and maintenant - _SUPABASE_ESSAI < _SUPABASE_REPRISE):
-            return _lire("societes.json")
-        return _rafraichir_societes(*bloc)
-
-
-def _oublier_societes():
-    """La prochaine lecture retente Supabase. A appeler apres une ecriture."""
-    global _SUPABASE_ESSAI, _SUPABASE_OK
-    with _verrou_societes:
-        _CACHE.pop("societes.json", None)
-        _SUPABASE_ESSAI, _SUPABASE_OK = None, False
+    Cache de _SOCIETES_TTL secondes, vide a chaque ecriture de l'app. Le delai
+    borne deux retards : une lecture lancee avant une ecriture qui repose
+    l'ancienne liste apres l'invalidation, et un import fait par un autre
+    process (configurer.py) pendant que l'app tourne."""
+    global _societes_lu
+    if "societes" not in _CACHE or time.monotonic() - _societes_lu > _SOCIETES_TTL:
+        import store      # store importe config : import local, cycle sinon
+        _CACHE["societes"] = [
+            {k: v for k, v in s.items() if k != "ordre"}
+            for s in store.db().societes.find({}, {"_id": 0}).sort("ordre", 1)]
+        _societes_lu = time.monotonic()
+    return _CACHE["societes"]
 
 
-def _filtre(colonne, valeur):
-    return f"{colonne}=eq.{quote(str(valeur), safe='')}"
-
-
-def _societe_distante(url, cle, nom):
-    """{'id', 'etablissements': [{'id','nom','ordre'}]} ou None."""
-    select = "id,etablissements(id,nom,ordre)"
-    adresse = (f"{url}/rest/v1/societes?select={quote(select, safe='(),')}"
-               f"&{_filtre('nom', nom)}")
-    lignes = json.loads(_appel_supabase(adresse, cle))
-    if not isinstance(lignes, list) or not lignes:
-        return None
-    return lignes[0]
-
-
-def _corps_etablissement(etab, societe_id, ordre):
-    return {"societe_id": societe_id, "nom": etab["nom"],
-            "siret": etab.get("siret") or "", "groupe": etab.get("groupe") or "",
-            "manager_email": etab.get("manager_email") or "",
-            "contrat": etab.get("contrat") or "",
-            "mentions": etab.get("mentions") or {}, "ordre": ordre}
-
-
-def _sauver_distant(origine, societe_nom, societe, etablissement):
-    url, cle = _bloc_supabase()
-    if origine is None:
-        ligne = _societe_distante(url, cle, societe_nom)
-        if ligne is None:
-            if not societe:
-                raise ValueError("Société inconnue.")
-            cree = json.loads(_appel_supabase(
-                f"{url}/rest/v1/societes", cle, "POST", {
-                    "nom": societe["nom"], "siren": societe.get("siren") or "",
-                    "comptable_email": societe.get("comptable_email") or "",
-                    "mentions": societe.get("mentions") or {},
-                    "ordre": len(societes()),
-                }))
-            if not cree:
-                raise RuntimeError("société non créée")
-            sid, ordre = cree[0]["id"], 0
-        elif societe:
-            raise ValueError("Cette société existe déjà : choisissez-la dans la liste.")
-        else:
-            if any(e.get("nom") == etablissement["nom"]
-                   for e in ligne.get("etablissements") or []):
-                raise ValueError("Cet établissement existe déjà.")
-            sid = ligne["id"]
-            ordre = len(ligne.get("etablissements") or [])
-        _appel_supabase(f"{url}/rest/v1/etablissements", cle, "POST",
-                        _corps_etablissement(etablissement, sid, ordre))
-        return
-    ancien_soc, ancien_etab = origine
-    ligne = _societe_distante(url, cle, ancien_soc)
-    if not ligne:
-        raise ValueError("Société introuvable.")
-    etabs = ligne.get("etablissements") or []
-    trouve = next((e for e in etabs if e.get("nom") == ancien_etab), None)
-    if not trouve:
-        raise ValueError("Établissement introuvable.")
-    if any(e.get("nom") == etablissement["nom"] and e.get("id") != trouve["id"]
-           for e in etabs):
-        raise ValueError("Cet établissement existe déjà.")
-    corps = _corps_etablissement(etablissement, ligne["id"], trouve.get("ordre") or 0)
-    corps.pop("societe_id")
-    _appel_supabase(f"{url}/rest/v1/etablissements?{_filtre('id', trouve['id'])}",
-                    cle, "PATCH", corps)
-    if societe:
-        _appel_supabase(f"{url}/rest/v1/societes?{_filtre('id', ligne['id'])}",
-                        cle, "PATCH", {
-                            "nom": societe["nom"], "siren": societe.get("siren") or "",
-                            "comptable_email": societe.get("comptable_email") or "",
-                            "mentions": societe.get("mentions") or {},
-                        })
-
-
-def _sauver_local(origine, societe_nom, societe, etablissement):
-    data = json.loads(json.dumps(societes()))
-    if origine is None:
-        cible = next((s for s in data if s["nom"] == societe_nom), None)
-        if cible is None:
-            if not societe:
-                raise ValueError("Société inconnue.")
-            cible = {"nom": societe["nom"], "siren": societe.get("siren") or "",
-                     "comptable_email": societe.get("comptable_email") or "",
-                     "mentions": societe.get("mentions") or {}, "etablissements": []}
-            data.append(cible)
-        elif societe:
-            raise ValueError("Cette société existe déjà : choisissez-la dans la liste.")
-        elif any(e["nom"] == etablissement["nom"] for e in cible["etablissements"]):
-            raise ValueError("Cet établissement existe déjà.")
-        cible["etablissements"].append(etablissement)
-    else:
-        ancien_soc, ancien_etab = origine
-        cible = next((s for s in data if s["nom"] == ancien_soc), None)
-        if cible is None:
-            raise ValueError("Société introuvable.")
-        idx = next((i for i, e in enumerate(cible["etablissements"])
-                    if e["nom"] == ancien_etab), None)
-        if idx is None:
-            raise ValueError("Établissement introuvable.")
-        if any(e["nom"] == etablissement["nom"] and i != idx
-               for i, e in enumerate(cible["etablissements"])):
-            raise ValueError("Cet établissement existe déjà.")
-        if societe:
-            cible["nom"] = societe["nom"]
-            cible["siren"] = societe.get("siren") or ""
-            cible["comptable_email"] = societe.get("comptable_email") or ""
-            cible["mentions"] = societe.get("mentions") or {}
-        cible["etablissements"][idx] = etablissement
-    if not _societes_utilisables(data):
-        raise ValueError("Il doit rester au moins un établissement.")
-    _CACHE["societes.json"] = data
-    _ecrire_secours_societes(data)
+def importer_societes(liste):
+    """Charge une liste de societes (la forme que rend societes()). Chaque societe
+    remplace celle de meme nom, les autres restent : rejouable, et rien n'est
+    efface de ce qui n'est pas dans le fichier. Une societe deja en base garde
+    sa place, une nouvelle se range a la suite. `_id` (export Mongo) est ignore."""
+    import store
+    col = store.db().societes
+    places = {d["nom"]: d.get("ordre", 0) for d in col.find({}, {"nom": 1, "ordre": 1})}
+    suivante = max(places.values(), default=-1) + 1
+    for s in liste:
+        if s["nom"] not in places:
+            places[s["nom"]], suivante = suivante, suivante + 1
+        doc = {k: v for k, v in s.items() if k != "_id"}
+        col.replace_one({"nom": s["nom"]}, {**doc, "ordre": places[s["nom"]]}, upsert=True)
+    _CACHE.pop("societes", None)
 
 
 def sauver_etablissement(origine, societe_nom, societe, etablissement):
-    """Cree ou modifie un etablissement.
+    """Cree ou modifie un etablissement, en base.
 
     `origine` vaut None a la creation, sinon (nom de societe, nom d'etablissement)
     avant modification. `societe` vaut None quand on rattache a une societe
     deja la sans toucher a sa fiche ; sinon c'est la fiche a ecrire
-    (nom, siren, comptable_email, mentions). Avec Supabase, la copie locale
-    est relue ensuite. ValueError : nom deja pris, societe ou etablissement
-    introuvable. Une panne reseau reste une RuntimeError : rien n'est ecrit
-    en local a la place, le fichier serait ecrase a la lecture suivante.
+    (nom, siren, comptable_email, mentions). ValueError : nom deja pris,
+    societe ou etablissement introuvable.
     """
+    import store
+    fiche = None
     if societe is not None:
         nom = (societe.get("nom") or "").strip()
         if not nom:
@@ -370,12 +107,55 @@ def sauver_etablissement(origine, societe_nom, societe, etablissement):
         if origine is not None and nom != origine[0] and any(
                 s["nom"] == nom for s in societes()):
             raise ValueError("Cette société existe déjà : choisissez un autre nom.")
-    if supabase_actif():
-        _sauver_distant(origine, societe_nom, societe, etablissement)
-        _oublier_societes()
-        societes()
-    else:
-        _sauver_local(origine, societe_nom, societe, etablissement)
+        fiche = {"nom": nom, "siren": societe.get("siren") or "",
+                 "comptable_email": societe.get("comptable_email") or "",
+                 "mentions": societe.get("mentions") or {}}
+    col = store.db().societes
+    try:
+        if origine is None:
+            _ajouter_etablissement(col, societe_nom, fiche, etablissement)
+        else:
+            _modifier_etablissement(col, origine, fiche, etablissement)
+    except DuplicateKeyError:       # course avec un autre ecrivain : index unique `nom`
+        raise ValueError("Cette société existe déjà : choisissez un autre nom.") from None
+    finally:
+        _CACHE.pop("societes", None)
+
+
+def _ajouter_etablissement(col, societe_nom, fiche, etablissement):
+    cible = col.find_one({"nom": societe_nom})
+    if cible is None:
+        if not fiche:
+            raise ValueError("Société inconnue.")
+        dernier = col.find_one(sort=[("ordre", -1)])
+        col.insert_one({**fiche, "ordre": (dernier or {}).get("ordre", -1) + 1,
+                        "etablissements": [etablissement]})
+    elif fiche:
+        raise ValueError("Cette société existe déjà : choisissez-la dans la liste.")
+    elif not col.update_one(
+            {"_id": cible["_id"], "etablissements.nom": {"$ne": etablissement["nom"]}},
+            {"$push": {"etablissements": etablissement}}).matched_count:
+        raise ValueError("Cet établissement existe déjà.")
+
+
+def _modifier_etablissement(col, origine, fiche, etablissement):
+    ancien_soc, ancien_etab = origine
+    cible = col.find_one({"nom": ancien_soc})
+    if cible is None:
+        raise ValueError("Société introuvable.")
+    etabs = cible.get("etablissements") or []
+    idx = next((i for i, e in enumerate(etabs) if e["nom"] == ancien_etab), None)
+    if idx is None:
+        raise ValueError("Établissement introuvable.")
+    if any(e["nom"] == etablissement["nom"] and i != idx for i, e in enumerate(etabs)):
+        raise ValueError("Cet établissement existe déjà.")
+    # Filtre sur le nom a cet indice : si la liste a bouge entre la lecture et
+    # l'ecriture, on ne remplace pas un autre etablissement.
+    if not col.update_one(
+            {"_id": cible["_id"], f"etablissements.{idx}.nom": ancien_etab},
+            {"$set": {f"etablissements.{idx}": etablissement, **(fiche or {})}}
+    ).matched_count:
+        raise ValueError("Établissement introuvable.")
 
 
 def comptes():
@@ -481,10 +261,8 @@ def recharger():
     """Relit config/ a chaud, sans redemarrer. Renvoie {} si la nouvelle config
     est valide (elle est alors active), sinon les manques -- et l'ancienne
     config reste en place : une instance qui servait continue de servir."""
-    global _SUPABASE_ESSAI, _SUPABASE_OK
     ancien = dict(_CACHE)
     _CACHE.clear()
-    _SUPABASE_ESSAI, _SUPABASE_OK = None, False
     if manques := verifier():
         _CACHE.clear()
         _CACHE.update(ancien)
@@ -521,14 +299,14 @@ def comptable(cle):
 
 
 def groupe(cle):
-    """Tete de l'arborescence des dossiers salaries : societes.json ->
+    """Tete de l'arborescence des dossiers salaries : la societe ->
     etablissement.groupe, a defaut le nom de la societe."""
     s, e = etablissement(cle)
     return e.get("groupe") or s["nom"]
 
 
 def manager(cle):
-    """Adresse fixe du manager de l'etablissement (societes.json), ou "" --
+    """Adresse fixe du manager de l'etablissement (en base), ou "" --
     y compris quand l'etablissement a disparu de la config (meme regle que
     mode_contrat) : valider ou rejeter un vieux dossier ne doit pas 500."""
     try:
@@ -798,10 +576,10 @@ def placeholders_connus():
         src["SalaireLettres"] = "Grille de salaires, en toutes lettres"
     for s in societes():
         for p in s.get("mentions", {}):
-            src[p] = "Mention légale de la société (societes.json)"
+            src[p] = "Mention légale de la société (en base)"
         for e in s["etablissements"]:
             for p in e.get("mentions", {}):
-                src[p] = "Mention légale de l'établissement (societes.json)"
+                src[p] = "Mention légale de l'établissement (en base)"
     for p in ("Societe", "Siren", "Etablissement", "Siret"):
         src[p] = "Identité de la société / de l'établissement choisi"
     return src
@@ -969,8 +747,6 @@ def _verifier_installation():
            for u in users.values()):
         manques["compte RH"] = ["mot de passe par défaut — changez-le : "
                                 "python configurer.py compte <identifiant>"]
-    if not etablissements():
-        manques["établissements"] = ["aucun établissement dans config/societes.json"]
     # Sans destinataire RH, chaque soumission part en `mail_echoue` dans le
     # journal et personne ne le voit : deux instances de test ont servi comme
     # ca, verifier() disant OK. Un mail sans expediteur est refuse par un
@@ -989,6 +765,37 @@ def _verifier_installation():
         manques["url"] = ["vide : l'adresse publique de l'app (ex. https://embauche.acme.fr), "
                           "base des liens de tous les mails"]
     return manques
+
+
+def _verifier_societes():
+    """Les societes en base : au moins un etablissement, chacun nomme (le
+    formulaire et _verifier_regles en dependent). Sans base configuree : un
+    manque, pas une trace -- comme _verifier_comptes."""
+    try:
+        data = societes()
+    except RuntimeError as e:
+        return {"établissements": [str(e)]}
+    raisons = []
+    for i, s in enumerate(data, 1):
+        nom = s.get("nom")
+        etabs = s.get("etablissements")
+        if not isinstance(nom, str) or not nom.strip():
+            raisons.append(f"société n° {i} sans nom")
+        elif not isinstance(etabs, list) or any(
+                not isinstance(e, dict) or not isinstance(e.get("nom"), str)
+                or not e["nom"].strip() for e in etabs):
+            raisons.append(f"« {nom} » : un établissement sans nom ou mal formé")
+        else:
+            # config.mentions() fusionne ces dicts : un null ou une liste
+            # ferait planter la generation du contrat APRES la validation.
+            for quoi, x in [(nom, s)] + [(f"{nom} / {e['nom']}", e) for e in etabs]:
+                if "mentions" in x and not isinstance(x["mentions"], dict):
+                    raisons.append(f"« {quoi} » : mentions doit être un objet "
+                                   "{clé: valeur}")
+    if not raisons and not any(s["etablissements"] for s in data):
+        raisons.append("aucun établissement en base — lancez : python configurer.py "
+                       "--assister (ou importer-societes <fichier.json>)")
+    return {"établissements": raisons} if raisons else {}
 
 
 def _verifier_comptes():
@@ -1167,7 +974,7 @@ def _verifier_regles():
                                    f"« {par_nom_seul[n(val)]} »")
                 else:
                     raisons.append(f"« {cid} » : « {val} » n'est pas une clé "
-                                   "d'établissement connue (config/societes.json)")
+                                   "d'établissement connue (sociétés en base)")
             elif c.get("options"):
                 if not any(n(val) == n(o) for o in c["options"]):
                     raisons.append(f"« {cid} » : « {val} » ne correspond à aucune "
@@ -1295,11 +1102,16 @@ def _verifier_bareme(ligne, g):
 def verifier():
     """Garde-fou de demarrage. Renvoie {} si tout va bien, sinon un dict
     {sujet: [raisons]} et l'instance ne sert pas."""
-    manques = {}
+    manques = _verifier_societes()
+    lisent_societes = (_verifier_placeholders, _verifier_regles)
     for check in (_verifier_version, _verifier_comptes, _verifier_stockage,
                   _verifier_conservation, _verifier_sharepoint, _verifier_theme,
                   _verifier_installation,
                   _verifier_derives, _verifier_ids_champs, _verifier_roles, _verifier_placeholders,
                   _verifier_regles, _verifier_postes, _verifier_grille):
+        # Societes absentes ou mal formees : ces checks leveraient, et le
+        # manque « établissements » dit deja quoi faire.
+        if "établissements" in manques and check in lisent_societes:
+            continue
         manques.update(check())
     return manques

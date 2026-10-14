@@ -29,7 +29,7 @@ RACINE = Path(__file__).resolve().parent.parent
 }), encoding="utf-8")
 (CONF / "formulaire.json").write_text(
     json.dumps({"roles": {}, "champs": []}), encoding="utf-8")
-(CONF / "societes.json").write_text(json.dumps([{
+(CONF / "societes.amorce.json").write_text(json.dumps([{
     "nom": "ACME", "siren": "111 111 111", "comptable_email": "c@acme.example",
     "mentions": {"RaisonSociale": "ACME SAS", "FormeCapital": "SAS",
                  "SiegeSocial": "1 rue X", "Representant": "A",
@@ -132,3 +132,29 @@ r = c.post("/etablissements/nouveau", data={
 assert r.status_code == 200 and "Établissement enregistré" in r.text, r.status_code
 assert config.manager("ACME / Kiosque") == ""
 print("OK  ajout sans mail : accepté, les mails iront à la RH")
+
+r = c.post("/etablissements/nouveau", data={
+    "societe": "ACME", "nom": "Kiosque", "siret": "111 111 111 00034",
+    "adresse": "5 rue W", "manager_email": "", "contrat": "genere",
+})
+assert r.status_code == 422 and "Cet établissement existe déjà" in r.text, r.status_code
+import store  # noqa: E402
+acme = store.db().societes.find_one({"nom": "ACME"})
+assert [e["nom"] for e in acme["etablissements"]] == ["Siège", "Annexe", "Kiosque"], acme
+assert acme["etablissements"][0]["manager_email"] == "chef@acme.example", acme
+assert store.db().societes.count_documents({}) == 2
+print("OK  doublon d'établissement refusé ; tout est écrit dans la collection `societes`")
+
+# Course : une autre écriture pose « Intrus » en base après la lecture du cache.
+# Le contrôle en Python ne la voit pas, l'index unique `nom` la refuse.
+config.societes()
+store.db().societes.insert_one({"nom": "Intrus", "ordre": 9, "etablissements": []})
+try:
+    config.sauver_etablissement(("ACME", "Siège"), "ACME",
+                                {"nom": "Intrus", "siren": "1", "comptable_email": "c@x.fr",
+                                 "mentions": {}}, acme["etablissements"][0])
+    raise AssertionError("renommage vers un nom pris en base accepté")
+except ValueError as e:
+    assert "Cette société existe déjà" in str(e), e
+assert store.db().societes.find_one({"nom": "ACME"}), "ACME renommée malgré le refus"
+print("OK  course sur le nom de société : refus lisible, rien d'écrit")

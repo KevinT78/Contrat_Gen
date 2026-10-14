@@ -521,7 +521,7 @@ vrai_mentions = config.mentions
 config.mentions = lambda cle: (_ for _ in ()).throw(KeyError(cle))
 r = c.post(f"/dossier/{leroy}/fiche")
 config.mentions = vrai_mentions
-assert "absent de config/societes.json" in page(c.get(r.location))
+assert "absent des sociétés en base" in page(c.get(r.location))
 print("ok  fiche : 400 sur Parti ou purgé, 404 inconnu, établissement retiré = motif lisible")
 
 # 10. tests poussés et cas d'erreur ------------------------------------------------

@@ -25,7 +25,7 @@ from _outils import base_mongo  # noqa: E402
 base_mongo("configurer")
 
 from werkzeug.security import check_password_hash  # noqa: E402
-from _outils import compte  # noqa: E402
+from _outils import compte, societes as poser_societes  # noqa: E402
 compte("rh", "pas-demo")      # le compte vit en base : lu par l'enfant via l'amorce
 
 INSTANCE = {
@@ -53,8 +53,7 @@ def ecrire(instance=None, societes=None):
     (CONF / "instance.json").write_text(
         json.dumps(instance or INSTANCE, ensure_ascii=False), encoding="utf-8")
     (CONF / "formulaire.json").write_text(json.dumps(FORMULAIRE), encoding="utf-8")
-    (CONF / "societes.json").write_text(
-        json.dumps(SOCIETES if societes is None else societes), encoding="utf-8")
+    poser_societes(SOCIETES if societes is None else societes)   # base + amorce de l'enfant
     (CONF / "contrats" / "contrat.txt").write_text(
         "Bonjour {{Nom}}, poste {{Poste}}.", encoding="utf-8")
     (CONF / "PLACEHOLDERS.md").unlink(missing_ok=True)
@@ -103,7 +102,7 @@ def test_bilan_n_invente_pas_de_chemin_pour_un_fichier_hors_config():
     # Le préfixe fait partie de la VALEUR : tout ne vit pas sous config/.
     assert configurer.fichier("fiche salarié") == "modeles/fiche_salarie.docx"
     assert configurer.fichier("mails") == "config/instance.json"
-    assert configurer.fichier("établissements") == "config/societes.json"
+    assert configurer.fichier("établissements").startswith("en base")
     assert configurer.fichier("grille — barème « Equipier »") == "config/grille.json"
     # un sujet inconnu reste un modèle à déposer chez le client
     assert configurer.fichier("Manager.docx") == "config/contrats/Manager.docx"
@@ -215,12 +214,47 @@ def test_assistant_cree_la_premiere_societe():
                 "chef@tdn.example", "2 rue du Nord", "", "o",
                 "Dépôt Roubaix", "494 118 220 00023", "", "3 rue de Roubaix", "n", ""]
     code, sortie = lancer("--assister", entree="\n".join(reponses) + "\n")
-    assert code == 0, sortie
-    soc = json.loads((CONF / "societes.json").read_text(encoding="utf-8"))
+    assert code == 0, sortie          # l'enfant a relu sa société en base : bilan OK
+    # Ce qui est écrit se lit en process : la base de l'enfant n'est pas visible d'ici.
+    import config
+    _reparer_en_process(reponses)
+    soc = config.societes()
     assert [e["nom"] for e in soc[0]["etablissements"]] == ["Chantier Nord", "Dépôt Roubaix"]
     assert soc[0]["etablissements"][1]["contrat"] == "depose"
     assert soc[0]["etablissements"][0]["manager_email"] == "chef@tdn.example"
     assert "contrat" not in soc[0]["etablissements"][0]
+
+
+def test_assistant_rattache_a_une_societe_existante():
+    """Société déjà en base : ses établissements s'y ajoutent, sa fiche ne bouge
+    pas, et un doublon est ignoré sans perdre ceux qui suivent."""
+    import config
+    ecrire()                                          # ACME / Siège
+    sortie = _reparer_en_process([
+        "ACME", "999 999 999", "autre@x.example", "AUTRE SAS", "ailleurs",
+        "Siège", "1", "", "1 rue X", "", "o",
+        "Annexe", "111 111 111 00029", "", "2 rue Y", "", "n"])
+    acme = config.societes()[0]
+    assert [e["nom"] for e in acme["etablissements"]] == ["Siège", "Annexe"], acme
+    assert acme["siren"] == "111 111 111" and acme["mentions"] == SOCIETES[0]["mentions"]
+    assert "existe déjà" in sortie and "« Siège » ignoré" in sortie, sortie
+
+
+def _reparer_en_process(reponses):
+    """_reparer_etablissements avec ces réponses ; rend ce qu'il a affiché."""
+    import contextlib
+    import io
+    import configurer
+    questions = iter(reponses)
+    vrai = configurer._demander
+    configurer._demander = lambda q: next(questions)
+    tampon = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(tampon):
+            configurer._reparer_etablissements([])
+    finally:
+        configurer._demander = vrai
+    return tampon.getvalue()
 
 
 PROD = {**INSTANCE, "url": "https://embauche.acme.example",

@@ -18,6 +18,7 @@ présenter, chacun arrêté à une étape différente :
 """
 import contextlib
 import io
+import json
 import os
 import shutil
 import sys
@@ -57,6 +58,13 @@ from werkzeug.security import generate_password_hash  # noqa: E402
 # sien ici, avant demarrer() qui refuse de servir sans compte.
 store.db().comptes.replace_one(
     {"_id": "rh"}, {"mdp_hash": generate_password_hash("demo-rh")}, upsert=True)
+# Les societes aussi : celles de la config (societes.amorce.json ; une config
+# client d'avant la bascule a encore son societes.json).
+_CONF = Path(os.environ["CONFIG_DIR"])
+for _nom in ("societes.amorce.json", "societes.json"):
+    if (_CONF / _nom).exists():
+        config.importer_societes(json.loads((_CONF / _nom).read_text(encoding="utf-8")))
+        break
 
 PDF = b"%PDF-1.4\n1 0 obj<</Type/Catalog>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF"
 
@@ -68,7 +76,7 @@ GENERE = [c for c, _ in config.etablissements() if config.mode_contrat(c) == "ge
 DEPOSE = next((c for c, _ in config.etablissements()
                if config.mode_contrat(c) == "depose"), None)
 if not GENERE:
-    sys.exit("aucun établissement en contrat « genere » dans societes.json")
+    sys.exit("aucun établissement en contrat « genere » dans les sociétés de la config")
 
 
 def piece():
@@ -137,7 +145,7 @@ def amorcer():
     uid = soumettre(c, saisie())
     assert store.etat(store.lire(uid)) == "Soumise"
 
-    # 4. couloir « contrat déposé » : l etablissement est en « depose » (societes.json), le
+    # 4. couloir « contrat déposé » : l etablissement est en « depose » (sa societe), le
     #    contrat est fait à la main hors app. Validé, en attente du dépôt — à
     #    jouer en live : l'écran propose « Déposer le contrat », pas « Générer ».
     uid = soumettre(c, saisie(

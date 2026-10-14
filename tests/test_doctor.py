@@ -25,7 +25,7 @@ BASE = Path(tempfile.mkdtemp(prefix="contratgen-doctor-"))
 os.environ["CONFIG_DIR"] = str(BASE / "config")
 os.environ["DONNEES"] = str(BASE / "data")
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from _outils import base_mongo  # noqa: E402
+from _outils import base_mongo, societes as poser_societes  # noqa: E402
 base_mongo("doctor")
 
 import config                                                 # noqa: E402
@@ -75,8 +75,7 @@ def ecrire(instance=None, modele=MODELE, grille=None, formulaire=None, societes=
         encoding="utf-8")
     (CONF / "formulaire.json").write_text(
         json.dumps(formulaire or FORMULAIRE), encoding="utf-8")
-    (CONF / "societes.json").write_text(
-        json.dumps(societes or SOCIETES), encoding="utf-8")
+    poser_societes(societes or SOCIETES)
     (CONF / "contrats" / "contrat.txt").write_text(modele, encoding="utf-8")
     f = CONF / "grille.json"
     if grille is None:

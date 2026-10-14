@@ -26,7 +26,7 @@ BASE = Path(tempfile.mkdtemp(prefix="contratgen-produit-"))
 os.environ["CONFIG_DIR"] = str(BASE / "config")
 os.environ["DONNEES"] = str(BASE / "data")
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from _outils import base_mongo  # noqa: E402
+from _outils import base_mongo, societes as poser_societes  # noqa: E402
 base_mongo("produit")
 
 from werkzeug.security import generate_password_hash          # noqa: E402
@@ -73,7 +73,7 @@ SOCIETES = [{"nom": "ACME", "siren": "111 111 111",
 
 
 def ecrire(instance=None, contrat="Bonjour {{Nom}}, poste {{Poste}}.",
-           formulaire=None, grille=None, comptes=COMPTES):
+           formulaire=None, grille=None, comptes=COMPTES, societes=SOCIETES):
     store.db().comptes.delete_many({})
     for ident, doc in comptes.items():
         store.db().comptes.insert_one({"_id": ident, **doc})
@@ -84,7 +84,7 @@ def ecrire(instance=None, contrat="Bonjour {{Nom}}, poste {{Poste}}.",
         if grille else fg.unlink(missing_ok=True)
     (CONF / "formulaire.json").write_text(
         json.dumps(formulaire or FORMULAIRE), encoding="utf-8")
-    (CONF / "societes.json").write_text(json.dumps(SOCIETES), encoding="utf-8")
+    poser_societes(societes)
     (CONF / "contrats" / "contrat.txt").write_text(contrat, encoding="utf-8")
     config._CACHE.clear()
 
@@ -111,6 +111,48 @@ def test_comptes_absents_ou_malformes_refuses_au_demarrage():
         assert "comptes" in config.verifier(), f"{mauvais!r} passe le garde-fou"
     ecrire(comptes={"rh": {"mdp_hash": generate_password_hash(config.MDP_PAR_DEFAUT)}})
     assert "compte RH" in config.verifier(), "mot de passe par défaut accepté"
+
+
+def test_societes_absentes_ou_malformees_refusees_au_demarrage():
+    """Les sociétés vivent en base : aucune, aucune avec un établissement, ou
+    un établissement sans nom refuse le démarrage. Les checks qui lisent les
+    sociétés (règles, jetons) ne doivent pas planter dessus."""
+    sans_nom = [{**SOCIETES[0], "etablissements": [{"siret": "1"}]}]
+    mentions_nulles = [{**SOCIETES[0], "mentions": None}]
+    mentions_liste = [{**SOCIETES[0], "etablissements": [
+        {**SOCIETES[0]["etablissements"][0], "mentions": ["1 rue X"]}]}]
+    for mauvais in ([], [{**SOCIETES[0], "etablissements": []}], sans_nom,
+                    mentions_nulles, mentions_liste):
+        ecrire(instance={**INSTANCE, "templates": [
+            {"quand": {"etablissement": "ACME / Siège"}, "modele": "contrat.txt"}]},
+            societes=mauvais)
+        assert "établissements" in config.verifier(), f"{mauvais!r} passe le garde-fou"
+
+
+def test_import_garde_les_places_et_ignore_l_id():
+    """Une société déjà en base garde sa place, une nouvelle se range à la
+    suite (et non à égalité avec la première) ; l'`_id` d'un export Mongo ne
+    fait pas planter l'import."""
+    ecrire()
+    # ACME réexportée de la base : son `_id` diffère de celui en base, Mongo
+    # refuserait de le changer (« _id immutable »).
+    neuve = {**SOCIETES[0], "nom": "Neuve"}
+    config.importer_societes([neuve, {**SOCIETES[0], "siren": "999", "_id": "exporte"}])
+    assert [s["nom"] for s in config.societes()] == ["ACME", "Neuve"]
+    places = {d["nom"]: d["ordre"] for d in store.db().societes.find()}
+    assert places == {"ACME": 0, "Neuve": 1}, places
+    assert config.societes()[0]["siren"] == "999", "ACME non remplacée"
+
+
+def test_cache_des_societes_expire():
+    """Une écriture d'un autre process (configurer.py) se voit sans redémarrer,
+    au plus tard au bout de _SOCIETES_TTL."""
+    ecrire()
+    assert [s["nom"] for s in config.societes()] == ["ACME"]
+    store.db().societes.insert_one({**SOCIETES[0], "nom": "Dehors", "ordre": 9})
+    assert [s["nom"] for s in config.societes()] == ["ACME"], "relu avant le délai"
+    config._societes_lu -= config._SOCIETES_TTL + 1
+    assert [s["nom"] for s in config.societes()] == ["ACME", "Dehors"]
 
 
 def test_id_de_champ_avec_point_ou_dollar_refuse():

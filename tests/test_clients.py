@@ -188,7 +188,8 @@ def installer_copie(base, client):
     client["password"] = mdp.group(1)
 
     # config propre au client
-    (copie / "config" / "societes.json").write_text(
+    # lu par base_mongo() dans _client_parcours.py : la base de l'enfant part vide
+    (copie / "config" / "societes.amorce.json").write_text(
         json.dumps(client["societes"], ensure_ascii=False, indent=2), encoding="utf-8")
     if formulaire := client.get("formulaire"):
         (copie / "config" / "formulaire.json").write_text(
@@ -242,7 +243,7 @@ def refus_base_deja_servie(base):
 
 
 def refus_avant_config(base, client):
-    """Juste après installer.py, sans societes.json rempli : refus de servir."""
+    """Juste après installer.py, sans société en base : refus de servir."""
     copie = base / (client["slug"] + "-nu")
     poser_code(copie)
     subprocess.run([sys.executable, "installer.py", client["nom"], "."],

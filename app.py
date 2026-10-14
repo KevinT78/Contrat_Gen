@@ -22,6 +22,7 @@ from pathlib import Path
 
 from flask import (Flask, abort, flash, redirect, render_template, request,
                    send_file, session, url_for)
+from pymongo.errors import PyMongoError
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.security import check_password_hash
 
@@ -155,7 +156,7 @@ def _email_demandeur(champs):
 
 
 def _destinataire_manager(champs):
-    """Adresse FIXE du manager de l'etablissement (societes.json), sinon la RH
+    """Adresse FIXE du manager de l'etablissement (en base), sinon la RH
     (mails.rh), qui transmet. Jamais l'email saisi dans le formulaire : c'est
     celui du candidat, et le lien de correction ouvre tout son dossier."""
     return (config.manager(config.valeur(champs, "etablissement"))
@@ -669,7 +670,6 @@ def etablissements_page():
                 "siret": e.get("siret") or "",
             })
     return render_template("etablissements.html", lignes=lignes,
-                           supabase=config.supabase_actif(),
                            sharepoint=bool(config.sharepoint()))
 
 
@@ -1051,7 +1051,7 @@ def _etablissement_form(creation):
                 _enregistrer_etablissement(valeurs, creation)
             except ValueError as e:
                 erreurs = [str(e)]
-            except Exception as e:               # noqa: BLE001 — panne supabase, rien d'écrit
+            except PyMongoError as e:            # base injoignable : rien d'écrit
                 print(f"[etablissements] enregistrement impossible ({type(e).__name__}: {e})",
                       flush=True)
                 erreurs = ["L'enregistrement n'a pas abouti. Réessayez dans un moment."]
@@ -1060,8 +1060,7 @@ def _etablissement_form(creation):
                 "etablissement.html", creation=creation, valeurs=valeurs,
                 erreurs=erreurs, mentions=_MENTIONS_SOCIETE,
                 societes=[s["nom"] for s in config.societes()],
-                groupes=_groupes_proposes(valeurs.get("groupe") or ""),
-                supabase=config.supabase_actif()), 422
+                groupes=_groupes_proposes(valeurs.get("groupe") or "")), 422
         flash("Établissement enregistré.", "ok")
         return redirect(url_for("etablissements_page"))
     if creation:
@@ -1079,8 +1078,7 @@ def _etablissement_form(creation):
     return render_template(
         "etablissement.html", creation=creation, valeurs=valeurs, erreurs=[],
         mentions=_MENTIONS_SOCIETE, societes=[s["nom"] for s in config.societes()],
-        groupes=_groupes_proposes(valeurs.get("groupe") or ""),
-        supabase=config.supabase_actif())
+        groupes=_groupes_proposes(valeurs.get("groupe") or ""))
 
 
 def _echecs_recap():
@@ -1228,7 +1226,7 @@ def _fiche_salarie(item):
         return False
 
     # KeyError attrape SEUL config.mentions(), et rien d'autre : l'etablissement
-    # du dossier peut avoir ete retire de societes.json depuis la soumission, et
+    # du dossier peut avoir ete retire des societes depuis la soumission, et
     # la fiche est desormais produite pour TOUS les clients (avant, ceux sans
     # modele sortaient plus haut). Hors try, ce KeyError faisait un 500 sur
     # /valider APRES l'ecriture de la transition : dossier valide, mais ni fiche,
@@ -1237,7 +1235,7 @@ def _fiche_salarie(item):
     try:
         mentions = config.mentions(config.valeur(item["champs"], "etablissement"))
     except KeyError as e:
-        return echec(f"établissement {e} absent de config/societes.json")
+        return echec(f"établissement {e} absent des sociétés en base")
     try:
         vals = contrat.valeurs(item["champs"], mentions,
                                extra=_pieces_du_dossier(item))
@@ -1405,13 +1403,13 @@ def _produire_contrat(uid, extra=None):
     # {{PiecesFournies}} sort « non genere » alors que doctor l'a validé.
     extra = {**extra, **_pieces_du_dossier(item)}
     # KeyError attrape SEUL config.mentions() : l'etablissement du dossier peut
-    # avoir ete retire de societes.json depuis la soumission, et le 500 tombait
+    # avoir ete retire des societes depuis la soumission, et le 500 tombait
     # APRES l'ecriture de la transition. Envelopper tout le bloc ferait passer un
     # KeyError venu d'ailleurs pour un etablissement manquant.
     try:
         mentions = config.mentions(config.valeur(item["champs"], "etablissement"))
     except KeyError as e:
-        return False, f"établissement {e} absent de config/societes.json"
+        return False, f"établissement {e} absent des sociétés en base"
     # OSError compris : la génération est un EFFET de la validation (comme
     # _fiche_salarie, qui garde le même couple) -- un disque plein ne doit pas
     # renvoyer un 500 alors que le dossier est déjà ouvert.

@@ -100,9 +100,11 @@ def db():
                 # prod, mongomock n'est pas installe et cette variable ne sert a rien.
                 for col, docs in json.loads(Path(os.environ["MONGOMOCK_AMORCE"])
                                             .read_text(encoding="utf-8")).items():
-                    base[col].insert_many(docs)
+                    if docs:          # insert_many refuse une liste vide
+                        base[col].insert_many(docs)
             base.dossiers.create_index("import_cle", unique=True, sparse=True)
             base.fichiers.create_index([("uid", 1), ("bucket", 1)])
+            base.societes.create_index("nom", unique=True)
             _db = base
     return _db
 
