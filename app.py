@@ -366,6 +366,15 @@ def _saisie(item=None):
                                    "refusé — " + ", ".join(sorted(store.EXTENSIONS)) + ".")
             continue
         v = (request.form.get(c["id"]) or "").strip()
+        cond = c.get("visible_si") or (c.get("requis_si")
+                                       if c.get("valeur_sinon") is not None else None)
+        if cond:
+            # Champ affiché seulement si un autre champ a la bonne valeur : masqué,
+            # il ne garde rien (une saisie faite avant de rebasculer sur Non), ou la
+            # `valeur_sinon` du schéma (ex. temps de travail = 35H hors temps partiel).
+            autre, attendu = cond
+            if (request.form.get(autre) or "").strip() != attendu:
+                v = c.get("valeur_sinon") or ""
         exige = c.get("requis")
         if c.get("requis_si"):
             autre, attendu = c["requis_si"]
