@@ -4,11 +4,10 @@
 
 La suite existante vérifie les transitions mais n'ouvre jamais GET /dossier :
 une faute de template (fil d'étapes, badge, journal) passait inaperçue.
-Écrit dans un dossier temporaire, ne touche jamais data/.
+Écrit dans une base vide (mongomock), rien sur le disque.
 """
 import os
 import sys
-import tempfile
 from io import BytesIO
 from pathlib import Path
 
@@ -17,7 +16,6 @@ sys.stderr.reconfigure(encoding="utf-8")
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from _outils import base_mongo  # noqa: E402
 base_mongo("ecrans")
-os.environ["DONNEES"] = tempfile.mkdtemp(prefix="contratgen-ecrans-")
 
 import config          # noqa: E402
 import store           # noqa: E402
@@ -26,8 +24,6 @@ from _outils import compte  # noqa: E402
 compte("rh", "fixture")
 
 app.config["PROPAGATE_EXCEPTIONS"] = True
-for zone in ("soumissions",):
-    (config.DONNEES / zone).mkdir(parents=True, exist_ok=True)
 
 ETAB = config.etablissements()[0][0]
 # Un établissement « déposé » : la validation n'y génère pas le contrat, l'écran
@@ -257,7 +253,7 @@ def main():
 
     manque = set(store.ETATS) - vus
     assert not manque, f"états jamais rendus : {sorted(manque)}"
-    print(f"ÉCRANS OK — {len(vus)} états rendus, {config.DONNEES}")
+    print(f"ÉCRANS OK — {len(vus)} états rendus")
 
 
 if __name__ == "__main__":

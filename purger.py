@@ -32,11 +32,6 @@ def main():
             print(f"  {item['id']}  {libelle:32}  {store.etat(item):16}  "
                   f"{ecoule} j / {duree} j")
 
-    if config.stockage().get("mode") == "dossier":
-        print("\n! Mode « dossier synchronisé » : la purge locale NE vide NI la "
-              "corbeille NI l'historique de versions du service de synchronisation. "
-              "La version complète de dossier.json (NIR, adresse compris) y reste "
-              "récupérable — à vider à la main côté service. Voir docs/ADR-stockage.md.")
     print("\ncollection mails (.eml) : purgés par ancienneté, pas par dossier (aucun uid "
           "dans le nom — artefact du mode console). En mode smtp, ces données sont "
           "dans les boîtes des destinataires, hors de portée.")

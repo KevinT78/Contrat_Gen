@@ -1,6 +1,5 @@
 {
   "client": "Démo — fixture de test (ne pas déployer)",
-  "secret": "fixture-de-test-publique-non-secrete-ne-jamais-deployer",
   "url": "http://localhost",
 
   "signature": {"mode": "manuel"},
@@ -12,7 +11,6 @@
     "hote": "smtp.example.com",
     "port": 587,
     "utilisateur": "rh@example.com",
-    "mot_de_passe": "",
     "expediteur": "rh@example.com",
     "rh": ["rh@example.com"],
     "dpae": null,

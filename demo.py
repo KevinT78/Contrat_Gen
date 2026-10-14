@@ -4,8 +4,8 @@
     python demo.py --vide     # suivi vide : c'est toi qui fais tout, du formulaire
                               # public à la remise au cabinet (pièces imprimées)
 
-Données dans la base de démo (mongomock, en mémoire, vide à chaque lancement) et
-data_demo/ pour le reste. Mails en mode console : collection `mails`, en-tête
+Données dans la base de démo (mongomock, en mémoire, vide à chaque lancement),
+rien sur le disque. Mails en mode console : collection `mails`, en-tête
 affiché ici. Identifiants RH : rh / demo-rh (compte créé au lancement).
 
 Quatre dossiers amorcés pour que le suivi ne soit pas vide au moment de
@@ -20,44 +20,40 @@ import contextlib
 import io
 import json
 import os
-import shutil
 import sys
 from io import BytesIO
 from pathlib import Path
 
 RACINE = Path(__file__).resolve().parent
+# Valeurs posees AVANT import config : un `--env` passe a la demo ne les
+# remplace pas (l'environnement deja pose l'emporte). La demo tourne toujours
+# sur sa base en memoire, sauf MONGO_URI pose dans le shell.
 os.environ.setdefault("CONFIG_DIR", str(RACINE / "config.demo"))
-os.environ.setdefault("DONNEES", str(RACINE / "data_demo"))
 os.environ.setdefault("PORT", "5000")
 # base en memoire (requirements-dev.txt), videe a chaque lancement ; un MONGO_URI deja pose gagne
 os.environ.setdefault("MONGO_URI", "mongomock://")
 os.environ.setdefault("MONGO_DB", "contratgen-demo")
+os.environ.setdefault("BASE_EN_MEMOIRE", "1")
+os.environ.setdefault("SECRET_KEY", "demo-cle-publique-ne-jamais-deployer")
 sys.stdout.reconfigure(encoding="utf-8")
 # stderr AUSSI : le refus ci-dessous part par sys.exit(), donc sur stderr, et
 # sortirait en cp1252 illisible des que la sortie n'est pas un vrai terminal.
 sys.stderr.reconfigure(encoding="utf-8")
 
-# AVANT le rmtree : la demo tourne sur la config du client, qui ne vit pas dans
-# le depot. Sur un clone frais elle est absente -- le dire, plutot que d'effacer
-# data_demo/ puis d'exploser sur un FileNotFoundError d'instance.json.
+# La demo tourne sur la config du client, qui ne vit pas dans le depot. Sur un
+# clone frais elle est absente -- le dire, plutot qu'un FileNotFoundError.
 if not (Path(os.environ["CONFIG_DIR"]) / "instance.json").exists():
     sys.exit(f"Config introuvable : {os.environ['CONFIG_DIR']}\n"
              "La démo nécessite une config complète (formulaire riche, "
              "modèles de contrats, grille de salaires), pas une instance vide.")
 
-shutil.rmtree(os.environ["DONNEES"], ignore_errors=True)
-for zone in ("soumissions",):
-    (Path(os.environ["DONNEES"]) / zone).mkdir(parents=True)
-
 import config  # noqa: E402
 import store   # noqa: E402
 import app as serveur  # noqa: E402
-from werkzeug.security import generate_password_hash  # noqa: E402
 
 # Les comptes vivent en base : sur mongomock (propre au process) la démo crée le
 # sien ici, avant demarrer() qui refuse de servir sans compte.
-store.db().comptes.replace_one(
-    {"_id": "rh"}, {"mdp_hash": generate_password_hash("demo-rh")}, upsert=True)
+store.poser_compte("rh", "demo-rh")
 # Les societes aussi : celles de la config (societes.amorce.json ; une config
 # client d'avant la bascule a encore son societes.json).
 _CONF = Path(os.environ["CONFIG_DIR"])
@@ -190,8 +186,8 @@ Variante « contrat déposé » : même fiche, Établissement = {etab_depose}
 if __name__ == "__main__":
     fiche = ""
     if "--vide" in sys.argv:
-        pieces = config.DONNEES / "pieces_demo"
-        pieces.mkdir(exist_ok=True)
+        pieces = RACINE / ".scratch" / "pieces_demo"     # factices, a deposer a la main
+        pieces.mkdir(parents=True, exist_ok=True)
         for nom in ("carte_vitale", "rib", "cni_recto", "cni_verso", "justif_domicile"):
             (pieces / f"{nom}.pdf").write_bytes(PDF)
         fiche = "\n" + FICHE.format(dossier=pieces, etab=GENERE[0],

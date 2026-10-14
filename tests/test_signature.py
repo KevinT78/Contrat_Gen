@@ -7,6 +7,7 @@ recuperer() rend None tant que la procédure n'est pas « done », les octets du
 PDF signé ensuite.
 """
 import json
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -19,8 +20,8 @@ base_mongo("signature")
 import config          # noqa: E402
 import signature       # noqa: E402
 
-config.instance()["signature"] = {"mode": "yousign", "cle_api": "k-test",
-                                  "url": "https://faux.yousign/v3"}
+config.instance()["signature"] = {"mode": "yousign", "url": "https://faux.yousign/v3"}
+os.environ["YOUSIGN_CLE_API"] = "k-test"        # un secret : l'environnement, pas instance.json
 
 appels = []
 _etat = {"done": False}

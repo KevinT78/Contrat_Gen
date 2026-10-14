@@ -2,23 +2,84 @@
 fichiers sous config/, jamais en code.
 
 Un client = une copie de ce dépôt. `python installer.py "<Client>"` remet
-config/ à blanc et génère les secrets ; on remplit ensuite instance.json,
-les sociétés en base (configurer.py) et on dépose les .docx.
+config/ à blanc et écrit les secrets dans un fichier d'environnement ; on
+remplit ensuite instance.json, les sociétés en base (configurer.py) et on
+dépose les .docx. Les secrets ne vivent jamais dans config/ (cf. SECRETS).
 """
 import json
 import os
 import re
+import sys
 import time
 from pathlib import Path
 
-from pymongo.errors import DuplicateKeyError
+from pymongo.errors import DuplicateKeyError, PyMongoError
 
 from apparence import resoudre
 
 RACINE = Path(__file__).parent
+
+
+def _est_env(a):
+    return a == "--env" or a.startswith("--env=")
+
+
+def _charger_env(argv):
+    """`--env <fichier>` (ou `--env=<fichier>`) sur la ligne de n'importe quel
+    script (app, recap, configurer, doctor...) : charge le .env de l'instance
+    ecrit par installer.py. Ici parce que config est importe avant tout le reste
+    et que CONFIG_DIR doit etre connu avant CLIENT ; l'option est retiree d'argv,
+    chaque script lit ses propres arguments comme avant.
+
+    Une variable deja posee et non vide l'emporte sur le fichier (systemd,
+    PowerShell, surcharge ponctuelle). Une ligne = CLE=valeur coupee au premier
+    « = », espaces autour retires, une paire de guillemets englobante retiree,
+    rien d'autre : la meme lecture sous Linux et Windows. Une ligne illisible
+    arrete tout, sans jamais afficher son contenu (elle peut porter un secret)."""
+    i = next((i for i, a in enumerate(argv) if _est_env(a)), None)
+    if i is None:
+        return
+    if argv[i] == "--env":
+        if i + 1 >= len(argv):
+            raise SystemExit("--env attend le chemin du fichier .env de l'instance")
+        chemin = Path(argv[i + 1])
+        del argv[i:i + 2]
+    else:
+        chemin = Path(argv.pop(i).split("=", 1)[1])
+    if any(_est_env(a) for a in argv):
+        raise SystemExit("--env donné deux fois : un seul fichier par instance")
+    try:
+        # utf-8-sig : un .env retouche dans le Bloc-notes peut commencer par un BOM
+        lignes = chemin.read_text(encoding="utf-8-sig").splitlines()
+    except OSError as e:
+        raise SystemExit(f"--env : {chemin} illisible ({e.strerror})")
+    except UnicodeDecodeError:
+        raise SystemExit(f"--env : {chemin} n'est pas en UTF-8, réenregistrez-le en UTF-8")
+    for n, ligne in enumerate(lignes, 1):
+        if not ligne.strip() or ligne.lstrip().startswith("#"):
+            continue
+        cle, egal, valeur = (x.strip() for x in ligne.partition("="))
+        if not egal or not cle:
+            raise SystemExit(f"--env : {chemin}, ligne {n} : attendu CLE=valeur")
+        if len(valeur) >= 2 and valeur[0] == valeur[-1] and valeur[0] in "\"'":
+            valeur = valeur[1:-1]
+        if not os.environ.get(cle):
+            os.environ[cle] = valeur
+        elif os.environ[cle] != valeur:
+            # La base d'un autre client restee dans le shell recevrait la
+            # config de celui-ci. Le nom seul : la valeur peut etre un secret.
+            print(f"! --env : {cle} déjà posé dans l'environnement avec une autre "
+                  f"valeur que {chemin} — c'est celle de l'environnement qui sert",
+                  file=sys.stderr)
+
+
+_charger_env(sys.argv)
 CLIENT = Path(os.environ.get("CONFIG_DIR", RACINE / "config"))
 
-SECRET_A_INSTALLER = "REMPLACER-A-L-INSTALLATION"
+# Lus dans l'environnement, jamais dans config/ ni en base : config/ se copie,
+# se versionne et se montre au client ; un secret n'y a pas sa place.
+SECRETS = {"SECRET_KEY": "clé de session et de signature des liens",
+           "MONGO_URI": "adresse de la base", "MONGO_DB": "nom de la base de ce client"}
 MDP_PAR_DEFAUT = "demo"          # l'ancien mot de passe de démo — refusé au démarrage
 
 # Version du FORMAT de config/, pas du produit. Le code est un paquet versionne,
@@ -166,19 +227,6 @@ def comptes():
     return {d["_id"]: {"mdp_hash": d.get("mdp_hash")} for d in store.db().comptes.find()}
 
 
-def stockage():
-    """Le bloc `stockage` d'instance.json : ou vivent les donnees.
-
-    Lecture GARDEE : config est importe par des outils qui tournent sans
-    instance complete (doctor, tests, installer d'a cote). Une instance
-    installee avant ce bloc n'en a pas -- absent vaut « local »."""
-    try:
-        s = instance().get("stockage")
-    except (OSError, ValueError, KeyError):
-        return {}
-    return s if isinstance(s, dict) else {}
-
-
 # --- la DA du client ------------------------------------------------------
 # Un client = un dossier d'instance ; sa direction artistique y vit comme le
 # reste (`theme.json` + un dossier `marque/` pour le logo et le favicon). Les
@@ -194,7 +242,7 @@ def theme():
     """`theme.json` de l'instance. Absent = la DA d'origine, une instance
     installee avant ce fichier ne bouge pas.
 
-    Garde sur OSError SEULEMENT, pas sur le JSON casse comme stockage() : un
+    Garde sur OSError SEULEMENT, pas sur le JSON casse comme conservation() : un
     fichier illisible avale la DA en silence, et le client ouvre son app le
     premier jour, la voit verte, sans que personne sache pourquoi. C'est
     _verifier_theme() qui le dit au demarrage."""
@@ -213,8 +261,8 @@ def apparence():
 def conservation():
     """Le bloc `conservation` d'instance.json : au bout de combien de jours dans
     un etat terminal les pieces d'un dossier sont effacees (le journal, lui,
-    reste). Lecture GARDEE comme stockage(). Bloc absent = aucune purge,
-    retro-compatible."""
+    reste). Lecture GARDEE : config est importe par des outils qui tournent
+    sans instance complete (doctor, tests). Bloc absent = aucune purge."""
     try:
         c = instance().get("conservation")
     except (OSError, ValueError, KeyError):
@@ -231,30 +279,6 @@ def sharepoint():
     except (OSError, ValueError, KeyError):
         return {}
     return c if isinstance(c, dict) else {}
-
-
-def _donnees():
-    """LE seul endroit qui decide ou vit data/. Priorite :
-
-      1. env DONNEES        -- la ligne de lancement l'emporte toujours (compat :
-                               les tests et les instances lancees a la main)
-      2. stockage.chemin    -- mode « dossier », replique par le client de sync
-      3. a cote de config/  -- l'instance porte ses donnees (CONFIG_DIR pose)
-      4. RACINE / data      -- le depot lui-meme (dev, demo)
-    """
-    if env := os.environ.get("DONNEES"):
-        return Path(env)
-    s = stockage()
-    if s.get("mode") == "dossier" and isinstance(s.get("chemin"), str) and s["chemin"].strip():
-        return Path(s["chemin"].strip())
-    if os.environ.get("CONFIG_DIR"):
-        return CLIENT.parent / "data"
-    return RACINE / "data"
-
-
-# Fige au demarrage : deplacer les donnees d'une instance qui tourne n'est pas
-# un rechargement a chaud, c'est un redemarrage (et un deplacement de fichiers).
-DONNEES = _donnees()
 
 
 def recharger():
@@ -502,7 +526,12 @@ def pieces():
 
 
 def secret():
-    return instance()["secret"].encode()
+    """Cle de signature des liens (store.signer). Leve si SECRET_KEY manque :
+    recap.py ne passe pas par verifier(), et une cle vide y signerait des liens
+    morts sans que personne le voie."""
+    if not (cle := os.environ.get("SECRET_KEY", "")).strip():
+        raise RuntimeError("SECRET_KEY absent de l'environnement")
+    return cle.encode()
 
 
 # Modele generique verse au depot (hors config*) : sert a TOUTE instance qui
@@ -606,47 +635,49 @@ def _verifier_version():
     return {}
 
 
-def _verifier_stockage():
-    """Ou vivent les donnees, verifie comme le reste de la config.
-
-    En mode « dossier », l'ECRITURE est testee pour de vrai : un dossier de
-    synchronisation pas encore replique, deplace, ou monte en lecture seule doit
-    etre refuse au demarrage -- pas decouvert a la premiere soumission d'un vrai
-    salarie, quand la piece d'identite est deja partie dans le vide.
-
-    Bloc absent = local : les instances installees avant ce bloc demarrent."""
-    s = instance().get("stockage")
-    if s is None:
-        return {}
-    if not isinstance(s, dict):
-        return {"stockage": ["attend un objet, ex. {\"mode\": \"local\"}"]}
-    mode = s.get("mode", "local")
-    if mode == "local":
-        return {}
-    if mode != "dossier":
-        return {"stockage": [f"mode « {mode} » inconnu — au choix : "
-                             "« local » (data/ dans l'instance) ou « dossier » "
-                             "(dossier répliqué par un client de synchronisation)"]}
-    chemin = s.get("chemin")
-    if not isinstance(chemin, str) or not chemin.strip():
-        return {"stockage": ["mode « dossier » sans « chemin » : indiquez la racine "
-                             "du dossier répliqué par le client de synchronisation"]}
-    racine = Path(chemin.strip())
-    if not racine.is_dir():
-        return {"stockage": [f"« {chemin} » n'est pas un dossier — le client de "
-                             "synchronisation est-il installé et le dossier répliqué ?"]}
-    sonde = racine / f".contratgen-ecriture-{os.getpid()}"
-    try:
-        sonde.write_bytes(b"")
-        sonde.unlink()
-    except OSError as e:
-        return {"stockage": [f"« {chemin} » n'est pas accessible en écriture : {e}"]}
+def _verifier_mongo():
+    """Les variables d'environnement, sans toucher au reseau : une base
+    injoignable se voit au `ping` de app.demarrer(). Jamais la valeur de
+    MONGO_URI dans le message, elle porte le mot de passe de la base."""
+    absents = [v for v in SECRETS if not os.environ.get(v)]
+    if absents:
+        return {"mongo / secrets": [f"{v} absent de l'environnement ({SECRETS[v]}) — "
+                                    "passez le .env de l'instance : --env <dossier>/.env"
+                                    for v in absents]}
+    raisons = []
+    if len(os.environ["SECRET_KEY"].strip()) < 32:
+        raisons.append("SECRET_KEY trop courte (moins de 32 caractères) : gardez celle "
+                       "générée par installer.py")
+    nom = os.environ["MONGO_DB"]
+    # Les regles de nommage de MongoDB : un nom invalide fait lever pymongo au
+    # premier acces, en pleine verification.
+    if re.search(r'[/\\. "$*<>:|?]', nom) or len(nom.encode()) >= 64:
+        raisons.append(f"MONGO_DB « {nom} » : nom de base invalide (ni espace ni "
+                       "/ \\ . \" $ * < > : | ?, moins de 64 caractères)")
+    if raisons:
+        return {"mongo / secrets": raisons}
+    uri = os.environ["MONGO_URI"]
+    if uri.startswith("mongomock://"):
+        # Base en memoire, videe a chaque redemarrage : la demo, serve et les
+        # tests la declarent (BASE_EN_MEMOIRE=1). Recopiee par erreur dans le
+        # .env d'un client, elle perdrait ses dossiers sans un mot.
+        if os.environ.get("BASE_EN_MEMOIRE") != "1":
+            return {"mongo / secrets": ["MONGO_URI=mongomock:// est une base en mémoire, "
+                                        "vidée à chaque redémarrage : réservée à la démo "
+                                        "et aux tests"]}
+    elif not uri.startswith(("mongodb://", "mongodb+srv://")):
+        return {"mongo / secrets": ["MONGO_URI doit commencer par mongodb:// ou "
+                                    "mongodb+srv://"]}
+    # Hote vide : pymongo leverait InvalidURI en pleine verification. Lu a la
+    # main, sans MongoClient qui resout le DNS d'une adresse mongodb+srv://.
+    elif not uri.split("://", 1)[1].split("/", 1)[0].rsplit("@", 1)[-1].strip(", "):
+        return {"mongo / secrets": ["MONGO_URI sans adresse de serveur après mongodb://"]}
     return {}
 
 
 def _verifier_conservation():
     """Conservation des donnees : au bout de combien de jours un dossier termine
-    voit ses pieces effacees. Patron de _verifier_stockage -- la FORME avant les
+    voit ses pieces effacees. La FORME avant les
     valeurs, sinon c'est le garde-fou qui plante sur une config malformee.
 
     Bloc absent = aucune purge : les instances installees avant ce bloc
@@ -731,22 +762,7 @@ def _verifier_theme():
 
 
 def _verifier_installation():
-    from werkzeug.security import check_password_hash
     manques = {}
-    if SECRET_A_INSTALLER in instance().get("secret", ""):
-        manques["secret"] = [f"encore « {SECRET_A_INSTALLER} » — lancez : "
-                             f"python installer.py \"<Client>\""]
-    # verifier() lance tous les checks : celui-ci tourne meme si un compte est
-    # malforme (_verifier_comptes le dit), et ne doit pas planter dessus.
-    try:
-        users = comptes()
-    except RuntimeError:          # pas de base : _verifier_comptes le dit deja
-        users = {}
-    if any(isinstance(u.get("mdp_hash"), str)
-           and check_password_hash(u["mdp_hash"], MDP_PAR_DEFAUT)
-           for u in users.values()):
-        manques["compte RH"] = ["mot de passe par défaut — changez-le : "
-                                "python configurer.py compte <identifiant>"]
     # Sans destinataire RH, chaque soumission part en `mail_echoue` dans le
     # journal et personne ne le voit : deux instances de test ont servi comme
     # ca, verifier() disant OK. Un mail sans expediteur est refuse par un
@@ -758,6 +774,12 @@ def _verifier_installation():
     if not (m.get("expediteur") or "").strip():
         manques.setdefault("mails", []).append(
             "« expediteur » vide : renseignez l'adresse d'envoi dans mails")
+    if (m.get("mode") == "smtp" and m.get("utilisateur")
+            and not os.environ.get("SMTP_MOT_DE_PASSE")):
+        manques["SMTP_MOT_DE_PASSE"] = ["absent de l'environnement (relais authentifié)"]
+    if ((instance().get("signature") or {}).get("mode") == "yousign"
+            and not os.environ.get("YOUSIGN_CLE_API")):
+        manques["signature"] = ["YOUSIGN_CLE_API absent de l'environnement"]
     # Le mail hebdo au cabinet est fabrique hors requete (cron) : sans base
     # d'URL il partirait avec des liens vides, et personne ne lit la sortie
     # d'un cron -- meme trou que mails.rh, refuse au meme endroit.
@@ -765,6 +787,14 @@ def _verifier_installation():
         manques["url"] = ["vide : l'adresse publique de l'app (ex. https://embauche.acme.fr), "
                           "base des liens de tous les mails"]
     return manques
+
+
+def _base_illisible(e):
+    """Manque commun quand la base leve en pleine verification : URI que
+    pymongo refuse (port non numerique, options mal placees...) ou serveur
+    qui ne repond pas. Le type seul : le message peut citer l'adresse."""
+    return {"mongo / secrets": [f"base mongo illisible ({type(e).__name__}) : "
+                                "vérifiez MONGO_URI et MONGO_DB, puis que la base répond"]}
 
 
 def _verifier_societes():
@@ -775,6 +805,8 @@ def _verifier_societes():
         data = societes()
     except RuntimeError as e:
         return {"établissements": [str(e)]}
+    except (PyMongoError, ValueError) as e:     # ValueError : port non numerique
+        return _base_illisible(e)
     raisons = []
     for i, s in enumerate(data, 1):
         nom = s.get("nom")
@@ -802,17 +834,34 @@ def _verifier_comptes():
     """Aucun compte en base = refus au demarrage ; un compte sans hash valide
     aussi, plutot qu'un login() qui plante. Sans base configuree : un manque,
     pas une trace -- doctor et configurer doivent rendre leur bilan."""
+    from werkzeug.security import check_password_hash
     try:
         d = comptes()
     except RuntimeError as e:
         return {"comptes": [str(e)]}
+    except (PyMongoError, ValueError) as e:
+        return _base_illisible(e)
     if not d:
         return {"comptes": ["aucun compte de connexion en base — lancez : "
                             "python configurer.py compte rh"]}
-    raisons = [f"« {ident} » : mdp_hash absent ou invalide"
-               for ident, u in d.items()
-               if not isinstance(u.get("mdp_hash"), str) or not u["mdp_hash"]]
-    return {"comptes": raisons} if raisons else {}
+    # Un hash werkzeug a la forme « methode$sel$empreinte » ; une autre forme,
+    # ou une methode inconnue (werkzeug leve ValueError), et personne ne peut
+    # plus se connecter, sans message.
+    raisons, par_defaut = [], False
+    for ident, u in d.items():
+        h = u.get("mdp_hash")
+        try:
+            if not isinstance(h, str) or h.count("$") < 2:
+                raise ValueError(h)
+            par_defaut = check_password_hash(h, MDP_PAR_DEFAUT) or par_defaut
+        except ValueError:
+            raisons.append(f"« {ident} » : mdp_hash absent ou invalide")
+    if raisons:
+        return {"comptes": raisons}
+    if par_defaut:
+        return {"compte RH": ["mot de passe par défaut — changez-le : "
+                              "python configurer.py compte <identifiant>"]}
+    return {}
 
 
 def _verifier_derives():
@@ -1102,16 +1151,23 @@ def _verifier_bareme(ligne, g):
 def verifier():
     """Garde-fou de demarrage. Renvoie {} si tout va bien, sinon un dict
     {sujet: [raisons]} et l'instance ne sert pas."""
-    manques = _verifier_societes()
-    lisent_societes = (_verifier_placeholders, _verifier_regles)
-    for check in (_verifier_version, _verifier_comptes, _verifier_stockage,
+    manques = _verifier_mongo()
+    if not manques:
+        manques.update(_verifier_societes())
+    # Base absente ou illisible : comptes et societes rediraient le meme
+    # manque, et les checks qui lisent les societes leveraient.
+    sans_base = "mongo / secrets" in manques
+    lisent_societes = {_verifier_placeholders, _verifier_regles}
+    lisent_base = lisent_societes | {_verifier_comptes}
+    for check in (_verifier_version, _verifier_comptes,
                   _verifier_conservation, _verifier_sharepoint, _verifier_theme,
                   _verifier_installation,
                   _verifier_derives, _verifier_ids_champs, _verifier_roles, _verifier_placeholders,
                   _verifier_regles, _verifier_postes, _verifier_grille):
         # Societes absentes ou mal formees : ces checks leveraient, et le
         # manque « établissements » dit deja quoi faire.
-        if "établissements" in manques and check in lisent_societes:
+        if (sans_base and check in lisent_base) or (
+                "établissements" in manques and check in lisent_societes):
             continue
         manques.update(check())
     return manques

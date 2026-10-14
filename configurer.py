@@ -13,17 +13,14 @@ personne ne lançait verifier() avant le parcours, et un print cp1252 faisait
 passer ses messages accentués pour un bug d'encodage.
 
 L'assistant ne remplit que ce qui se dicte (adresses, comptes, société et
-établissements, secret). Le balisage des modèles, les rôles et la grille
+établissements). Le balisage des modèles, les rôles et la grille
 restent un travail d'éditeur : il montre où, puis attend qu'on ait corrigé.
 """
 import getpass
 import importlib.util
 import json
 import os
-import secrets
 import sys
-
-from werkzeug.security import generate_password_hash
 
 import config
 import store
@@ -37,19 +34,21 @@ if not sys.stdin.isatty():          # réponses par pipe : UTF-8, pas cp1252
 # Chemins depuis la racine de l'INSTANCE, prefixe compris : presque tout vit
 # sous config/, mais pas le modele generique de fiche salarie, verse avec le
 # code. Mettre « config/ » dans le format d'affichage le lui collait aussi.
-FICHIERS = {"secret": "config/instance.json",
+FICHIERS = {"mongo / secrets": "fichier d'environnement .env (écrit par installer.py)",
+            "signature": "fichier d'environnement .env",
+            "SMTP_MOT_DE_PASSE": "fichier d'environnement .env",
             "compte RH": "en base : python configurer.py compte <identifiant>",
             "comptes": "en base : python configurer.py compte <identifiant>",
             "champs": "config/formulaire.json", "mails": "config/instance.json",
             "config_version": "config/instance.json", "derives →": "config/instance.json",
             "templates →": "config/instance.json",
             "poste «": "config/instance.json", "url": "config/instance.json",
-            "stockage": "config/instance.json", "conservation": "config/instance.json",
+            "conservation": "config/instance.json",
             "theme.json": "config/theme.json",
             "établissements": "en base : python configurer.py --assister",
             "roles": "config/formulaire.json", "grille": "config/grille.json",
             "fiche salarié": "modeles/fiche_salarie.docx"}
-REPARABLES = ("secret", "stockage", "conservation", "url", "mails", "comptes",
+REPARABLES = ("conservation", "url", "mails", "comptes",
               "compte RH", "établissements")
 
 
@@ -159,7 +158,8 @@ def mail(adresse):
     relais = f"{m.get('hote')}:{m.get('port')}"
     if not m.get("hote"):
         print("ÉCHEC — mails.hote vide : renseignez le relais SMTP (hote, port, "
-              "utilisateur, mot_de_passe)  [config/instance.json]")
+              "utilisateur)  [config/instance.json], mot de passe dans "
+              "SMTP_MOT_DE_PASSE  [.env]")
         return 1
     ok, raison = mails.envoyer("nouvelle_soumission", adresse, nom="Test d'envoi Contrat_Gen",
                                id="test", lien=config.url_publique() or "-")
@@ -178,8 +178,7 @@ def compte(ident):
     if not mdp:
         return 1
     try:
-        store.db().comptes.replace_one(
-            {"_id": ident}, {"mdp_hash": generate_password_hash(mdp)}, upsert=True)
+        store.poser_compte(ident, mdp)
     except RuntimeError as e:     # pas de base : le dire, pas une trace
         print(f"ÉCHEC — {e}")
         return 1
@@ -210,25 +209,9 @@ def importer_societes(chemin):
 
 # --- assistant : une fonction par sujet réparable -------------------------
 
-def _reparer_secret(_raisons):
-    _ecrire("instance.json", lambda d: {**d, "secret": secrets.token_hex(32)})
-    print("  secret généré.")
-
-
 def _reparer_url(_raisons):
     if url := _demander("Adresse publique de l'app (ex. https://embauche.acme.fr)"):
         _ecrire("instance.json", lambda d: {**d, "url": url})
-
-
-def _reparer_stockage(_raisons):
-    rep = _demander("Où vivent les données ? [1] dans l'instance  "
-                    "[2] dossier synchronisé (OneDrive, SharePoint, Google Drive)")
-    if rep == "1":
-        _ecrire("instance.json", lambda d: {**d, "stockage": {"mode": "local"}})
-    elif rep == "2" and (chemin := _demander(
-            "Chemin du dossier répliqué par le client de synchronisation")):
-        _ecrire("instance.json",
-                lambda d: {**d, "stockage": {"mode": "dossier", "chemin": chemin}})
 
 
 def _reparer_conservation(_raisons):
@@ -311,8 +294,7 @@ def _reparer_etablissements(_raisons):
             print(f"  « {etab['nom']} » ignoré — {e}")
 
 
-REPARATIONS = {"secret": _reparer_secret, "stockage": _reparer_stockage,
-               "conservation": _reparer_conservation,
+REPARATIONS = {"conservation": _reparer_conservation,
                "url": _reparer_url, "mails": _reparer_mails,
                "comptes": _reparer_comptes, "compte RH": _reparer_compte_rh,
                "établissements": _reparer_etablissements}

@@ -82,7 +82,7 @@ def envoyer(modele, a, cc=(), html=None, **vals):
                 # simplification volontaire : un relais prod sans auth (IP allowlist)
                 # partirait aussi en clair, a revoir si ce cas se presente.
                 s.starttls(context=ssl.create_default_context())
-                s.login(conf["utilisateur"], conf["mot_de_passe"])
+                s.login(conf["utilisateur"], os.environ.get("SMTP_MOT_DE_PASSE", ""))
             s.send_message(msg)
         return True, None
     except Exception as e:                       # noqa: BLE001

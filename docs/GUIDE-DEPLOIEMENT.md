@@ -4,8 +4,8 @@ Ce guide couvre trois choses :
 
 1. **Mettre la démo en ligne** sur un VPS (partie 1) ;
 2. **Déployer l'instance d'un client** sur ce même VPS (partie 2) ;
-3. **Les points à surveiller** : e-mails, authentification, proxy, stockage,
-   RGPD (partie 3).
+3. **Les points à surveiller** : e-mails, authentification, proxy, base de
+   données, RGPD (partie 3).
 
 Il a été rédigé à partir du code (`app.py`, `config.py`, `installer.py`, `configurer.py`,
 `mails.py`, `recap.py`, `purger.py`, `store.py`, `demo.py`). Les
@@ -15,30 +15,36 @@ exemples de commandes visent **Debian 12 ou Ubuntu 24.04** avec systemd et Caddy
 
 ## 0. Ce qu'il faut comprendre avant de commencer
 
-### Le code et les instances sont deux choses séparées
+### Le code, l'instance et la base sont trois choses séparées
 
 | | Où | Contenu | Qui écrit |
 |---|---|---|---|
 | **Code** | `/opt/contrat-gen` (clone git) | `app.py`, `templates/`, `modeles/`, `config.exemple/`, `config.demo/` | `git pull` uniquement |
-| **Instance** | `/srv/contratgen/<client>/` | `config/` (secrets, comptes, sociétés, modèles) + `data/` (dossiers, pièces) | l'app, `installer.py`, `configurer.py` |
+| **Instance** | `/srv/contratgen/<client>/` | `config/` (paramétrage : `instance.json`, `formulaire.json`, `grille.json`, `theme.json`, modèles `.docx`, gabarits de mails, `marque/`) et `.env` (secrets) | `installer.py`, `configurer.py`, l'installateur ; **l'app ne fait que lire** |
+| **Base** | MongoDB, **une base par client** (`MONGO_DB`) | dossiers, pièces et contrats, journal, comptes, sociétés et établissements, état du mail hebdo, jeton SharePoint | l'app |
 
-- Le même code peut servir plusieurs instances. Chacune a son process, son port et son
-  sous-domaine.
+- Le même code peut servir plusieurs instances. Chacune a son process, son port, son
+  sous-domaine et sa base.
 - Une instance est désignée par la variable **`CONFIG_DIR`**. Sans elle, l'app lit
   `config/` à la racine du dépôt. C'est une **fixture de test**, jamais une vraie instance.
-- Quand `CONFIG_DIR` est posé, les données vont par défaut dans `CONFIG_DIR/../data`
-  (`config._donnees()`).
+- **Rien n'est écrit sur le disque du serveur.** Il n'y a plus de dossier `data/` : les
+  pièces (15 Mo au plus par fichier) sont dans la base, qui porte donc les sauvegardes
+  (§2.7).
+- **Les secrets sont des variables d'environnement**, jamais dans `config/` ni dans la
+  base : `SECRET_KEY`, `MONGO_URI`, `MONGO_DB` (obligatoires), `SMTP_MOT_DE_PASSE` et
+  `YOUSIGN_CLE_API` (selon la config). `installer.py` les écrit dans
+  `/srv/contratgen/<client>/.env`.
 
-### Un seul process par instance, c'est imposé
+### Un seul process par instance : recommandé
 
-Plusieurs mécanismes vivent **en mémoire du process** : les verrous d'écriture des
-dossiers (`store._verrou`), les compteurs anti-flood (formulaire et login) et le cache de
-config. `python app.py` démarre donc **waitress** : un seul process, 4 threads.
+Les compteurs anti-flood (formulaire et login) et le cache de config vivent **en mémoire
+du process**. `python app.py` démarre donc **waitress** : un seul process, 4 threads.
 
-- **Ne jamais** lancer `gunicorn app:app` ni `waitress-serve --processes=N`. Rien ne
-  vous préviendrait, et des entrées de journal seraient perdues.
-- Un fichier `data/.serveur-actif.json` empêche un second serveur de démarrer sur le
-  même stockage. Il est rafraîchi toutes les 60 s.
+- Le journal d'un dossier s'écrit par compare-and-swap en base : plusieurs process ne
+  font plus perdre d'entrées. Ils multiplient en revanche les plafonds anti-flood par le
+  nombre de process. Rester sur un process.
+- Ne pas lancer `gunicorn app:app` (absent sous Windows) : waitress est le lancement
+  prévu.
 
 ### Le démarrage refuse une config incomplète
 
@@ -46,10 +52,11 @@ config. `python app.py` démarre donc **waitress** : un seul process, 4 threads.
 `!! sujet : raison` puis s'arrête avec un code d'erreur. Les contrôles :
 
 - format de config (`config_version`) ;
-- comptes ;
-- stockage (écriture testée pour de vrai) ;
+- variables d'environnement `SECRET_KEY`, `MONGO_URI`, `MONGO_DB` (le message nomme la
+  variable absente, jamais la valeur de `MONGO_URI` : elle porte le mot de passe de la
+  base) ;
+- comptes (au moins un en base) ;
 - conservation ;
-- secret encore à `REMPLACER-A-L-INSTALLATION` ;
 - mot de passe `demo` ;
 - aucun établissement ;
 - `mails.rh` ou `mails.expediteur` vides ;
@@ -63,6 +70,9 @@ config. `python app.py` démarre donc **waitress** : un seul process, 4 threads.
 - postes sans modèle ;
 - grille.
 
+Si la config est bonne, l'app envoie ensuite un `ping` à la base et refuse de servir
+si elle ne répond pas (`Base mongo « acme » injoignable`).
+
 Sous systemd, ces messages sont dans `journalctl -u <service>`.
 
 Pour obtenir ce même bilan **sans démarrer le serveur** : `python configurer.py`
@@ -73,7 +83,11 @@ Pour obtenir ce même bilan **sans démarrer le serveur** : `python configurer.p
 | Variable | Défaut | Rôle |
 |---|---|---|
 | `CONFIG_DIR` | `<dépôt>/config` | Dossier `config/` de l'instance. **Obligatoire en production.** |
-| `DONNEES` | voir ci-dessus | Force l'emplacement de `data/`. Prioritaire sur le bloc `stockage`. |
+| `SECRET_KEY` | aucun | **Obligatoire.** Signe la session et les liens (correction, lot du cabinet). |
+| `MONGO_URI` | aucun | **Obligatoire.** Adresse de la base, mot de passe compris. |
+| `MONGO_DB` | aucun | **Obligatoire.** Nom de la base : une par client. |
+| `SMTP_MOT_DE_PASSE` | vide | Mot de passe SMTP, requis si `mails.mode = smtp` avec un `utilisateur`. |
+| `YOUSIGN_CLE_API` | vide | Clé d'API, requise si `signature.mode = yousign`. |
 | `PORT` | `5000` | Port d'écoute de waitress. |
 | `HOST` | `127.0.0.1` | Adresse d'écoute. Laisser en local, derrière le reverse proxy. |
 | `PROXIES` | `0` | Nombre **réel** de reverse proxies devant l'app. **`1` derrière Caddy.** Voir §3.3. |
@@ -84,9 +98,11 @@ Pour obtenir ce même bilan **sans démarrer le serveur** : `python configurer.p
 
 ## Partie 1 — Déployer la démo sur un VPS
 
-La démo tourne sur `demo.py`, qui s'appuie sur `config.demo/`. Les données sont effacées
-et 4 dossiers d'exemple recréés **à chaque démarrage**. Les mails ne partent pas : ils
-sont écrits dans des fichiers `.eml` et dans le journal (voir §1.8).
+La démo tourne sur `demo.py`, qui s'appuie sur `config.demo/`. Elle utilise une base
+**en mémoire** (mongomock), vide à chaque lancement, donc sans MongoDB ni disque : 4
+dossiers d'exemple sont recréés **à chaque démarrage**. Les mails ne partent pas : ils
+sont écrits dans la collection `mails` de cette base et leur en-tête s'affiche dans la
+sortie du service (voir §1.8).
 
 ### 1.1 Prérequis
 
@@ -129,6 +145,7 @@ Côté SSH, n'autoriser que les clés (`PasswordAuthentication no`) et activer
 sudo git clone https://github.com/KevinT78/Contrat_Gen.git /opt/contrat-gen
 sudo python3 -m venv /opt/contrat-gen/venv
 sudo /opt/contrat-gen/venv/bin/pip install -r /opt/contrat-gen/requirements.txt
+sudo /opt/contrat-gen/venv/bin/pip install -r /opt/contrat-gen/requirements-dev.txt   # démo seulement : mongomock
 ```
 
 Si le dépôt est privé, deux options :
@@ -140,48 +157,41 @@ Si le dépôt est privé, deux options :
 Le code appartient à root et reste en lecture seule pour `contratgen`, ce qui est voulu :
 l'app n'écrit jamais dans son propre dossier.
 
-Dépendances : `flask`, `python-docx`, `htmldocx`, `num2words`, `waitress`. Toutes sont en
+Dépendances : `flask`, `pymongo`, `python-docx`, `htmldocx`, `num2words`, `waitress`. Toutes sont en
 pur Python ou disponibles en wheels. Aucun paquet système n'est nécessaire : pas de
 LibreOffice, les contrats sortent directement en `.docx`.
 
 ### 1.4 Créer l'instance de démo
 
-On travaille sur une **copie** de `config.demo/`, hors du dépôt. Deux raisons :
-
-- le secret de `config.demo/instance.json` est versionné, donc connu de quiconque a accès
-  au dépôt et identique sur toutes les copies : il permettrait de forger des cookies de
-  session et des liens signés ;
-- son `url` pointe sur `http://localhost:5000`.
+On travaille sur une **copie** de `config.demo/`, hors du dépôt, parce que son `url`
+pointe sur `http://localhost:5000`.
 
 ```bash
 sudo -u contratgen mkdir -p /srv/contratgen/demo
 sudo -u contratgen cp -r /opt/contrat-gen/config.demo /srv/contratgen/demo/config
-python3 -c "import secrets; print(secrets.token_hex(32))"     # nouveau secret
 sudo -u contratgen nano /srv/contratgen/demo/config/instance.json
 ```
 
 Dans `instance.json`, modifier :
 
-- `"secret"` : coller la valeur générée ;
 - `"url"` : `"https://demo.votre-domaine.fr"` (sert de base aux liens de tous les mails, jamais l'hôte de la requête) ;
 - laisser `"mails": {"mode": "console", ...}` : la démo n'envoie rien.
 
-> ⚠️ **Ne changez pas le mot de passe du compte `rh`.** `demo.py` se connecte en dur avec
-> `rh` / `demo-rh` pour préparer les dossiers d'exemple. Avec un autre mot de passe, la
-> connexion échoue sans message, l'assertion `RemisComptable` casse et le service redémarre
-> en boucle. Ces identifiants étant publics (ils figurent dans `demo.py`), protégez le site
-> par une authentification Caddy (§1.6).
-> Seule exception : le mode `--vide`, qui ne prépare aucun dossier.
-> `configurer.py compte rh` y fonctionne normalement.
-
-Vérifier la config avant de lancer :
+Sans `SECRET_KEY` dans l'environnement, `demo.py` en prend une valeur **publique** (écrite
+dans son code) : n'importe qui pourrait forger des cookies de session et des liens signés.
+Sur un serveur exposé, générer la vôtre :
 
 ```bash
-cd /opt/contrat-gen
-sudo -u contratgen env CONFIG_DIR=/srv/contratgen/demo/config \
-  DONNEES=/srv/contratgen/demo/data \
-  venv/bin/python -c "import config; print(config.verifier() or 'OK')"
+python3 -c "import secrets; print('SECRET_KEY=' + secrets.token_hex(32))"   | sudo tee /srv/contratgen/demo/.env >/dev/null
+sudo chown contratgen: /srv/contratgen/demo/.env && sudo chmod 600 /srv/contratgen/demo/.env
 ```
+
+> ⚠️ **Le compte `rh` de la démo est `rh` / `demo-rh`**, créé par `demo.py` à chaque
+> lancement dans la base en mémoire ; il n'y a rien à configurer ni à changer. Ces
+> identifiants étant publics (ils figurent dans `demo.py`), protégez le site par une
+> authentification Caddy (§1.6).
+
+`demo.py` vérifie la config au lancement et refuse de servir si elle est incomplète.
 
 ### 1.5 Service systemd
 
@@ -198,8 +208,8 @@ User=contratgen
 Group=contratgen
 WorkingDirectory=/opt/contrat-gen
 Environment=CONFIG_DIR=/srv/contratgen/demo/config
-# DONNEES est EFFACÉ à chaque démarrage par demo.py : dossier dédié, jamais celui d'un client
-Environment=DONNEES=/srv/contratgen/demo/data
+# SECRET_KEY de la démo ; sans MONGO_URI, demo.py prend une base en mémoire (jamais celle d'un client)
+EnvironmentFile=/srv/contratgen/demo/.env
 Environment=PORT=5000
 Environment=PROXIES=1
 ExecStart=/opt/contrat-gen/venv/bin/python demo.py
@@ -211,7 +221,6 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true
 ProtectSystem=strict
-ReadWritePaths=/srv/contratgen/demo
 
 [Install]
 WantedBy=multi-user.target
@@ -286,79 +295,89 @@ cabinet) sont bâtis sur `url` d'`instance.json`, jamais sur l'hôte de la requ�
 
 ### 1.8 Particularités de la démo
 
-- **Remise à zéro à chaque (re)démarrage**, y compris après un plantage ou un reboot.
-  Pour repartir d'une démo propre chaque nuit, ajouter dans la crontab de root :
-  `0 4 * * * systemctl restart contratgen-demo`.
-- **Mails** : visibles en direct avec `journalctl -u contratgen-demo -f`, et en fichiers
-  dans `/srv/contratgen/demo/data/mails/*.eml`.
-- **Mail hebdo au cabinet** (le dossier DUPONT y figure) :
-  ```bash
-  cd /opt/contrat-gen
-  sudo -u contratgen env CONFIG_DIR=/srv/contratgen/demo/config \
-    DONNEES=/srv/contratgen/demo/data venv/bin/python recap.py
-  ```
+- **Remise à zéro à chaque (re)démarrage**, y compris après un plantage ou un reboot : la
+  base est en mémoire. Pour repartir d'une démo propre chaque nuit, ajouter dans la
+  crontab de root : `0 4 * * * systemctl restart contratgen-demo`.
+- **Un `MONGO_URI` posé dans l'environnement l'emporte** sur la base en mémoire, et
+  `demo.py` ne vide pas cette base. Ne jamais lui donner la base d'un client.
+- **Mails** : l'en-tête de chaque mail s'affiche en direct dans
+  `journalctl -u contratgen-demo -f` ; le corps est dans la collection `mails` de la base
+  en mémoire.
+- **Mail hebdo au cabinet** (le dossier DUPONT y figure) : `recap.py` est un autre
+  process et ne voit pas la base en mémoire de la démo. Il ne peut pas la montrer sur ce
+  service.
 - **Mode `--vide`** (parcours intégralement manuel) : remplacer `demo.py` par
-  `demo.py --vide` dans `ExecStart`. Les PDF d'exemple sont créés **sur le serveur**, ce
-  qui ne sert à rien pour une présentation à distance : préparez vos propres PDF en local.
-- **Ne lancez jamais `demo.py` à la main pendant que le service tourne** : il effacerait
-  les données du service en marche.
+  `demo.py --vide` dans `ExecStart`. Les PDF d'exemple sont écrits dans `.scratch/pieces_demo/`
+  du dépôt, que l'utilisateur `contratgen` ne peut pas écrire sur ce serveur, et ils ne
+  servent à rien pour une présentation à distance : jouez ce mode en local, avec vos
+  propres PDF.
+- **Ne lancez jamais `demo.py` à la main avec le même `PORT` pendant que le service
+  tourne** : le port est pris.
 - **Mise à jour** : après un `git pull` qui modifie `config.demo/`, recopiez-la en
-  conservant votre `secret` et votre `url`.
+  conservant votre `url`.
 
 ---
 
 ## Partie 2 — Déployer l'instance d'un client
 
-Principe : **un client = un dossier `/srv/contratgen/<client>/` + un port + un
-sous-domaine + une unité systemd**. Le code dans `/opt/contrat-gen` est partagé.
+Principe : **un client = un dossier `/srv/contratgen/<client>/` + une base MongoDB + un
+port + un sous-domaine + une unité systemd**. Le code dans `/opt/contrat-gen` est partagé.
 
-Pour l'exemple : client « ACME Restauration », identifiant court `acme`, port `5101`,
-domaine `embauche.acme.fr`.
+Pour l'exemple : client « ACME Restauration », identifiant court `acme`, base `acme`,
+port `5101`, domaine `embauche.acme.fr`.
+
+**Avant de commencer**, il faut une base MongoDB **neuve et vide** pour ce client, en UE,
+joignable depuis le VPS, et son adresse `mongodb+srv://…` (`MONGO_URI`). L'hébergement
+détaillé de la base (Atlas) fait l'objet d'un guide à part, pas encore écrit.
 
 ### 2.1 Raccourci pratique
 
 Toutes les commandes d'administration doivent tourner **sous l'utilisateur `contratgen`**
-et **avec le `CONFIG_DIR` de l'instance**. Une petite fonction shell dans le `~/.bashrc`
-de l'administrateur évite les oublis :
+et **avec le `.env` de l'instance** (`CONFIG_DIR`, `SECRET_KEY`, `MONGO_URI`, `MONGO_DB`),
+passé par l'option `--env`. Une petite fonction shell dans le `~/.bashrc` de
+l'administrateur évite les oublis :
 
 ```bash
 cg() {   # usage : cg <client> <script.py> [args...]
   local c="$1"; shift
-  ( cd /opt/contrat-gen && sudo -u contratgen env CONFIG_DIR="/srv/contratgen/$c/config" \
-      venv/bin/python "$@" )
+  ( cd /opt/contrat-gen && sudo -u contratgen venv/bin/python "$@" --env "/srv/contratgen/$c/.env" )
 }
 ```
 
 ### 2.2 Créer l'instance
 
+`installer.py` lit `MONGO_URI` et `MONGO_DB` dans l'environnement :
+
 ```bash
 cd /opt/contrat-gen
-sudo -u contratgen venv/bin/python installer.py "ACME Restauration" /srv/contratgen/acme
+read -rs MONGO_URI                 # coller l'adresse de la base, sans l'écho
+sudo -u contratgen env MONGO_URI="$MONGO_URI" MONGO_DB=acme \
+  venv/bin/python installer.py "ACME Restauration" /srv/contratgen/acme
 ```
 
 `installer.py` :
 
-- copie `config.exemple/` vers `/srv/contratgen/acme/config/` et crée `data/` ;
-- génère un `secret` aléatoire et un compte `rh` avec un mot de passe aléatoire, **affiché
-  une seule fois** : notez-le ;
-- écrit `"stockage": {"mode": "local"}` ;
-- **refuse d'écraser** un `config/` existant.
-
-Le 3ᵉ argument optionnel (dossier synchronisé OneDrive/SharePoint) n'a pas d'intérêt sur
-un VPS Linux (voir §3.4).
+- crée le compte `rh` **en base**, avec un mot de passe aléatoire **affiché une seule
+  fois** : notez-le ;
+- copie `config.exemple/` vers `/srv/contratgen/acme/config/` ;
+- écrit `/srv/contratgen/acme/.env` (mode 600), une ligne `CLE=valeur` par variable :
+  `SECRET_KEY` (généré), `MONGO_URI`, `MONGO_DB`, `CONFIG_DIR` ;
+- **refuse** si `config/` ou `.env` existe déjà, ou si la base a déjà un compte `rh` (c'est
+  alors la base d'un autre client : donnez-en une neuve). Il n'y a plus de dossier `data/`
+  ni de 3ᵉ argument.
 
 ```bash
-sudo chmod -R go-rwx /srv/contratgen/acme        # secrets + pièces d'identité
+sudo chmod -R go-rwx /srv/contratgen/acme        # .env + config
 ```
 
 ### 2.3 Remplir la configuration
 
-Tout ce qui varie d'un client à l'autre est dans des fichiers : aucun écran d'administration.
+Le paramétrage est dans des fichiers de `config/` ; les sociétés et les comptes sont en base.
 
 | Fichier | À renseigner |
 |---|---|
-| `instance.json` | `client`, `url` (**obligatoire**, ex. `https://embauche.acme.fr`), bloc `mails` (§3.1), `templates` (poste → modèle, ou règles `{"quand": {...}, "modele": ...}` ; `"modele": null` marque un croisement volontairement sans contrat — `doctor` l'affiche en « exclu », pas en échec), et selon les besoins `derives`, `saisie_rh`, `critiques`, `fiche_salarie` (nom du modèle `.docx` du client dans `contrats/` — **facultatif** : sans lui, la fiche salarié est quand même produite, avec le modèle générique versé avec le code), `conservation` (§2.6), `motifs_ko` |
-| `societes.json` | Liste des sociétés : `nom`, `siren`, `comptable_email`, `mentions` (jetons légaux du contrat), `etablissements[]` avec `nom`, `siret`, **`manager_email`**, `mentions`, `groupe` (optionnel) et `"contrat": "genere"` (défaut, contrat produit par l'app) ou `"depose"` (contrat fait ailleurs, la RH dépose le PDF) |
+| `instance.json` | `client`, `url` (**obligatoire**, ex. `https://embauche.acme.fr`), bloc `mails` (§3.1, sans mot de passe : voir `SMTP_MOT_DE_PASSE`), `templates` (poste → modèle, ou règles `{"quand": {...}, "modele": ...}` ; `"modele": null` marque un croisement volontairement sans contrat — `doctor` l'affiche en « exclu », pas en échec), et selon les besoins `derives`, `saisie_rh`, `critiques`, `fiche_salarie` (nom du modèle `.docx` du client dans `contrats/` — **facultatif** : sans lui, la fiche salarié est quand même produite, avec le modèle générique versé avec le code), `conservation` (§2.6), `motifs_ko` |
+| Sociétés (**en base**, pas un fichier de `config/`) | Liste des sociétés : `nom`, `siren`, `comptable_email`, `mentions` (jetons légaux du contrat), `etablissements[]` avec `nom`, `siret`, **`manager_email`**, `mentions`, `groupe` (optionnel) et `"contrat": "genere"` (défaut, contrat produit par l'app) ou `"depose"` (contrat fait ailleurs, la RH dépose le PDF). Saisie par `configurer.py --assister`, chargement d'un fichier JSON par `configurer.py importer-societes <fichier.json>` (chaque société remplace celle de même nom), ou écran « Établissements » de l'app |
 | `formulaire.json` | `titre`, `intro`, `roles` (quel champ joue `etablissement`, `poste`, `nom`, `email`, etc.) et `champs[]` avec `id`, `libelle`, `type` (`texte`, `texte_long`, `email`, `date`, `nombre`, `montant`, `choix`, `etablissement`, `tel`, `piece_jointe`), `requis`, `requis_si`, `options`, `placeholder`, et pour les pièces `role` et `max_fichiers` |
 | `theme.json` + `marque/` | **Facultatif** — la direction artistique du client : `palette` (accent, fond, surface, texte, bord), `logo`, `favicon`. Les fichiers (logo, favicon) se déposent dans `config/marque/`. Un contraste insuffisant ou un fichier déclaré mais absent **empêche le démarrage**, avec le détail de ce qui cloche |
 | `grille.json` | Optionnel. `postes[]` (`mensuel`, ou `bareme` par durée hebdo) et `champ_heures`. Alimente `{{SalaireChiffres}}` et `{{SalaireLettres}}` |
@@ -368,7 +387,7 @@ Tout ce qui varie d'un client à l'autre est dans des fichiers : aucun écran d'
 La boucle de travail :
 
 ```bash
-cg acme configurer.py --assister   # questions guidées : secret, url, mails, comptes, société/établissements
+cg acme configurer.py --assister   # questions guidées : url, mails, comptes, société/établissements (écrits en base)
 cg acme placeholders.py            # génère config/PLACEHOLDERS.md : la liste des {{Jetons}} valides
 #   → envoyer PLACEHOLDERS.md au client, qui balise ses .docx et les renvoie
 #   → déposer les .docx dans /srv/contratgen/acme/config/contrats/ et les déclarer dans "templates"
@@ -405,32 +424,32 @@ Wants=network-online.target
 User=contratgen
 Group=contratgen
 WorkingDirectory=/opt/contrat-gen
-EnvironmentFile=/etc/contratgen/%i.env
-ExecStart=/opt/contrat-gen/venv/bin/python app.py
+ExecStart=/opt/contrat-gen/venv/bin/python app.py --env /srv/contratgen/%i/.env
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true
 ProtectSystem=strict
-ReadWritePaths=/srv/contratgen/%i
 
 [Install]
 WantedBy=multi-user.target
 ```
 
-`/etc/contratgen/acme.env` (un fichier par client, **un port différent par client**) :
+Le `.env` écrit par `installer.py` porte déjà `SECRET_KEY`, `MONGO_URI`, `MONGO_DB` et
+`CONFIG_DIR`. Y ajouter à la fin, **un port différent par client** :
 
 ```ini
-CONFIG_DIR=/srv/contratgen/acme/config
 PORT=5101
 PROXIES=1
 ```
 
+L'app n'écrit rien sur le disque : pas de `ReadWritePaths`.
+
 ```bash
 sudo systemctl daemon-reload
 sudo systemctl enable --now contratgen@acme
-journalctl -u contratgen@acme -n 30   # « ACME Restauration — données : /srv/contratgen/acme/data »
+journalctl -u contratgen@acme -n 30   # « ACME Restauration — base mongo : acme »
 ```
 
 Ajout dans `/etc/caddy/Caddyfile`, puis `sudo systemctl reload caddy` :
@@ -460,8 +479,7 @@ Description=Contrat_Gen — mail hebdo cabinet (%i)
 Type=oneshot
 User=contratgen
 WorkingDirectory=/opt/contrat-gen
-EnvironmentFile=/etc/contratgen/%i.env
-ExecStart=/opt/contrat-gen/venv/bin/python recap.py
+ExecStart=/opt/contrat-gen/venv/bin/python recap.py --env /srv/contratgen/%i/.env
 ```
 
 `/etc/systemd/system/contratgen-recap@.timer` :
@@ -484,16 +502,16 @@ sudo systemctl enable --now contratgen-recap@acme.timer
 sudo systemctl start contratgen-recap@acme.service && journalctl -u contratgen-recap@acme -n 20
 ```
 
-- **Mémo par cabinet** dans `DONNEES/recap.json` : chaque cabinet repart de son dernier
-  envoi réussi. Une semaine sautée ou un envoi raté (SMTP en panne) ne perd aucun dossier :
-  ils partent au passage suivant. `--jours` ne règle que le tout premier envoi (défaut 7).
-  Si ce fichier est illisible, `recap.py` s'arrête en le disant plutôt que de repartir de
-  zéro ; le supprimer fait repartir chaque cabinet de la fenêtre `--jours`.
+- **Mémo par cabinet** dans la collection `recap` de la base : chaque cabinet repart de
+  son dernier envoi réussi. Une semaine sautée ou un envoi raté (SMTP en panne) ne perd
+  aucun dossier : ils partent au passage suivant. `--jours` ne règle que le tout premier
+  envoi (défaut 7). Supprimer le document d'un cabinet dans cette collection le fait
+  repartir de la fenêtre `--jours`.
 - Un envoi raté s'affiche en rouge sur l'écran « Salariés ». `recap.py` sort aussi en
   code `1`, et l'unité apparaît alors dans `systemctl --failed`.
-- `recap.py` n'écrit que `recap.json`, jamais un dossier (en mode `console`, il écrit aussi
-  les `.eml`). Il peut donc tourner à côté du serveur sans casser la règle d'un seul
-  process écrivain.
+- `recap.py` n'écrit que dans la collection `recap`, jamais dans un dossier (en mode
+  `console`, il écrit aussi les mails dans la collection `mails`). Il peut tourner à côté
+  du serveur.
 
 ### 2.6 Conservation et purge (RGPD)
 
@@ -507,25 +525,34 @@ Ajouter dans `instance.json` :
 - Sans ce bloc, aucune purge n'a lieu.
 - La purge **n'est pas automatique**. Le suivi signale les dossiers éligibles, et la RH
   les efface via le bouton « Voir la purge » (`/purger`, confirmation puis POST).
-  Pièces, copies compta et nom du répertoire sont effacés, le journal (épuré) est conservé.
+  Les pièces sont effacées de la base, versions comprises ; le journal (épuré) est
+  conservé.
 - `purger.py` est **en lecture seule**. Il sort en code `1` s'il reste des dossiers à
   purger, ce qui permet de s'en servir comme alerte mensuelle via un timer, sur le modèle
   de §2.5.
-- Les fichiers `.eml` du mode `console` ne sont pas purgés par dossier. En production,
+- La collection `mails` (mode `console`) n'est pas purgée par dossier. En production,
   utilisez le mode `smtp`.
+- **Les sauvegardes de la base gardent les données** jusqu'à leur propre expiration : une
+  pièce purgée y reste lisible. Aligner la durée de rétention des sauvegardes sur la
+  conservation annoncée au client.
 
 ### 2.7 Sauvegardes
 
-Il faut sauvegarder **tout `/srv/contratgen/<client>/`** :
+**La sauvegarde, c'est la base.** Tout ce que l'app écrit (dossiers, pièces d'identité,
+contrats, journal, comptes, sociétés, état du mail hebdo) est dans MongoDB, et plus
+rien sur le disque du serveur.
 
-- `config/` contient le secret, les comptes et le mot de passe SMTP ;
-- `data/` contient les dossiers et les pièces d'identité.
+- **La base** : sauvegardes ou snapshots continus de l'hébergeur de la base, plus au
+  moins une copie hors de cet hébergeur. Elle contient les pièces d'identité : chiffrer
+  et limiter l'accès aux copies. Le guide d'hébergement de la base (Atlas) reste à écrire.
+- **`config/`** : le paramétrage du client (modèles `.docx`, `formulaire.json`, etc.).
+  Elle ne contient ni secret ni compte, mais c'est du travail d'installation : la copier
+  (un dépôt privé ou restic suffit).
+- **`.env`** : `SECRET_KEY` et `MONGO_URI` dans un coffre-fort de mots de passe. Perdre la
+  `SECRET_KEY` ne perd aucune donnée mais invalide les liens signés et les sessions
+  (voir « Changer le `SECRET_KEY` », §3.2).
 
-Il n'y a pas de base de données : les fichiers sont la base. Chaque écriture d'un
-`dossier.json` passe par un fichier temporaire puis un renommage, donc une copie à chaud
-reste cohérente dossier par dossier.
-
-Exemple avec restic, chiffré, vers un stockage distant :
+Exemple pour `config/` avec restic, chiffré, vers un stockage distant :
 
 ```bash
 restic -r sftp:backup@serveur:/contratgen init
@@ -533,12 +560,8 @@ restic -r sftp:backup@serveur:/contratgen backup /srv/contratgen --exclude /srv/
 ```
 
 Planifier la sauvegarde chaque nuit et **tester une restauration** : sur une autre
-machine, lancer l'instance restaurée avec `CONFIG_DIR` et vérifier le suivi.
-
-Le fichier `data/.serveur-actif.json` fait partie de la sauvegarde. Si vous restaurez sur
-une autre machine alors que l'ancienne tourne encore, le démarrage est refusé pendant
-5 minutes, ce qui est voulu. Supprimez ce fichier uniquement si l'ancienne instance est
-arrêtée.
+machine, remonter `config/` et le `.env`, pointer sur la base restaurée (`MONGO_DB`),
+lancer l'instance et vérifier le suivi.
 
 ### 2.8 Mettre à jour le code
 
@@ -560,7 +583,8 @@ sudo systemctl restart 'contratgen@*' contratgen-demo
   figer un client sur une version, clonez un second exemplaire du code
   (`/opt/contrat-gen-v1`) et pointez son unité dessus.
 - **Modifier la config** : éditer les `.json`, puis redémarrer l'unité — `config/` est relu
-  au démarrage. Si la nouvelle config est invalide, l'application refuse de démarrer et
+  au démarrage. Les sociétés, établissements et comptes sont en base et se modifient sans
+  redémarrer (écran « Établissements », `configurer.py compte`). Si la nouvelle config est invalide, l'application refuse de démarrer et
   affiche ce qui bloque ; `python doctor.py` permet de la vérifier avant.
 
 ---
@@ -573,7 +597,7 @@ sudo systemctl restart 'contratgen@*' contratgen-demo
 
 | `mails.mode` | Effet |
 |---|---|
-| `console` (défaut) | **Rien ne part.** Chaque mail est écrit dans `data/mails/*.eml` et sur la sortie standard. |
+| `console` (défaut) | **Rien ne part.** Chaque mail est écrit dans la collection `mails` de la base (message complet) et son en-tête sur la sortie standard. |
 | `smtp` | Envoi réel. |
 
 > ⚠️ `config.verifier()` **ne refuse pas** le mode `console` (le bilan `configurer.py`
@@ -591,8 +615,9 @@ sudo systemctl restart 'contratgen@*' contratgen-demo
   20 s (`SMTPServerDisconnected: ... timed out`). Utiliser le 587.
 - `From` = `mails.expediteur`. Le compte SMTP doit avoir le droit d'envoyer sous cette
   adresse, et le domaine doit publier SPF et DKIM pour ne pas finir en spam.
-- Le mot de passe SMTP est stocké **en clair** dans `instance.json` : droits `600`,
-  propriétaire `contratgen`, et fichier inclus dans les sauvegardes chiffrées.
+- Le mot de passe SMTP n'est **pas** dans `instance.json` : c'est la variable
+  d'environnement `SMTP_MOT_DE_PASSE`, à ajouter au `.env` de l'instance (mode 600). Le
+  démarrage refuse si `mails.mode = smtp`, avec un `utilisateur`, et que la variable manque.
 - L'envoi a lieu **pendant la requête HTTP**. Un serveur SMTP qui ne répond pas ralentit
   la soumission ou la validation jusqu'à 20 s.
 
@@ -649,15 +674,15 @@ sur les comptes récents.
 
 #### Comptes
 
-- Les comptes sont stockés dans `instance.json`, bloc
-  `"utilisateurs": {"<ident>": {"mdp_hash": "..."}}` (hash Werkzeug, scrypt).
+- Les comptes sont stockés **en base** (collection `comptes` : identifiant et hash du mot
+  de passe, hash Werkzeug scrypt), jamais dans `instance.json`.
 - **Tous les comptes ont les mêmes droits** : il n'y a pas de rôles. Tout compte connecté
   peut valider, rejeter et purger.
 - **Créer un compte ou changer un mot de passe** : `cg acme configurer.py compte <ident>`
-  (saisie masquée + confirmation). Redémarrer ensuite l'unité.
-- **Supprimer un compte** : retirer sa clé dans `instance.json`, puis redémarrer l'unité.
-  **Une session déjà ouverte reste valable** jusqu'à 12 h : l'app vérifie seulement la
-  présence d'un utilisateur dans le cookie signé.
+  (saisie masquée + confirmation). Pris en compte tout de suite, sans redémarrer.
+- **Supprimer un compte** : pas de commande dédiée, supprimer son document dans la
+  collection `comptes` de la base. **Une session déjà ouverte reste valable** jusqu'à 12 h :
+  l'app vérifie seulement la présence d'un utilisateur dans le cookie signé.
 - Le démarrage refuse : aucun compte, un hash absent ou invalide, un mot de passe égal à
   `demo`.
 - **Ce qui n'existe pas** : réinitialisation du mot de passe par e-mail, 2FA, verrouillage
@@ -665,7 +690,7 @@ sur les comptes récents.
 
 #### Sessions
 
-- Cookie signé avec `secret`, `HttpOnly`, `Secure` et `SameSite=Lax`, d'une durée de 12 h.
+- Cookie signé avec `SECRET_KEY`, `HttpOnly`, `Secure` et `SameSite=Lax`, d'une durée de 12 h.
 - `SameSite=Lax` est **la seule protection CSRF** de l'app : ne pas la retirer.
 - Un sous-domaine voisin du même domaine enregistré est considéré comme « même site ». Si
   possible, n'hébergez pas la démo publique sur le même domaine que les instances clients.
@@ -678,26 +703,28 @@ sur les comptes récents.
 - Ces compteurs sont en mémoire et remis à zéro au redémarrage.
 - Ils dépendent de `PROXIES` : voir §3.3.
 
-#### Changer le `secret`
+#### Changer la `SECRET_KEY`
 
-Cela déconnecte tout le monde, mais **invalide aussi tous les liens signés déjà envoyés** :
+Modifier la ligne `SECRET_KEY=` du `.env` puis redémarrer l'unité. Cela déconnecte tout le
+monde, mais **invalide aussi tous les liens signés déjà envoyés** :
 
 - les liens de correction des managers ;
 - les liens de lot du cabinet.
 
-Pour les lots, la RH peut « Refaire la copie et le lien », et le nouveau lien part dans le
-mail hebdo suivant. Un lien de correction invalidé ainsi, lui, ne peut pas être renvoyé :
+Pour les lots, la RH peut « Renvoyer le lien » (fiche du dossier), et le nouveau lien part
+dans le mail hebdo suivant. Un lien de correction invalidé ainsi, lui, ne peut pas être renvoyé :
 le bouton « Renvoyer le lien de correction » n'apparaît qu'après un mail de rejet raté.
 
 #### Routes accessibles sans compte
 
 | Route | Accès | Durée |
 |---|---|---|
-| `/` | Formulaire public (écrit sur disque) | — |
+| `/` | Formulaire public (écrit en base) | — |
 | `/corriger/<jeton>` | Lien signé : corriger une demande rejetée | 30 j, inutilisable dès que la demande n'est plus à l'état « Rejetée » |
-| `/lot/<jeton>`, `/lot/<jeton>/zip`, `/lot/<jeton>/fichier/...` | **Accès complet aux pièces d'un dossier** (identité, RIB, contrat), IP journalisée | 30 j, révocable (« Refaire la copie et le lien », abandon, purge) |
+| `/lot/<jeton>`, `/lot/<jeton>/zip`, `/lot/<jeton>/fichier/...` | **Accès complet aux pièces d'un dossier** (identité, RIB, contrat), IP journalisée | 30 j, révocable (« Renvoyer le lien », abandon, purge) |
 
-Détenir le lien suffit pour accéder au contenu. Or ces liens voyagent par e-mail.
+Le lot sert les pièces **en direct depuis la base** : un re-dépôt après la remise apparaît
+dans le lot. Détenir le lien suffit pour accéder au contenu. Or ces liens voyagent par e-mail.
 
 #### Durcissement recommandé : protéger l'espace RH au niveau de Caddy
 
@@ -756,33 +783,24 @@ mot de passe applicatif ne suffit plus.
 - **Surveillance** : il n'y a pas de route `/health`. `curl -fsS -o /dev/null https://embauche.acme.fr/`
   (réponse 200 attendue sur le formulaire) suffit pour une sonde externe.
 
-### 3.4 Stockage
+### 3.4 Base de données
 
-- **Sur un VPS : `"stockage": {"mode": "local"}`.** Les données sont dans
-  `/srv/contratgen/<client>/data/`.
-- Le mode `"dossier"` suppose un client de synchronisation (OneDrive, SharePoint, Google
-  Drive) **installé sur la machine** qui réplique un dossier local. Il est pensé pour un
-  poste Windows chez le client.
-  - Sur Linux, il n'existe pas de client officiel.
-  - Un montage réseau (rclone mount…) n'est pas un dossier répliqué et n'a pas été testé
-    avec ce code.
-- En mode `"dossier"`, le démarrage teste l'écriture dans le dossier et refuse s'il
-  n'existe pas. De plus, la purge ne vide ni la corbeille ni l'historique de versions du
-  service de synchronisation : le NIR y reste récupérable.
-- Arborescence produite :
-  - `data/soumissions/<id>/` (demandes non validées) ;
-  - `data/DOSSIERS SALARIES/<Groupe>/<Établissement>/<Poste>/<NOM Prénom>/` ;
-  - `data/COMPTA/...` (copie remise au cabinet).
-- Deux serveurs sur le même stockage sont refusés (`Un serveur sert déjà ce stockage`).
-  Après un plantage sur la même machine, la reprise est immédiate. Depuis une autre
-  machine, il faut attendre 5 minutes.
-- **Piège après un redémarrage du VPS** : sur la même machine, le verrou est jugé
-  d'après le seul numéro de process (pid), sans regarder son âge. Si ce numéro a été
-  réattribué à un autre process après le reboot (par exemple une autre instance
-  `contratgen@` démarrée en parallèle), le démarrage est refusé et l'unité redémarre en
-  boucle. Reproduit : un verrou vieux d'une heure portant le pid d'un autre process vivant
-  bloque le démarrage. Correctif : supprimer `data/.serveur-actif.json` une fois certain
-  que l'instance est arrêtée.
+- **Une base MongoDB par client** (`MONGO_DB`, sans valeur par défaut), jamais partagée
+  entre deux instances : `installer.py` refuse une base qui a déjà un compte `rh`.
+- Collections : `dossiers` (un document par dossier, journal compris), `fichiers`
+  (pièces et contrats, octets inline, 15 Mo au plus par fichier), `recap`, `mails` (mode
+  `console` seulement), `comptes`, `societes`, `etat` (jeton SharePoint).
+- Le serveur et `recap.py` doivent joindre la base : liste d'adresses autorisées côté
+  hébergeur de la base, TLS, base en UE (elle contient les pièces d'identité).
+- Au démarrage, l'app teste la base (`ping`) et refuse de servir si elle est injoignable.
+  Elle ne nomme jamais `MONGO_URI` dans ses messages.
+- Le journal d'un dossier s'écrit par compare-and-swap : deux écritures simultanées ne
+  s'écrasent pas.
+- Il n'y a plus de dossier `data/`, d'arborescence `DOSSIERS SALARIES/…` sur disque, de
+  copie `COMPTA/` ni de verrou de double démarrage. Pour retrouver un dossier : l'écran
+  « Salariés » et la fiche dossier. Un export zip rangé en
+  `DOSSIERS SALARIES/<Groupe>/<Établissement>/<Poste>/NOM Prénom/` est prévu, pas encore
+  livré.
 
 ### 3.5 Données personnelles et divers
 
@@ -807,7 +825,8 @@ mot de passe applicatif ne suffit plus.
 | Symptôme | Cause probable | Correctif |
 |---|---|---|
 | Le service redémarre en boucle, `!! ...` dans le journal | `config.verifier()` refuse la config | `cg <client> configurer.py`, corriger le fichier indiqué |
-| `Un serveur sert déjà ce stockage` | Autre process sur le même `data/`, verrou orphelin venant d'une autre machine, ou pid du verrou réattribué après un reboot (§3.4) | Arrêter l'autre process, ou attendre 5 min, ou supprimer `data/.serveur-actif.json` s'il est **certain** que rien ne tourne |
+| `!! mongo / secrets : MONGO_URI absent de l'environnement` (ou `SECRET_KEY`, `MONGO_DB`) | Le `.env` n'est pas passé à la commande | `--env /srv/contratgen/<client>/.env` dans `ExecStart=`, fichier lisible par `contratgen` (mode 600) |
+| `Base mongo « acme » injoignable` | Adresse du VPS non autorisée côté base, `MONGO_URI` erronée, base arrêtée | Vérifier la liste d'adresses autorisées et l'URI du `.env` |
 | `PROXIES doit etre un entier` | Valeur invalide dans le `.env` | `PROXIES=1` |
 | La connexion RH renvoie sans cesse sur `/login` | Accès en HTTP : le cookie `Secure` n'est pas conservé | Passer par le domaine HTTPS |
 | Le formulaire dit « envoyée » mais rien n'apparaît dans le suivi | Anti-flood partagé (`PROXIES` absent ou trop haut, §3.3), ou champ piège rempli par une extension/autofill | `PROXIES=1` et redémarrer ; tester dans un autre navigateur |
@@ -816,4 +835,4 @@ mot de passe applicatif ne suffit plus.
 | Aucun mail reçu, aucune erreur | `mails.mode` encore sur `console` | `"mode": "smtp"`, puis redémarrer l'unité |
 | `413 Request Entity Too Large` | Limite du proxy (nginx) | `client_max_body_size 40m;` |
 | `config/ est au format X, ce code attend le format Y` | Mise à jour du code avec changement de format | Adapter `instance.json`, ou revenir à la version précédente du code |
-| Service démo : `AssertionError` au démarrage | Mot de passe `rh` de la démo modifié | Remettre `demo-rh`, ou passer en `demo.py --vide` |
+| Service démo : `ModuleNotFoundError: mongomock` | `requirements-dev.txt` non installé | `pip install -r requirements-dev.txt` dans le venv |

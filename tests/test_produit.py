@@ -24,7 +24,6 @@ from pathlib import Path
 sys.stdout.reconfigure(encoding="utf-8")
 BASE = Path(tempfile.mkdtemp(prefix="contratgen-produit-"))
 os.environ["CONFIG_DIR"] = str(BASE / "config")
-os.environ["DONNEES"] = str(BASE / "data")
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from _outils import base_mongo, societes as poser_societes  # noqa: E402
 base_mongo("produit")
@@ -43,10 +42,10 @@ CONF = BASE / "config"
 INSTANCE = {
     "config_version": 1,
     "client": "ACME v1",
-    "secret": "a" * 64, "url": "http://localhost",
+    "url": "http://localhost",
     "signature": {"mode": "manuel"},
     "mails": {"mode": "console", "hote": "", "port": 587, "utilisateur": "",
-              "mot_de_passe": "", "expediteur": "rh@acme.example", "rh": ["rh@acme.example"],
+              "expediteur": "rh@acme.example", "rh": ["rh@acme.example"],
               "dpae": None, "recap": None, "comptable_defaut": "c@acme.example"},
     "motifs_ko": ["Autre"],
     "templates": {"Manager": "contrat.txt"},
@@ -544,89 +543,55 @@ def test_rechargement_rate_garde_lancienne_config():
 def _desactive_test_rechargement_met_a_jour_ce_qui_est_fige_a_limport():
     """Contrôle au niveau de l'APPELANT, pas de config.recharger() seul :
     recharger ne sert à rien si les valeurs lues une fois à l'import restent
-    celles d'avant. Deux l'étaient — la clé de signature des cookies (qui doit
-    rester alignée sur celle de store.signer, sinon les liens du lot cassent en
-    silence) et les motifs de KO."""
+    celles d'avant : les motifs de KO l'étaient."""
     ecrire()
-    (BASE / "data" / "documents").mkdir(parents=True, exist_ok=True)
-    (BASE / "data" / "soumissions").mkdir(parents=True, exist_ok=True)
     import app as application
 
-    application.app.secret_key = config.instance()["secret"]
     client = application.app.test_client()
     with client.session_transaction() as s:
         s["utilisateur"] = "rh"
 
     (CONF / "instance.json").write_text(
-        json.dumps({**INSTANCE, "secret": "b" * 64,
-                    "motifs_ko": ["Motif tout neuf"]}), encoding="utf-8")
+        json.dumps({**INSTANCE, "motifs_ko": ["Motif tout neuf"]}), encoding="utf-8")
     assert client.post("/recharger", follow_redirects=True).status_code == 200
-    assert application.app.secret_key == "b" * 64, \
-        "clé de session restée sur l'ancien secret : les liens signés divergent"
     assert config.instance()["motifs_ko"] == ["Motif tout neuf"], \
         "motifs de KO figés à l'import"
 
 
-def test_demarrer_ne_cree_pas_le_dossier_de_stockage_quil_verifie():
-    """Le garde-fou constate, il ne répare pas.
-
-    `demarrer()` crée `soumissions/` et `DOSSIERS/` sous config.DONNEES. Tant
-    que ce mkdir(parents=True) précédait `verifier()`, il créait LUI-MÊME le
-    chemin du drive annoncé dans instance.json : _verifier_stockage trouvait
-    alors un dossier bien présent et accessible, l'app démarrait, et les pièces
-    d'identité partaient dans un dossier local qui ressemble à un dossier
-    synchronisé. Le contrôle porte sur ce qui est observable : refus de servir
-    ET dossier toujours absent."""
+def test_demarrer_refuse_sans_base_sans_montrer_l_uri():
+    """`python app.py` sans MONGO_DB ni SECRET_KEY : refus qui nomme les
+    variables manquantes, et jamais la valeur de MONGO_URI, qui porte le mot de
+    passe de la base (la sortie finit dans les journaux du service)."""
     ecrire()
-    absent = BASE / "drive-jamais-replique"
-    assert not absent.exists()
-    (CONF / "instance.json").write_text(
-        json.dumps({**INSTANCE, "stockage": {"mode": "dossier", "chemin": str(absent)}}),
-        encoding="utf-8")
-    env = {k: v for k, v in os.environ.items() if k != "DONNEES"}
-    env["PYTHONIOENCODING"] = "utf-8"
+    env = {k: v for k, v in os.environ.items()
+           if k not in ("MONGO_DB", "SECRET_KEY", "MONGOMOCK_AMORCE")}
+    env.update(PYTHONIOENCODING="utf-8",
+               MONGO_URI="mongodb://contratgen:mdp-de-la-base@127.0.0.1:1/")
     try:
-        # timeout obligatoire : quand la régression est là, demarrer() ne sort
-        # pas — il SERT. Sans lui, ce test pendrait au lieu de virer au rouge.
         r = subprocess.run(
             [sys.executable, "-c", "import app; app.demarrer()"],
             cwd=str(Path(__file__).resolve().parent.parent),
             capture_output=True, text=True, encoding="utf-8", env=env, timeout=60)
     except subprocess.TimeoutExpired:
-        raise AssertionError("l'app s'est mise à servir alors que le dossier de "
-                             "stockage n'existe pas")
-    assert r.returncode != 0, f"l'app a démarré sur un drive absent :\n{r.stdout}"
-    assert "stockage" in r.stdout + r.stderr, r.stdout + r.stderr
-    assert not absent.exists(), "demarrer() a créé le dossier qu'il devait refuser"
+        raise AssertionError("l'app s'est mise à servir sans base configurée")
+    sortie = r.stdout + r.stderr
+    assert r.returncode != 0, f"l'app a démarré sans MONGO_DB :\n{sortie}"
+    assert "mongo" in sortie.lower() and "MONGO_DB" in sortie and "SECRET_KEY" in sortie, sortie
+    assert "mdp-de-la-base" not in sortie, f"l'URI de la base est affichée :\n{sortie}"
+
+    # Variables complètes, serveur qui ne répond pas : le vrai pymongo lève en
+    # pleine vérification -> refus lisible, toujours sans l'URI.
+    env.update(MONGO_DB="acme", SECRET_KEY="k" * 40,
+               MONGO_URI="mongodb://contratgen:mdp-de-la-base@127.0.0.1:1/"
+                         "?serverSelectionTimeoutMS=300")
+    r = subprocess.run(
+        [sys.executable, "-c", "import app; app.demarrer()"],
+        cwd=str(Path(__file__).resolve().parent.parent),
+        capture_output=True, text=True, encoding="utf-8", env=env, timeout=60)
+    sortie = r.stdout + r.stderr
+    assert r.returncode != 0 and "base mongo illisible" in sortie, sortie
+    assert "Traceback" not in sortie and "mdp-de-la-base" not in sortie, sortie
     config._CACHE.clear()
-
-
-def _desactive_test_rechargement_dit_que_le_stockage_ne_bouge_pas_a_chaud():
-    """config.DONNEES est figé à l'import : changer `stockage` puis recharger
-    ne déplace ni le chemin ni les fichiers. Faire semblant serait pire que ne
-    rien faire — le handler doit le dire."""
-    ecrire()
-    import app as application
-    application.app.secret_key = config.instance()["secret"]
-    client = application.app.test_client()
-    with client.session_transaction() as s:
-        s["utilisateur"] = "rh"
-
-    ailleurs = BASE / "drive-bis"
-    ailleurs.mkdir(exist_ok=True)
-    (CONF / "instance.json").write_text(
-        json.dumps({**INSTANCE, "stockage": {"mode": "dossier", "chemin": str(ailleurs)}}),
-        encoding="utf-8")
-    donnees = os.environ.pop("DONNEES")        # sinon l'env l'emporte, rien ne bouge
-    try:
-        page = client.post("/recharger", follow_redirects=True)
-    finally:
-        os.environ["DONNEES"] = donnees
-    assert page.status_code == 200
-    assert "redémarrez" in page.get_data(as_text=True), \
-        "stockage changé à chaud sans un mot : les données vont ailleurs que promis"
-    ecrire()
-    config.recharger()
 
 
 def test_verifier_conservation_refuse_les_formes_invalides():
@@ -703,7 +668,7 @@ def test_verifier_theme_refuse_ce_qui_serait_illisible_ou_absent():
 
     # Fichier ABSENT = la DA d'origine, mais fichier CASSE = refus : un JSON
     # avale en silence, le client ouvre son app et la voit verte sans savoir
-    # pourquoi. C'est la seule difference avec le patron de stockage().
+    # pourquoi. C'est la seule difference avec le patron de conservation().
     (CONF / "theme.json").write_text('{"palette": {,}', encoding="utf-8")
     config._CACHE.clear()
     manques = config.verifier()
@@ -757,13 +722,11 @@ def test_theme_atteint_la_page_et_les_fichiers_sont_servis():
     après la palette d'origine, et marque/ doit être servi — sans laisser
     remonter hors du dossier."""
     ecrire()
-    (BASE / "data" / "soumissions").mkdir(parents=True, exist_ok=True)
     _marque(**{"logo.svg": SVG})
     _theme({"palette": {"accent": "#c8102e"},
             "logo": {"fichier": "logo.svg", "remplace_le_nom": True}})
 
     import app as application
-    application.app.secret_key = config.instance()["secret"]
     client = application.app.test_client()
     page = client.get("/").get_data(as_text=True)
 
@@ -782,49 +745,18 @@ def test_theme_atteint_la_page_et_les_fichiers_sont_servis():
     assert "--accent:#c8102e" not in client.get("/").get_data(as_text=True),         "sans theme.json, la page porte encore la DA du test precedent"
 
 
-def test_second_serveur_sur_le_meme_stockage_refuse():
-    """Deux serveurs sur le même dossier de données : le fichier
-    .serveur-actif.json refuse le second démarrage tant qu'il est frais."""
-    ecrire()
-    config.DONNEES.mkdir(parents=True, exist_ok=True)
-    import app as application
-    import json as _j
-    import time as _t
-    f = application._fichier_verrou()
-    f.unlink(missing_ok=True)
-
-    application._verrou_serveur(("machine-A", 111))
-    assert f.exists()
+def test_signer_refuse_sans_cle():
+    """recap.py signe des liens hors de verifier() : sans SECRET_KEY, une cle
+    vide fabriquerait des liens morts en silence. Refus net."""
+    import store
+    cle = os.environ.pop("SECRET_KEY")
     try:
-        application._verrou_serveur(("machine-B", 222))
-        raise AssertionError("un second serveur a démarré sur le même stockage")
-    except SystemExit as e:
-        assert "machine-A" in str(e) and "111" in str(e), str(e)
-    application._verrou_serveur(("machine-A", 111))          # même couple : refresh, OK
-
-    # contrôle négatif 1 : verrou d'une AUTRE machine, périmé au-delà du TTL
-    f.write_text(_j.dumps({"hote": "machine-A", "pid": 111,
-                           "le": _t.time() - application._VERROU_TTL - 10}), encoding="utf-8")
-    application._verrou_serveur(("machine-B", 222))          # périmé -> pas de refus
-    assert _j.loads(f.read_text())["hote"] == "machine-B", "le verrou périmé n'a pas été repris"
-
-    # contrôle négatif 2 : verrou de CETTE machine dont le pid est mort -> repris
-    # aussitôt (pas d'attente du TTL). 2**31-1 : pid qui n'existe pas.
-    import socket as _s
-    f.write_text(_j.dumps({"hote": _s.gethostname(), "pid": 2**31 - 1,
-                           "le": _t.time()}), encoding="utf-8")
-    application._verrou_serveur()                            # pid mort -> pas de refus
-    assert _j.loads(f.read_text())["pid"] == os.getpid(), "verrou d'un pid mort non repris"
-
-    # et le contrôle positif : pid VIVANT (le nôtre) sur cette machine -> refus
-    f.write_text(_j.dumps({"hote": _s.gethostname(), "pid": os.getpid() ,
-                           "le": _t.time()}), encoding="utf-8")
-    try:
-        application._verrou_serveur((_s.gethostname(), os.getpid() + 1))
-        raise AssertionError("verrou tenu par un pid vivant : le refus doit tomber")
-    except SystemExit:
-        pass
-    f.unlink(missing_ok=True)
+        store.signer("lot_comptable", "u1", 0)
+        raise AssertionError("lien signé avec une clé vide")
+    except RuntimeError as e:
+        assert "SECRET_KEY" in str(e), e
+    finally:
+        os.environ["SECRET_KEY"] = cle
 
 
 if __name__ == "__main__":

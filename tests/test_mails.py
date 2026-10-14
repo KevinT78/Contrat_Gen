@@ -14,14 +14,12 @@ appels, et le dernier bloc remplace mails.envoyer lui-meme.
 """
 import os
 import sys
-import tempfile
 from pathlib import Path
 
 sys.stdout.reconfigure(encoding="utf-8")
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from _outils import base_mongo  # noqa: E402
 base_mongo("mails")
-os.environ["DONNEES"] = tempfile.mkdtemp(prefix="contratgen-mails-")
 
 import config          # noqa: E402
 from _outils import compte  # noqa: E402
@@ -51,7 +49,7 @@ class FauxSMTP:
         self.appels.append(("starttls", context is not None))
 
     def login(self, u, p):
-        self.appels.append(("login", u))
+        self.appels.append(("login", u, p))
 
     def send_message(self, msg):
         self.msg = msg
@@ -83,7 +81,7 @@ print("OK  mode console : .eml range en base, aucun SMTP")
 
 # --- MAILS_MODE=smtp surclasse le fichier reste sur console -----------------
 os.environ["MAILS_MODE"] = "smtp"
-MAILS.update(mode="console", hote="localhost", port=1025, utilisateur="", mot_de_passe="")
+MAILS.update(mode="console", hote="localhost", port=1025, utilisateur="")
 ok, raison = envoyer()
 assert ok, raison
 s = FauxSMTP.dernier
@@ -95,12 +93,14 @@ print("OK  MAILS_MODE surclasse le fichier ; sans identifiant : ni STARTTLS ni l
 FauxSMTP.dernier = None
 os.environ.pop("MAILS_MODE", None)
 MAILS.update(mode="smtp", hote="smtp-relay.brevo.example", port=587,
-             utilisateur="u@brevo", mot_de_passe="secret")
+             utilisateur="u@brevo")
+os.environ["SMTP_MOT_DE_PASSE"] = "secret"
 ok, raison = envoyer()
 assert ok, raison
 s = FauxSMTP.dernier
-assert s.appels == [("starttls", True), ("login", "u@brevo"),
+assert s.appels == [("starttls", True), ("login", "u@brevo", "secret"),
                     ("send_message", "dest@test.local")], s.appels
+del os.environ["SMTP_MOT_DE_PASSE"]
 print("OK  avec identifiant : STARTTLS(context) + login imposes")
 
 # --- destinataire vide : refus net, jamais de SMTP ------------------------
@@ -114,7 +114,7 @@ print("OK  destinataire vide : (False, raison), aucun envoi")
 # Les kwargs miment exactement chaque site d'appel (app.py / recap.py). Un
 # template qui reclame une variable qu'aucun appelant ne passe -> {var} reste
 # dans la sortie -> ici on le voit. Un .txt renomme/absent -> (False, raison).
-MAILS.update(mode="smtp", hote="localhost", port=1025, utilisateur="", mot_de_passe="")
+MAILS.update(mode="smtp", hote="localhost", port=1025, utilisateur="")
 SITES = {
     "nouvelle_soumission": dict(nom="Jean Test", id="ABC", lien="http://x/d"),
     "demande_validee":     dict(nom="Jean Test"),
@@ -157,8 +157,6 @@ import app as module                                               # noqa: E402
 from app import app                                                # noqa: E402
 
 app.config["PROPAGATE_EXCEPTIONS"] = True
-for _z in ("soumissions",):
-    (config.DONNEES / _z).mkdir(parents=True, exist_ok=True)
 
 _MSG = re.compile(r'<p class="msg[^"]*">([^<]*)</p>')
 

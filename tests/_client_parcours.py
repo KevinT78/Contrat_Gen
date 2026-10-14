@@ -3,12 +3,13 @@
     python tests/_client_parcours.py <racine-copie> <spec.json>
 
 Lancé en sous-processus par tests/test_clients.py, une fois par client factice.
-Sort 0 si le parcours passe, imprime « PARCOURS OK <client> <secret8> <donnees> ».
+Sort 0 si le parcours passe, imprime « PARCOURS OK <client> <secret8> <base> ».
 """
 import email
 import html
 import io
 import json
+import os
 import re
 import sys
 import zipfile
@@ -18,7 +19,8 @@ RACINE = sys.argv[1]
 SPEC = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
 sys.path.insert(0, RACINE)
 from _outils import base_mongo  # noqa: E402
-base_mongo("client_parcours")
+base = os.environ["MONGO_DB"]          # celle du .env de l'instance
+base_mongo(base.removeprefix("test-"))
 sys.stdout.reconfigure(encoding="utf-8")
 
 import config          # noqa: E402
@@ -28,8 +30,6 @@ from app import app    # noqa: E402
 from _outils import compte, corps_texte, mails  # noqa: E402
 compte("rh", SPEC["password"])
 
-for zone in ("soumissions",):
-    (config.DONNEES / zone).mkdir(parents=True, exist_ok=True)
 
 # instance.json -> url : base des liens de TOUS les mails (app._lien), jamais
 # le Host de la requete -- un Host forge sur le formulaire public ferait
@@ -229,7 +229,7 @@ def main():
     verifier_recap(uids, "Nkemba")
 
     inst = config.instance()
-    print(f"PARCOURS OK\t{inst['client']}\t{inst['secret'][:8]}\t{config.DONNEES}")
+    print(f"PARCOURS OK\t{inst['client']}\t{config.secret().decode()[:8]}\t{base}")
 
 
 if __name__ == "__main__":

@@ -36,7 +36,7 @@ Chaque demande d'embauche est un **dossier** qui avance d'étape en étape. Une 
 |--------|------|
 | **Manager** | Remplit le formulaire public et joint les pièces du candidat. Reçoit un mail quand la demande est acceptée, et un lien de correction si elle est rejetée. |
 | **Service RH** | Accepte ou rejette la demande, suit le dossier, dépose le contrat signé et l'accusé DPAE, remet le dossier au cabinet. |
-| **Système** | Envoie les mails, génère la fiche salarié et le contrat, copie le dossier pour le cabinet. |
+| **Système** | Envoie les mails, génère la fiche salarié et le contrat, prépare le lien de téléchargement du cabinet. |
 | **Cabinet comptable** | Reçoit chaque semaine un mail avec un lien par dossier remis, sans compte à créer. |
 
 **Deux façons de produire le contrat**, fixées par établissement dans la configuration :
@@ -56,7 +56,7 @@ python demo.py --vide
 
 - `--vide` : le suivi est **vide**, vous faites tout vous-même. Sans cette option, quatre dossiers d'exemple sont déjà là, chacun arrêté à une étape différente (pratique pour une présentation).
 - L'application répond sur **http://localhost:5000** ; connexion RH : `rh` / `demo-rh`.
-- Les données vont dans `data_demo/` (effacé à chaque lancement) ; les mails ne partent pas, ils sont écrits en fichiers `.eml` dans `data_demo/mails/`.
+- Les données vont dans une base **en mémoire**, vide à chaque lancement : rien n'est écrit sur le disque. Les mails ne partent pas : le terminal affiche une ligne par mail (`[MAIL rejet] -> …`) et le message complet est gardé dans la base de démonstration.
 - Arrêt : `Ctrl+C` dans le terminal.
 
 > **Si la connexion RH ne tient pas** (retour à la page de connexion), relancez avec `DEBUG=1` : sans HTTPS, le navigateur refuse le cookie de session sécurisé.
@@ -67,7 +67,7 @@ Parcours d'essai conseillé, environ 20 minutes :
 2. Connectez-vous, ouvrez le dossier et acceptez-le ([§3](#3-le-suivi-rh), [§4](#4-accepter-la-demande)) : le contrat est généré tout seul.
 3. Refaites une demande sur **Lyon Confluence** et acceptez-la : ce site est en couloir « contrat déposé » ([§5](#5-le-contrat)).
 4. Déposez un accusé DPAE, puis remettez le dossier au cabinet ([§7](#7-la-déclaration-dpae), [§8](#8-la-remise-au-cabinet-comptable)).
-5. Rejetez une troisième demande, ouvrez le `.eml` « rejet » dans `data_demo/mails/` et suivez le lien `/corriger/…` ([§9](#9-rejeter-une-demande-et-la-faire-corriger)).
+5. Rejetez une troisième demande ([§9](#9-rejeter-une-demande-et-la-faire-corriger)). En démonstration, le mail de rejet est gardé en base et n'est lisible nulle part à l'écran : pour suivre son lien `/corriger/…`, envoyez les mails vers un récepteur local de test (MailHog, voir le README).
 6. Ajoutez un établissement « Test » et faites une demande dessus ([§12](#12-les-établissements)).
 
 ---
@@ -229,7 +229,7 @@ Le contrat signé ne bloque ni la DPAE, ni la remise au cabinet, mais il doit ê
 2. Faites-le signer hors application (impression et signature, ou votre outil de signature habituel).
 3. Ouvrez la fiche du salarié dans « Salariés », choisissez le fichier signé (PDF ou .docx) et cliquez sur **« Déposer le contrat signé »**.
 
-Le dossier ne change pas d'état : le bloc quitte le haut de la fiche et « Déposé le … » s'affiche sous « Lien comptable ». Le dépôt se fait une seule fois. Tant qu'il manque, le badge **« signé manquant »** le rappelle dans « Salariés ». Il reste au dossier RH : il n'est **pas transmis au cabinet comptable**, ni dans la copie, ni dans le lien de téléchargement. Il n'est plus possible de le déposer une fois le salarié parti.
+Le dossier ne change pas d'état : le bloc quitte le haut de la fiche et « Déposé le … » s'affiche sous « Lien comptable ». Le dépôt se fait une seule fois. Tant qu'il manque, le badge **« signé manquant »** le rappelle dans « Salariés ». Il reste au dossier RH : il n'est **pas transmis au cabinet comptable**, il n'est pas dans le lien de téléchargement. Il n'est plus possible de le déposer une fois le salarié parti.
 
 > **Note :** une signature électronique intégrée (Yousign) existe en option. Si elle est activée dans la configuration, le bloc propose en plus **« Envoyer à la signature »** puis **« Vérifier la signature »**, au même endroit que le dépôt manuel ; le contrat signé est récupéré en cliquant sur « Vérifier la signature ».
 
@@ -259,24 +259,23 @@ Le dossier passe à **« DPAE faite »**. L'accusé rejoint les documents produi
 **Ce qui se passe :**
 
 1. Le dossier passe à **« Remis au comptable »** : la frise est complète et le dossier quitte le suivi pour l'onglet « Salariés ».
-2. Une **copie** du dossier est faite dans le répertoire `COMPTA/`, en capitales et avec des noms de fichiers lisibles. Le dossier d'origine reste intact.
+2. Aucune copie n'est faite : le cabinet télécharge les pièces **en direct** depuis l'application, par son lien, sous des noms de fichiers lisibles. Une pièce redéposée après la remise apparaît donc dans ce que le cabinet voit.
    ```text
-   COMPTA/BASILIC CAFE/PARIS BASTILLE/EQUIPIER POLYVALENT/BENALI SARAH - 01M2N3D8…/
-       CONTRAT/
-           Contrat - BENALI SARAH - 2026-09-16.docx
-           Accusé DPAE - BENALI SARAH - 2026-09-16.pdf
-       FICHE PERSONNELLE/
-           Carte vitale - BENALI SARAH - 2026-09-16.pdf
-           Identité - BENALI SARAH - 2026-09-16.pdf
-           Identité_2 - BENALI SARAH - 2026-09-16.pdf
-           RIB - BENALI SARAH - 2026-09-16.pdf
-           justif domicile - BENALI SARAH - 2026-09-16.pdf
+   CONTRAT/
+       Contrat - BENALI SARAH - 2026-09-16.docx
+       Accusé DPAE - BENALI SARAH - 2026-09-16.pdf
+   FICHE PERSONNELLE/
+       Carte vitale - BENALI SARAH - 2026-09-16.pdf
+       Identité - BENALI SARAH - 2026-09-16.pdf
+       Identité_2 - BENALI SARAH - 2026-09-16.pdf
+       RIB - BENALI SARAH - 2026-09-16.pdf
+       justif domicile - BENALI SARAH - 2026-09-16.pdf
    ```
 3. Le dossier est inscrit au prochain **mail hebdomadaire** du cabinet.
 
-### Refaire la copie et le lien
+### Renvoyer le lien
 
-Sur un dossier remis, la carte « Lien comptable » propose **« Refaire la copie et le lien »** : utile si une pièce a été remplacée après la remise. L'ancien lien est révoqué et le dossier repart dans le prochain mail hebdomadaire.
+Sur un dossier remis, la carte « Lien comptable » propose **« Renvoyer le lien »** : utile si le lien a été perdu ou doit être remplacé. Les pièces étant servies en direct, une pièce remplacée après la remise est déjà visible du cabinet. L'ancien lien est révoqué et le dossier repart dans le prochain mail hebdomadaire.
 
 ![La carte « Lien comptable » d'un dossier remis](pdf/img/14-remis-lien.png)
 
@@ -349,7 +348,7 @@ Le lien ouvre le formulaire **pré-rempli**, avec le motif et le commentaire en 
 
 L'onglet **« Salariés »** (`/salaries`) liste les dossiers remis au cabinet, groupés par établissement. Deux vues : **En poste** et **Anciens salariés**. Une recherche et un filtre par établissement aident à retrouver quelqu'un.
 
-**Quand un salarié part :** sur sa fiche, la carte « Départ du salarié » demande la date de sortie (et un motif, facultatif). **« Archiver dans LEAVERS »** range son dossier avec les anciens salariés ; la colonne « Remis le » devient alors « Sorti le ».
+**Quand un salarié part :** sur sa fiche, la carte « Départ du salarié » demande la date de sortie (et un motif, facultatif). **« Archiver dans LEAVERS »** place son dossier parmi les anciens salariés (il ne change pas de place, il prend l'état « parti ») ; la colonne « Remis le » devient alors « Sorti le ».
 
 ![La vue « Salariés »](pdf/img/20-salaries.png)
 
@@ -365,7 +364,7 @@ L'onglet **« Salariés »** (`/salaries`) liste les dossiers remis au cabinet, 
 
 ## 12. Les établissements
 
-L'onglet **« Établissements »** (`/etablissements`) est la liste des sites pour lesquels on peut faire une demande d'embauche. C'est là qu'on **ajoute un établissement** ou qu'on **change son adresse mail**, sans toucher aux fichiers de configuration ni redémarrer l'application.
+L'onglet **« Établissements »** (`/etablissements`) est la liste des sites pour lesquels on peut faire une demande d'embauche. C'est là qu'on **ajoute un établissement** ou qu'on **change son adresse mail**, sans toucher aux fichiers de configuration ni redémarrer l'application (les sociétés et établissements sont gardés en base).
 
 La liste affiche, pour chaque établissement : son nom (avec sa société en dessous), son adresse, le **mail de l'établissement** et un bouton **Modifier**. Si l'application est reliée à votre SharePoint, deux boutons s'ajoutent : **Récupérer les dossiers** et **Compléter les dossiers** (voir ci-dessous). Le mail de l'établissement est celui qui reçoit le lien de correction d'un rejet et l'avis de validation. S'il manque, ces mails partent à la RH.
 
@@ -389,7 +388,7 @@ Cliquer sur son nom (ou **Modifier**). On peut changer tous les champs, y compri
 
 > **Attention :** changer le **nom** d'un établissement ou d'une société ne renomme pas les dossiers déjà envoyés, et le menu du formulaire n'affiche plus l'ancien nom. Pour un dossier en cours, mieux vaut ne pas renommer. Si les règles de modèle de contrat (`templates` dans `instance.json`) citent l'ancien nom, elles doivent être mises à jour : sinon l'application refuse de redémarrer en le signalant.
 
-Il n'y a pas de suppression depuis l'écran : un établissement qui ferme se retire dans la configuration ou la base (voir la [documentation technique](DOCUMENTATION-TECHNIQUE.md#sociétés-et-établissements-dans-supabase)).
+Il n'y a pas de suppression depuis l'écran : un établissement qui ferme se retire dans la base (voir la [documentation technique](DOCUMENTATION-TECHNIQUE.md#sociétés-établissements-comptes-et-secrets--pas-dans-config)).
 
 ### Récupérer les dossiers des salariés déjà en poste
 
@@ -447,7 +446,7 @@ Quitter la page sans avoir enregistré (lien, menu) ouvre la fenêtre « Ce tabl
 
 ### Si l'enregistrement échoue
 
-En ajoutant ou en modifiant un établissement, le message « L'enregistrement n'a pas abouti. Réessayez dans un moment. » signale une panne (base de données ou fichier) : rien n'a été enregistré, il suffit de recommencer plus tard. Si cela dure, prévenir l'installateur.
+En ajoutant ou en modifiant un établissement, le message « L'enregistrement n'a pas abouti. Réessayez dans un moment. » signale une panne (base de données injoignable) : rien n'a été enregistré, il suffit de recommencer plus tard. Si cela dure, prévenir l'installateur.
 
 ---
 
@@ -467,11 +466,11 @@ Un dossier est proposé à la purge quand il est dans l'un des états listés da
 
 ![L'aperçu de purge : rien n'est effacé avant le clic sur le bouton](pdf/img/21-purger.png)
 
-**Ce qui est effacé :** toutes les pièces (identité, RIB, contrats, accusé, fiche salarié) et la copie comptable. Les liens du cabinet et de correction sont révoqués.
+**Ce qui est effacé :** toutes les pièces (identité, RIB, contrats, accusé, fiche salarié) Les liens du cabinet et de correction sont révoqués.
 
 **Ce qui est conservé :** toutes les entrées du journal, réduites à la date, l'étape, l'auteur et le type d'événement, avec une entrée « purge » — les commentaires libres, les motifs de rejet et les adresses IP en sont retirés ; et, des informations du dossier, l'établissement, le poste et la date de début.
 
-**Le nom du salarié est effacé, lui aussi :** c'est une donnée personnelle. Le dossier ne s'identifie plus que par son identifiant, et son répertoire est renommé `purge-<identifiant>`. La fiche reste consultable et indique la date de purge ; elle ne permet plus de savoir de qui il s'agissait.
+**Le nom du salarié est effacé, lui aussi :** c'est une donnée personnelle. Le dossier ne s'identifie plus que par son identifiant. La fiche reste consultable et indique la date de purge ; elle ne permet plus de savoir de qui il s'agissait.
 
 > **Astuce :** `python purger.py` affiche la même liste en ligne de commande sans rien effacer.
 
@@ -509,7 +508,7 @@ Si le mail est bien parti mais que le manager ne l'a pas reçu, l'établissement
 
 ### Je ne reçois aucun mail
 
-- En mode `console`, les mails ne sont pas envoyés mais écrits dans le sous-dossier `mails/` du dossier de données (`data_demo/mails/` en démonstration).
+- En mode `console`, les mails ne sont pas envoyés : le terminal du serveur affiche une ligne par mail et le message complet est gardé dans la base (collection `mails`).
 - En mode `smtp`, testez l'envoi : `python configurer.py mail votre@adresse`.
 
 ### Le contrat ne se génère pas
@@ -520,7 +519,7 @@ Si le mail est bien parti mais que le manager ne l'a pas reçu, l'établissement
 ### Comment ajouter un établissement ou un compte RH ?
 
 - Établissement : onglet **Établissements** → **Ajouter** (voir [section 12](#12-les-établissements)). Pas de redémarrage.
-- Compte : `python configurer.py compte identifiant` (le mot de passe est demandé à l'écran).
+- Compte : `python configurer.py compte identifiant` (le mot de passe est demandé à l'écran ; le compte est enregistré en base).
 
 ---
 

@@ -2,32 +2,28 @@
 
     python tests/test_formulaire.py
 
-Écrit dans un dossier temporaire, ne touche jamais data/.
+Écrit dans une base vide (mongomock), rien sur le disque.
 Le maintien des pièces après une erreur se joue DANS LE NAVIGATEUR (la page ne
 recharge pas) ; côté serveur on vérifie le contrat JSON qui le permet :
   - POST fetch avec un champ obligatoire manquant -> 422 {ok:false} et AUCUNE
-    soumission écrite sur le disque ;
+    soumission écrite en base ;
   - POST fetch valide -> {ok:true} + soumission créée (CNI en deux fichiers).
 La génération du contrat à la validation est couverte par test_parcours*.
 """
 import io
 import os
 import sys
-import tempfile
 from pathlib import Path
 
 sys.stdout.reconfigure(encoding="utf-8")
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from _outils import base_mongo  # noqa: E402
 base_mongo("formulaire")
-os.environ["DONNEES"] = tempfile.mkdtemp(prefix="contratgen-formulaire-")
 
 import config          # noqa: E402
 import store           # noqa: E402
 from app import app    # noqa: E402
 
-for zone in ("soumissions",):
-    (config.DONNEES / zone).mkdir(parents=True, exist_ok=True)
 
 FETCH = {"headers": {"X-Requested-With": "contratgen-fetch"},
          "content_type": "multipart/form-data"}
@@ -52,7 +48,7 @@ def pieces():
 
 
 def compte_soumissions():
-    return len(list((config.DONNEES / "soumissions").glob("*/")))
+    return store.db().dossiers.count_documents({"zone": "soumissions"})
 
 
 def cas(nom, fn):
@@ -73,8 +69,11 @@ def test_fetch_erreur_ne_cree_rien():
 
 def test_fetch_valide_cree_la_soumission():
     c = app.test_client()
+    avant = compte_soumissions()
     r = c.post("/", data={**BASE, **pieces()}, **FETCH)
     assert r.status_code == 200, r.status_code
+    # contrôle du compteur : sans lui, les « rien d'écrit » ci-dessus passent à vide
+    assert compte_soumissions() == avant + 1, "soumission valide non comptée"
     d = r.get_json()
     assert d["ok"] is True and d["titre"] == "Demande envoyée", d
     item = store.lire(max(i["id"] for i in store.tout()))

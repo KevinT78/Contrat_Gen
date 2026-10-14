@@ -10,8 +10,6 @@ import json
 import re
 import mimetypes
 import os
-import socket
-import threading
 import time
 import unicodedata
 import zipfile
@@ -53,8 +51,8 @@ def _jours_ouvrables_entre(de, a):
 CONTRAT_EXT = {".pdf", ".docx"}          # contrat venu du logiciel RH / PDF signé
 
 # --- rate-limit par IP ----------------------------------------------------
-# Deux pots : le formulaire public (seul endpoint non authentifie qui ecrit sur
-# disque) et /login. Pas de captcha (le vrai destinataire du formulaire est un
+# Deux pots : le formulaire public (seul endpoint non authentifie qui ecrit en
+# base) et /login. Pas de captcha (le vrai destinataire du formulaire est un
 # manager, pas un spammeur), mais un minimum de garde-fou contre bots et flood.
 #
 # Ces pots vivent en memoire, comme l'etat d'import/connexion SharePoint et
@@ -113,7 +111,7 @@ except ValueError:
                      + repr(os.environ["PROXIES"]))
 if _PROXIES:
     app.wsgi_app = ProxyFix(app.wsgi_app, x_for=_PROXIES, x_proto=_PROXIES)
-app.secret_key = config.instance()["secret"]
+app.secret_key = os.environ.get("SECRET_KEY")   # absent : verifier() refuse de demarrer
 app.config["MAX_CONTENT_LENGTH"] = 40 * 1024 * 1024
 app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
@@ -312,18 +310,6 @@ def recharger():
             flash(f"{sujet} : {', '.join(quoi)}", "erreur")
         flash("Configuration NON rechargée — la précédente reste active.", "erreur")
         return redirect(url_for("suivi"))
-    # Le secret sert AUSSI a signer les cookies de session, et celui-la est fige
-    # a l'import : sans cette ligne, un secret change laisserait store.signer sur
-    # le nouveau et les cookies sur l'ancien -- liens du lot casses en silence.
-    # Un secret reellement change deconnecte tout le monde, c'est voulu.
-    app.secret_key = config.instance()["secret"]
-    # Meme piege que le secret, autre issue : config.DONNEES est fige a l'import
-    # et deplacer les donnees n'est pas un rechargement (il faut aussi deplacer
-    # les fichiers). On refuse de faire semblant : on le dit.
-    if config._donnees() != config.DONNEES:
-        flash(f"Le stockage a changé ({config._donnees()}), mais les données "
-              f"continuent d'aller dans {config.DONNEES} : redémarrez l'app "
-              f"après avoir déplacé les fichiers.", "erreur")
     flash("Configuration rechargée.", "ok")
     return redirect(url_for("suivi"))
 
@@ -874,6 +860,26 @@ def completer():
     return _ecran_completer(_cle_etab_ou_404(request.args.get("cle", "")))
 
 
+@app.errorhandler(PyMongoError)
+def _base_indisponible(e):
+    """Base qui lache au milieu d'une requete : une page lisible plutot qu'un
+    500, sur toutes les routes. Les routes qui savent mieux faire (purge,
+    effets de validation) rattrapent elles-memes et flashent."""
+    app.logger.error("base mongo : %s", type(e).__name__, exc_info=e)
+    # Formulaire public envoye en fetch : il attend du JSON, et garde alors les
+    # pieces deja choisies au lieu d'afficher « connexion ? ». Le candidat n'a
+    # pas de dossier a verifier : son texte a lui.
+    if request.headers.get("X-Requested-With") == "contratgen-fetch":
+        return {"ok": False, "erreurs": [
+            "Le service est momentanément indisponible. Vos pièces sont conservées : "
+            "réessayez dans quelques minutes."]}, 503
+    texte = ("La base de données n'a pas pu traiter la demande. Réessayez dans un "
+             "instant ; si une action était en cours, vérifiez le dossier avant de "
+             "la refaire. Si cela persiste, prévenez l'administrateur.")
+    return render_template(
+        "message.html", titre="Base de données indisponible", texte=texte), 503
+
+
 @app.errorhandler(413)
 def _trop_lourd(e):
     """Envoi au-delà de MAX_CONTENT_LENGTH : un message dans l'écran de
@@ -1097,7 +1103,7 @@ def detail(uid):
     # La fiche salarié est stockée dans le bucket "pieces" (FICHE PERSONNELLE,
     # cf. _fiche_salarie), mais c'est un document PRODUIT par l'app : elle
     # s'affiche donc avec le contrat, pas avec les pièces jointes par le
-    # candidat -- affichage seul, le stockage disque ne bouge pas.
+    # candidat -- affichage seul, le bucket ne change pas.
     fiche = store.fichiers_role(item, "pieces", "fiche-salarie")
     etat = store.etat(item)
     signe_le = next((e["le"] for e in reversed(item["journal"])
@@ -1245,7 +1251,11 @@ def _fiche_salarie(item):
                            contrat.generer(modele, vals, elaguer_lignes=generique))
         store.noter(item["id"], type="fiche_salarie", par="systeme")
         return True
-    except (ValueError, OSError) as e:
+    # OSError : le modele .docx est lu sur le disque. RuntimeError : le CAS de
+    # store._journaliser a epuise ses essais.
+    except PyMongoError as e:
+        return echec(f"base de données indisponible ({type(e).__name__})")
+    except (ValueError, OSError, RuntimeError) as e:
         return echec(str(e))
 
 
@@ -1410,13 +1420,15 @@ def _produire_contrat(uid, extra=None):
         mentions = config.mentions(config.valeur(item["champs"], "etablissement"))
     except KeyError as e:
         return False, f"établissement {e} absent des sociétés en base"
-    # OSError compris : la génération est un EFFET de la validation (comme
-    # _fiche_salarie, qui garde le même couple) -- un disque plein ne doit pas
-    # renvoyer un 500 alors que le dossier est déjà ouvert.
+    # La génération est un EFFET de la validation (comme _fiche_salarie) : un
+    # modele illisible (OSError) ou une base qui lache ne doit pas renvoyer un
+    # 500 alors que le dossier est déjà ouvert.
     try:
         vals = contrat.valeurs(item["champs"], mentions, extra=extra)
         octets = contrat.generer(config.CLIENT / "contrats" / modele, vals)
         store.poser_octets(uid, "contrat", store.nom_piece(item, "contrat", ".docx"), octets)
+    except PyMongoError as e:
+        return False, f"base de données indisponible ({type(e).__name__})"
     except (ValueError, OSError) as e:
         return False, str(e)
     _transition(uid, "ContratPret", modele=modele)
@@ -1658,8 +1670,9 @@ def purger():
         try:
             store.purger(item["id"])          # revérifie l'éligibilité lui-même
             faits += 1
-        except OSError as e:
-            flash(f"{item['id']} : purge incomplète — {e}", "erreur")
+        except PyMongoError as e:             # la boucle reste rejouable
+            flash(f"{item['id']} : purge incomplète, base de données "
+                  f"indisponible ({type(e).__name__})", "erreur")
     flash(f"{faits} dossier(s) purgé(s) : pièces effacées, journal conservé."
           if faits else "Aucun dossier à purger.", "ok" if faits else "erreur")
     return redirect(url_for("suivi"))
@@ -1709,84 +1722,6 @@ def lot_fichier(jeton, bucket, nom):
                    store.nom_export(item, bucket, nom), bucket)
 
 
-# --- verrou multi-machine ----------------------------------------------
-# Herite du stockage disque, retire avec DONNEES (lot 3 de la bascule Mongo) :
-# refuse un second serveur sur le meme dossier de donnees (recap, mails, jeton
-# SharePoint y vivent encore). Trois champs et un horodatage -- on ne cherche
-# pas a arbitrer une course, juste a refuser un second demarrage.
-_VERROU_TTL = 300          # s : verrou d'une AUTRE machine, non sondable -> perime
-                           # au-dela. Sur la meme machine, la mort du pid tranche.
-
-
-def _fichier_verrou():
-    return config.DONNEES / ".serveur-actif.json"
-
-
-def _ecrire_verrou(moi):
-    f = _fichier_verrou()
-    tmp = f.with_suffix(".tmp")
-    tmp.write_text(json.dumps({"hote": moi[0], "pid": moi[1], "le": time.time()}),
-                   encoding="utf-8")
-    os.replace(tmp, f)
-
-
-def _pid_vivant(pid):
-    """True si le process tourne encore. os.kill(pid, 0) TUE le process sous
-    Windows (TerminateProcess) -- y passer par OpenProcess."""
-    if not isinstance(pid, int):
-        return False
-    if os.name == "nt":
-        import ctypes
-        h = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)  # QUERY_LIMITED_INFO
-        if h:
-            ctypes.windll.kernel32.CloseHandle(h)
-            return True
-        return False
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True          # existe, mais pas a nous
-    return True
-
-
-def _verrou_serveur(moi=None):
-    """Refuse de demarrer si un AUTRE serveur tient le verrou. « Autre » =
-    couple (hote, pid) different ET (meme machine : pid encore vivant ; autre
-    machine : verrou de moins de _VERROU_TTL). Un crash sur la meme machine est
-    donc repris aussitot ; depuis une autre machine, au bout de 5 min. Puis
-    rafraichit le fichier toutes les 60 s (thread demon)."""
-    moi = moi or (socket.gethostname(), os.getpid())
-    f = _fichier_verrou()
-    if f.exists():
-        try:
-            tenu = json.loads(f.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            tenu = {}
-        autre = (tenu.get("hote"), tenu.get("pid")) != tuple(moi)
-        age = time.time() - tenu.get("le", 0)
-        meme_machine = tenu.get("hote") == moi[0]
-        tient_encore = (_pid_vivant(tenu.get("pid")) if meme_machine
-                        else age < _VERROU_TTL)
-        if autre and tient_encore:
-            raise SystemExit(
-                f"Un serveur sert déjà ce stockage : {tenu.get('hote')} "
-                f"(pid {tenu.get('pid')}), verrou rafraîchi il y a {int(age)} s. "
-                f"Deux serveurs sur le même dossier perdent des entrées de journal "
-                f"en silence. Si l'autre a planté, supprimez {f}.")
-    _ecrire_verrou(moi)
-
-    def _boucle():
-        while True:
-            time.sleep(60)
-            try:
-                _ecrire_verrou(moi)
-            except OSError:
-                pass
-    threading.Thread(target=_boucle, daemon=True).start()
-
-
 def demarrer():
     """Verifie la config puis sert (waitress, ou Werkzeug si DEBUG)."""
     # Refus dur : installation incomplete (secret/mdp par defaut, aucun
@@ -1797,33 +1732,21 @@ def demarrer():
             print(f"!! {sujet} : {', '.join(quoi)}")
         raise SystemExit("Configuration incomplète — le serveur ne sert pas. "
                          "Voir ci-dessus ; au besoin : python installer.py \"<Client>\"")
-    # « dossier synchronise » seulement si c'est vraiment ce qui sert : DONNEES=
-    # sur la ligne de lancement l'emporte sur le bloc stockage, et une ligne de
-    # demarrage qui annonce un drive alors qu'on ecrit ailleurs serait pire que
-    # pas de mention du tout.
-    depuis_config = (config.stockage().get("mode") == "dossier"
-                     and config.DONNEES == Path(config.stockage()["chemin"].strip()))
-    ou = " (dossier synchronisé)" if depuis_config else ""
-    print(f"{config.instance()['client']} — données : {config.DONNEES}{ou}", flush=True)
-    # APRES verifier(), jamais avant : `parents=True` creerait lui-meme le chemin
-    # du drive, et _verifier_stockage trouverait alors un dossier bien present --
-    # l'app servirait en ecrivant des pieces d'identite dans un dossier local qui
-    # ressemble a un dossier synchronise. Le garde-fou constate, il ne repare pas.
-    for zone in ("soumissions", store.DOSSIERS):
-        (config.DONNEES / zone).mkdir(parents=True, exist_ok=True)
-    store.vider_orphelins()
+    # Jamais l'URI dans le message : elle porte le mot de passe de la base.
+    try:
+        store.db().command("ping")
+        store.vider_orphelins()
+    except PyMongoError as e:
+        raise SystemExit(f"Base mongo « {os.environ['MONGO_DB']} » injoignable "
+                         f"({type(e).__name__}) — le serveur ne sert pas.")
+    print(f"{config.instance()['client']} — base mongo : {os.environ['MONGO_DB']}",
+          flush=True)
     port = int(os.environ.get("PORT", 5000))
     if os.environ.get("DEBUG"):
         # Developpement local seulement : serveur Werkzeug + debugger interactif.
-        # OFF par defaut, l'app sert des pieces d'identite. Pas de verrou serveur
-        # ici : le reloader Werkzeug refork `python app.py`, l'enfant rejouerait
-        # demarrer() et buterait sur le verrou du parent -- et un dev local n'a
-        # de toute facon pas de stockage partage a proteger.
+        # OFF par defaut, l'app sert des pieces d'identite.
         app.run(debug=True, port=port)
     else:
-        # Apres la creation des zones (memes raisons d'ordre) : refuse un second
-        # serveur sur le meme stockage, rafraichit ensuite le verrou en fond.
-        _verrou_serveur()
         # Production : waitress. Choisi plutot que gunicorn parce qu'il tourne
         # aussi sous Windows (gunicorn depend de fcntl, absent la) et surtout
         # parce qu'il est MONO-PROCESS multi-thread par construction : les

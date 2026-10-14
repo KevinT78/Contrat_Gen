@@ -1,18 +1,15 @@
 {
   "config_version": 1,
   "client": "À REMPLIR",
-  "secret": "REMPLACER-A-L-INSTALLATION",
   "url": "",
 
   "signature": {"mode": "manuel"},
-  "stockage": {"mode": "local"},
 
   "mails": {
     "mode": "console",
     "hote": "smtp.example.com",
     "port": 587,
     "utilisateur": "",
-    "mot_de_passe": "",
     "expediteur": "",
     "rh": [],
     "dpae": null,

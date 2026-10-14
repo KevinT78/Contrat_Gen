@@ -110,7 +110,6 @@ FORMULAIRE = {
 
 INSTANCE = {
     "client": "Boulangerie Mistral — RH",
-    "secret": "0" * 64,
     "url": "https://embauche.mistral.test",
     "mails": {"mode": "console", "expediteur": "rh@mistral.test",
               "rh": ["rh@mistral.test"], "comptable_defaut": "cabinet-a@example.test"},
@@ -173,7 +172,6 @@ for nom, corps in MODELES.items():
 
 # CONFIG_DIR AVANT l'import : config.py le lit au chargement du module.
 os.environ["CONFIG_DIR"] = str(CLIENT)
-os.environ["DONNEES"] = str(TMP / "data")
 from _outils import base_mongo  # noqa: E402
 base_mongo("valeurs_contrat")      # CONFIG_DIR posé : charge les SOCIETES ci-dessus
 

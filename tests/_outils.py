@@ -7,9 +7,12 @@ def base_mongo(nom):
     process : un sous-process repart d'une base vide), ou la base `test-<nom>`
     du MONGO_URI réel, vidée. À appeler avant le premier accès à store.db(),
     CONFIG_DIR déjà posé : les sociétés de la config de test
-    (`societes.amorce.json`) y sont chargées."""
+    (`societes.amorce.json`) y sont chargées. Pose aussi SECRET_KEY, avant
+    l'import d'app qui le lit."""
     os.environ.setdefault("MONGO_URI", "mongomock://")
     os.environ["MONGO_DB"] = f"test-{nom}"
+    os.environ.setdefault("BASE_EN_MEMOIRE", "1")
+    os.environ.setdefault("SECRET_KEY", "test-cle-publique-ne-jamais-deployer")
     if not os.environ["MONGO_URI"].startswith("mongomock://"):
         import pymongo
         pymongo.MongoClient(os.environ["MONGO_URI"]).drop_database(os.environ["MONGO_DB"])
@@ -65,8 +68,6 @@ def mails(modele=None):
 def compte(ident="rh", mdp="fixture"):
     """Compte de connexion en base ET dans l'amorce que les sous-process
     mongomock rechargent (MONGOMOCK_AMORCE) : leur base repart vide sinon."""
-    from werkzeug.security import generate_password_hash
     import store
-    doc = {"_id": ident, "mdp_hash": generate_password_hash(mdp)}
-    store.db().comptes.replace_one({"_id": ident}, doc, upsert=True)
+    store.poser_compte(ident, mdp)
     _amorcer("comptes", list(store.db().comptes.find()))

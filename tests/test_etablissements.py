@@ -16,14 +16,13 @@ CONF = BASE / "config"
 CONF.mkdir()
 (BASE / "data").mkdir()
 os.environ["CONFIG_DIR"] = str(CONF)
-os.environ["DONNEES"] = str(BASE / "data")
 
 RACINE = Path(__file__).resolve().parent.parent
 (CONF / "instance.json").write_text(json.dumps({
-    "config_version": 1, "client": "ACME", "secret": "a" * 64, "url": "http://localhost",
+    "config_version": 1, "client": "ACME", "url": "http://localhost",
     "signature": {"mode": "manuel"},
     "mails": {"mode": "console", "hote": "", "port": 587, "utilisateur": "",
-              "mot_de_passe": "", "expediteur": "rh@acme.example", "rh": ["rh@acme.example"],
+              "expediteur": "rh@acme.example", "rh": ["rh@acme.example"],
               "comptable_defaut": "c@acme.example"},
     "motifs_ko": ["Autre"], "templates": {},
 }), encoding="utf-8")

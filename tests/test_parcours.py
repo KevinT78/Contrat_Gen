@@ -3,7 +3,7 @@
     python tests/test_parcours.py
 
 Écrit dans une base vide (mongomock par défaut) et un dossier temporaire
-(mails), ne touche jamais data/.
+(mails), rien sur le disque.
   - couloir Dark Kitchen : Lille Grand Place, contrat généré
   - couloir Restaurant   : Marseille Prado, contrat déposé
 Contrat signé non bloquant, déposé après la remise sans changer d'état. Fiche salarié générée dans contrat/ dès la
@@ -14,7 +14,6 @@ import email
 import os
 import re
 import sys
-import tempfile
 from datetime import date
 from io import BytesIO
 from pathlib import Path
@@ -24,8 +23,6 @@ sys.stdout.reconfigure(encoding="utf-8")
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from _outils import base_mongo  # noqa: E402
 base_mongo("parcours")
-TEMP = tempfile.mkdtemp(prefix="contratgen-test-")
-os.environ["DONNEES"] = TEMP
 
 import config          # noqa: E402
 import store           # noqa: E402
@@ -33,8 +30,6 @@ from app import app    # noqa: E402
 from _outils import compte, corps_texte, mails  # noqa: E402
 compte("rh", "fixture")
 
-for zone in ("soumissions",):
-    (config.DONNEES / zone).mkdir(parents=True, exist_ok=True)
 
 PDF = (b"%PDF-1.4\n1 0 obj<</Type/Catalog>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF", "p.pdf")
 
@@ -524,6 +519,37 @@ def recap_liste_la_semaine(uids):
     assert app.test_client().get(lot).status_code == 200, "lien du mail hebdo mort"
 
 
+def cas_base_indisponible(c):
+    """La base lache pendant une requete RH : une page 503 lisible, jamais une
+    trace -- y compris sur les actions sans try propre (DPAE faite)."""
+    from pymongo.errors import AutoReconnect
+    vraie = store.db
+
+    def perdue():
+        raise AutoReconnect("connexion perdue")
+    store.db = perdue
+    try:
+        for r in (c.get("/suivi"),
+                  c.post("/dossier/X/dpae-faite", data={}, content_type="multipart/form-data")):
+            assert r.status_code == 503, r.status_code
+            assert "Base de données indisponible" in r.get_data(as_text=True)
+        # formulaire public envoyé en fetch : du JSON, que le JS affiche en
+        # gardant les pièces choisies (une page HTML tombait dans « connexion ? »).
+        # Compteur anti-flood vidé : plein, il répond un faux succès sans écrire.
+        import app as module
+        module._POT_PAR_IP.clear()
+        r = app.test_client().post(
+            "/", data={**base_saisie("ACME Restauration / Lille Grand Place"),
+                       "identite": [piece(), piece()], "carte_vitale": piece(), "rib": piece()},
+            content_type="multipart/form-data",
+            headers={"X-Requested-With": "contratgen-fetch"})
+        assert r.status_code == 503 and r.is_json, (r.status_code, r.get_data(as_text=True)[:200])
+        assert r.get_json()["ok"] is False and "pièces sont conservées" in r.get_json()["erreurs"][0]
+    finally:
+        store.db = vraie
+    assert c.get("/suivi").status_code == 200
+
+
 def main():
     assert not config.verifier(), f"config non servable : {config.verifier()}"
     c = app.test_client()
@@ -545,12 +571,13 @@ def main():
     cas_double_dpae()
     cas_course_champs()
     cas_dossier_inconnu_et_valider_apres_rejet()
+    cas_base_indisponible(c)
 
     # lien forgé
     anonyme = app.test_client()
     assert anonyme.get("/lot/lot_comptable.X.1.0.deadbeef").status_code == 410
 
-    print(f"\nDeux couloirs OK — Dark Kitchen {dk}, Restaurant {resto}\n{TEMP}")
+    print(f"\nDeux couloirs OK — Dark Kitchen {dk}, Restaurant {resto}")
 
 
 if __name__ == "__main__":

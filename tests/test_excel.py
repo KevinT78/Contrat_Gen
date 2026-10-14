@@ -12,7 +12,6 @@ import json
 import os
 import re
 import sys
-import tempfile
 import zipfile
 from pathlib import Path
 from xml.sax.saxutils import escape
@@ -21,7 +20,6 @@ sys.stdout.reconfigure(encoding="utf-8")
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from _outils import base_mongo  # noqa: E402
 base_mongo("excel")
-os.environ["DONNEES"] = tempfile.mkdtemp(prefix="contratgen-excel-")
 
 import config   # noqa: E402
 from _outils import compte  # noqa: E402

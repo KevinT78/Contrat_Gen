@@ -9,7 +9,6 @@ Rejouable, et un échec ne laisse rien. Écrit dans une base vide.
 """
 import os
 import sys
-import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -17,8 +16,6 @@ sys.stdout.reconfigure(encoding="utf-8")
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from _outils import base_mongo  # noqa: E402
 base_mongo("import")
-TEMP = tempfile.mkdtemp(prefix="contratgen-import-")
-os.environ["DONNEES"] = TEMP
 
 import config   # noqa: E402
 import recap    # noqa: E402

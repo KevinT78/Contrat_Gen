@@ -29,10 +29,10 @@ from _outils import compte, societes as poser_societes  # noqa: E402
 compte("rh", "pas-demo")      # le compte vit en base : lu par l'enfant via l'amorce
 
 INSTANCE = {
-    "config_version": 1, "client": "ACME", "secret": "a" * 64, "url": "http://localhost",
+    "config_version": 1, "client": "ACME", "url": "http://localhost",
     "signature": {"mode": "manuel"},
     "mails": {"mode": "console", "hote": "", "port": 587, "utilisateur": "",
-              "mot_de_passe": "", "expediteur": "rh@acme.example",
+              "expediteur": "rh@acme.example",
               "rh": ["rh@acme.example"], "dpae": None, "recap": None,
               "comptable_defaut": "c@acme.example"},
     "motifs_ko": ["Autre"], "templates": {"Manager": "contrat.txt"},
@@ -63,7 +63,7 @@ def lancer(*args, entree="", sans=()):
     # MAILS_MODE aussi : le .bat MailHog le pose, il surclasserait le mode des fixtures
     env = {k: v for k, v in os.environ.items()
            if k not in ("PYTHONIOENCODING", "MAILS_MODE", *sans)}
-    env.update(CONFIG_DIR=str(CONF), DONNEES=str(BASE / "data"))
+    env.update(CONFIG_DIR=str(CONF))
     p = subprocess.run([sys.executable, str(RACINE / "configurer.py"), *args],
                        input=entree.encode("utf-8"), capture_output=True, env=env)
     sortie = (p.stdout + p.stderr).decode("utf-8", "replace")
@@ -144,15 +144,209 @@ def test_compte_ajoute_un_utilisateur():
 
 
 def test_bilan_sans_base_est_un_manque_pas_une_trace():
-    """Sans MONGO_*, les comptes sont illisibles : le bilan le dit (lancer()
+    """Sans MONGO_*, la base est illisible : le bilan le dit une fois (lancer()
     refuse toute Traceback) au lieu de planter avant d'avoir rien affiché."""
     ecrire()
     code, sortie = lancer(sans=("MONGO_URI", "MONGO_DB"))
-    assert code == 1 and "base mongo non configurée" in sortie, sortie
-    assert "configurer.py compte" in sortie, sortie
+    assert code == 1 and "MONGO_URI absent" in sortie and "MONGO_DB absent" in sortie, sortie
+    assert "comptes" not in sortie, "le même manque redit par chaque check qui lit la base"
+    # URI au mauvais schéma : le manque, pas l'InvalidURI de pymongo (lancer()
+    # refuse toute Traceback), et jamais le mot de passe qu'elle porte.
+    os.environ["MONGO_URI"], vraie = "postgres://u:mdp-uri@h/x", os.environ["MONGO_URI"]
+    try:
+        code, sortie = lancer()
+    finally:
+        os.environ["MONGO_URI"] = vraie
+    assert code == 1 and "doit commencer par mongodb://" in sortie, sortie
+    assert "mdp-uri" not in sortie, sortie
     code, sortie = lancer("compte", "rh", entree="s3cret\ns3cret\n",
                           sans=("MONGO_URI", "MONGO_DB"))
     assert code == 1 and "ÉCHEC" in sortie, sortie
+
+
+def test_option_env_charge_le_fichier_de_l_instance():
+    """--env <fichier> : coupe au premier « = », BOM du Bloc-notes toléré,
+    commentaire ignoré, l'environnement déjà posé l'emporte, et l'option sort
+    d'argv pour que le script lise ses propres arguments."""
+    import config
+    f = BASE / "essai.env"
+    f.write_text("A_ENV_TEST=x=y=\nB_ENV_TEST=fichier\n# C_ENV_TEST=non\n",
+                 encoding="utf-8-sig")
+    os.environ["B_ENV_TEST"] = "deja-la"
+    argv = ["configurer.py", "--env", str(f), "--assister"]
+    try:
+        config._charger_env(argv)
+        assert argv == ["configurer.py", "--assister"], argv
+        assert os.environ["A_ENV_TEST"] == "x=y=", os.environ["A_ENV_TEST"]
+        assert os.environ["B_ENV_TEST"] == "deja-la", "le fichier a écrasé l'environnement"
+        assert "C_ENV_TEST" not in os.environ
+    finally:
+        for k in ("A_ENV_TEST", "B_ENV_TEST"):
+            os.environ.pop(k, None)
+    try:
+        config._charger_env(["x", "--env", str(BASE / "absent.env")])
+        raise AssertionError("fichier absent accepté")
+    except SystemExit as e:
+        assert "absent.env" in str(e), e
+
+    # Bout à bout : les secrets ne viennent QUE du fichier, et le bilan les voit.
+    ecrire()
+    f.write_text("".join(f"{k}={os.environ[k]}\n" for k in
+                         ("SECRET_KEY", "MONGO_URI", "MONGO_DB", "BASE_EN_MEMOIRE")),
+                 encoding="utf-8")
+    code, sortie = lancer("--env", str(f),
+                          sans=("SECRET_KEY", "MONGO_URI", "MONGO_DB", "BASE_EN_MEMOIRE"))
+    assert "absent de l'environnement" not in sortie, sortie
+    code, sortie = lancer(sans=("SECRET_KEY", "MONGO_URI", "MONGO_DB", "BASE_EN_MEMOIRE"))
+    assert "SECRET_KEY absent" in sortie, "contrôle : sans --env, le manque doit sortir"
+
+
+def test_option_env_cas_limites():
+    """Chaque forme de fichier qu'un installateur peut produire à la main :
+    soit une valeur exacte, soit un refus qui dit quoi corriger, jamais une
+    trace ni un fichier ignoré en silence."""
+    import config
+    f = BASE / "limite.env"
+    lit = [  # (octets du fichier, valeur attendue de LIM, ou fragment du refus)
+        (b"LIM=a=b=", "a=b="),                      # coupe au premier « = »
+        (b"LIM= a b \r\n", "a b"),                 # espaces et CRLF retires
+        (b'LIM="mot de passe"', "mot de passe"),    # guillemets englobants retires
+        (b"LIM='x'", "x"),
+        (b'LIM="x', '"x'),                          # guillemet non apparie : garde
+        (b"LIM=", ""),
+        (b"\xef\xbb\xbfLIM=bom", "bom"),            # BOM du Bloc-notes
+        (b"# LIM=non\n\n  \nLIM=oui", "oui"),        # commentaire et lignes vides
+        (b"LIM=\xe9", "refus:pas en UTF-8"),        # cp1252
+        (b"=x", "refus:ligne 1"),                   # cle vide
+        (b"LIM x", "refus:ligne 1"),                # pas de « = »
+        (b"A=1\nLIM mdp-secret", "refus:ligne 2"),  # numero de ligne juste
+    ]
+    for octets, attendu in lit:
+        f.write_bytes(octets)
+        os.environ.pop("LIM", None)
+        argv = ["prog", "--env", str(f)]
+        try:
+            config._charger_env(argv)
+            obtenu = os.environ.get("LIM")
+        except SystemExit as e:
+            obtenu = f"refus:{e}"
+            assert "mdp-secret" not in str(e), f"le refus affiche la ligne : {e}"
+        finally:
+            os.environ.pop("A", None)
+        if attendu.startswith("refus:"):
+            assert obtenu.startswith("refus:") and attendu[6:] in obtenu, (octets, obtenu)
+        else:
+            assert obtenu == attendu and argv == ["prog"], (octets, obtenu, argv)
+
+    f.write_bytes(b"LIM=fichier")
+    for argv, attendu in (
+            (["p", f"--env={f}", "x"], "fichier"),                  # forme --env=
+            (["p", "--env", str(f), "--env", str(f)], "refus:deux fois"),
+            (["p", "--env"], "refus:attend le chemin"),
+            (["p", "--env", str(BASE)], "refus:illisible")):        # un dossier
+        os.environ.pop("LIM", None)
+        try:
+            config._charger_env(argv)
+            obtenu = os.environ.get("LIM")
+        except SystemExit as e:
+            obtenu = f"refus:{e}"
+        assert (obtenu.startswith("refus:") and attendu[6:] in obtenu
+                if attendu.startswith("refus:") else obtenu == attendu), (argv, obtenu)
+    # une variable posée VIDE ne masque pas le fichier ; posée non vide, elle gagne
+    # et une valeur différente du fichier se signale, sans afficher l'une ni l'autre
+    import contextlib
+    import io
+    for avant, attendu, averti in (("", "fichier", False), ("fichier", "fichier", False),
+                                   ("posee", "posee", True)):
+        os.environ["LIM"] = avant
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            config._charger_env(["p", "--env", str(f)])
+        assert os.environ["LIM"] == attendu, (avant, os.environ["LIM"])
+        assert ("LIM déjà posé" in err.getvalue()) == averti, (avant, err.getvalue())
+        assert "posee" not in err.getvalue() and "=fichier" not in err.getvalue()
+    os.environ.pop("LIM", None)
+
+
+def test_verifier_mongo_cas_limites():
+    """Ce qui ferait lever pymongo en pleine vérification, ou démarrer sur une
+    base qu'on n'attend pas, sort en manque lisible."""
+    import config
+    bon = {"SECRET_KEY": "k" * 40, "MONGO_URI": "mongodb://hote:27017/",
+           "MONGO_DB": "acme", "BASE_EN_MEMOIRE": ""}
+    cas = [
+        ({}, None),
+        ({"MONGO_URI": "mongodb+srv://u:p@cluster.exemple/?retryWrites=true"}, None),
+        ({"MONGO_URI": "mongomock://", "BASE_EN_MEMOIRE": "1"}, None),
+        ({"MONGO_URI": "mongomock://", "BASE_EN_MEMOIRE": "0"}, "base en mémoire"),
+        ({"MONGO_URI": "mongomock://"}, "base en mémoire"),
+        ({"MONGO_URI": "MONGODB://hote/"}, "doit commencer"),
+        ({"MONGO_URI": " mongodb://hote/"}, "doit commencer"),
+        ({"MONGO_URI": "mongodb://"}, "sans adresse"),
+        ({"MONGO_URI": "mongodb:///acme"}, "sans adresse"),
+        ({"MONGO_URI": "mongodb+srv://u:p@/"}, "sans adresse"),
+        ({"SECRET_KEY": "court"}, "trop courte"),
+        ({"SECRET_KEY": " " * 40}, "trop courte"),
+        ({"MONGO_DB": "a.b"}, "nom de base invalide"),
+        ({"MONGO_DB": "a b"}, "nom de base invalide"),
+        ({"MONGO_DB": "x" * 64}, "nom de base invalide"),
+        ({"MONGO_DB": "x" * 63}, None),
+    ]
+    sauve = {k: os.environ.get(k) for k in bon}
+    try:
+        for change, attendu in cas:
+            os.environ.update({**bon, **change})
+            m = config._verifier_mongo()
+            texte = " ".join(m.get("mongo / secrets", []))
+            assert (not m) if attendu is None else attendu in texte, (change, m)
+            assert "u:p@" not in texte, f"l'URI est affichée : {texte}"
+    finally:
+        for k, v in sauve.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
+def test_compte_au_hash_malforme_refuse():
+    """Un mdp_hash qui n'a pas la forme werkzeug : personne ne pourrait se
+    connecter avec ce compte, et login() ne dirait rien."""
+    import config
+    import store
+    for h in ("pas-un-hash", "x$y$z", "scrypt:1$a$b"):   # forme, puis méthode inconnue
+        store.db().comptes.insert_one({"_id": "casse", "mdp_hash": h})
+        try:
+            assert "casse" in " ".join(config._verifier_comptes().get("comptes", [])), \
+                (h, config._verifier_comptes())
+        finally:
+            store.db().comptes.delete_one({"_id": "casse"})
+    assert not config._verifier_comptes(), "contrôle : sans lui, plus de manque"
+
+
+def test_bilan_uri_refusee_par_pymongo_est_un_manque():
+    """Port non numérique, options sans « / », srv multi-hôtes : pymongo lève
+    (ValueError, ConfigurationError, InvalidURI) en pleine vérification. Le
+    bilan doit le dire, sans trace et sans le mot de passe de l'URI."""
+    ecrire()
+    vraie = os.environ["MONGO_URI"]
+    try:
+        for uri in ("mongodb://u:mdp-uri@h:abc/", "mongodb://u:mdp-uri@h?x=1",
+                    "mongodb+srv://u:mdp-uri@h1,h2/"):
+            os.environ["MONGO_URI"] = uri
+            code, sortie = lancer()
+            assert code == 1 and "base mongo illisible" in sortie, (uri, sortie)
+            assert "mdp-uri" not in sortie, sortie
+            assert "comptes" not in sortie, "le même manque redit par les comptes"
+    finally:
+        os.environ["MONGO_URI"] = vraie
+
+
+def test_bilan_refuse_la_base_en_memoire_hors_demo():
+    """mongomock:// recopié dans le .env d'un client : base vidée à chaque
+    redémarrage. Refusé tant que BASE_EN_MEMOIRE n'est pas posé."""
+    ecrire()
+    code, sortie = lancer(sans=("BASE_EN_MEMOIRE",))
+    assert code == 1 and "base en mémoire" in sortie, sortie
 
 
 def test_bilan_refuse_un_id_de_champ_avec_point():
@@ -165,46 +359,31 @@ def test_bilan_refuse_un_id_de_champ_avec_point():
     assert code == 1 and "« a.b »" in sortie and "[config/formulaire.json]" in sortie, sortie
 
 
-def test_bilan_refuse_un_chemin_de_drive_absent():
-    """Le mode « dossier » est vérifié au démarrage, pas à la 1re soumission :
-    un dossier de sync pas encore répliqué doit sortir un KO qui nomme
-    instance.json et dit pourquoi."""
-    ecrire({**INSTANCE, "stockage": {"mode": "dossier",
-                                     "chemin": str(BASE / "drive-absent")}})
-    code, sortie = lancer()
-    assert code == 1 and "! stockage  [config/instance.json]" in sortie, sortie
-    assert "drive-absent" in sortie and "n'est pas un dossier" in sortie, sortie
+def test_bilan_refuse_les_secrets_absents_de_l_environnement():
+    """Les secrets vivent dans l'environnement (.env écrit par installer.py),
+    jamais dans config/ : chacun manquant sort un KO qui nomme la variable et
+    renvoie au .env, pas à instance.json."""
+    ecrire()
+    code, sortie = lancer(sans=("SECRET_KEY",))
+    assert code == 1 and "SECRET_KEY absent" in sortie and "[fichier d'environnement .env" in sortie, sortie
 
-    # Les formes que la validation doit REFUSER, pas seulement le cas valide.
-    for bloc, attendu in (({"mode": "cloud"}, "inconnu"),
-                          ({"mode": "dossier"}, "sans « chemin »"),
-                          ({"mode": "dossier", "chemin": "  "}, "sans « chemin »"),
-                          ("local", "attend un objet")):
-        ecrire({**INSTANCE, "stockage": bloc})
+    ecrire({**INSTANCE, "signature": {"mode": "yousign"}})
+    code, sortie = lancer(sans=("YOUSIGN_CLE_API",))
+    assert code == 1 and "! signature  [fichier d'environnement .env]" in sortie, sortie
+    assert "YOUSIGN_CLE_API" in sortie, sortie
+
+    ecrire({**INSTANCE, "mails": {**INSTANCE["mails"], "mode": "smtp", "utilisateur": "u@relais"}})
+    code, sortie = lancer(sans=("SMTP_MOT_DE_PASSE",))
+    assert code == 1 and "! SMTP_MOT_DE_PASSE  [fichier d'environnement .env]" in sortie, sortie
+
+    # contrôle : la même config passe quand la variable est là
+    os.environ["SMTP_MOT_DE_PASSE"] = "x"
+    try:
         code, sortie = lancer()
-        assert code == 1 and attendu in sortie, f"{bloc} : {sortie}"
-
-    # Et le cas valide passe : dossier existant et accessible en écriture.
-    drive = BASE / "drive"
-    drive.mkdir(exist_ok=True)
-    ecrire({**INSTANCE, "stockage": {"mode": "dossier", "chemin": str(drive)}})
-    code, sortie = lancer()
-    assert code == 0, sortie
-    assert not list(drive.iterdir()), "la sonde d'écriture a laissé un fichier"
-
-
-def test_assistant_pose_le_bloc_stockage():
-    drive = BASE / "drive-assistant"
-    drive.mkdir(exist_ok=True)
-    ecrire({**INSTANCE, "stockage": {"mode": "dossier", "chemin": str(BASE / "nulle-part")}})
-    code, sortie = lancer("--assister", entree=f"2\n{drive}\n")
-    assert code == 0, sortie
-    assert instance()["stockage"] == {"mode": "dossier", "chemin": str(drive)}
-
-    ecrire({**INSTANCE, "stockage": {"mode": "dossier", "chemin": str(BASE / "nulle-part")}})
-    code, sortie = lancer("--assister", entree="1\n")
-    assert code == 0, sortie
-    assert instance()["stockage"] == {"mode": "local"}
+    finally:
+        del os.environ["SMTP_MOT_DE_PASSE"]
+    assert "SMTP_MOT_DE_PASSE" not in sortie, sortie
+    ecrire()
 
 
 def test_assistant_cree_la_premiere_societe():

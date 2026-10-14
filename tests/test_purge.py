@@ -5,11 +5,11 @@
 Le test qui vaut tous les autres : dérouler un parcours complet jusqu'à
 RemisComptable, purger, puis affirmer que le nom du salarié (et le NIR, et
 l'adresse) n'apparaît dans AUCUN document des collections `dossiers` et
-`fichiers` (octets compris), ni sous config.DONNEES — hors data/mails/,
-carve-out documenté (purge par ancienneté, pas par dossier). Puis rejouer la
-purge : ni exception, ni changement.
+`fichiers` (octets compris) — hors collection `mails`, carve-out documenté
+(purge par ancienneté, pas par dossier). Puis rejouer la purge : ni exception,
+ni changement.
 
-Écrit dans une base vide et un dossier temporaire, ne touche jamais data/.
+Écrit dans une base vide, rien sur le disque.
 """
 import email
 import io
@@ -17,16 +17,15 @@ import json
 import os
 import re
 import sys
-import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+from pymongo.errors import PyMongoError
 
 sys.stdout.reconfigure(encoding="utf-8")
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from _outils import base_mongo  # noqa: E402
 base_mongo("purge")
-TEMP = tempfile.mkdtemp(prefix="contratgen-purge-")
-os.environ["DONNEES"] = TEMP
 
 import config          # noqa: E402
 import store           # noqa: E402
@@ -35,7 +34,6 @@ from _outils import compte  # noqa: E402
 compte("rh", "fixture")
 from _outils import corps_texte, mails  # noqa: E402
 
-(config.DONNEES / "soumissions").mkdir(parents=True, exist_ok=True)
 
 PDF = (b"%PDF-1.4\n1 0 obj<</Type/Catalog>>endobj\n%%EOF", "p.pdf")
 NOM, PRENOM = "Delacroix-Nkemba", "Eugénie"
@@ -115,20 +113,13 @@ def antidater_etat_courant(uid, jours):
 
 def octets_et_textes():
     """(octets, textes) de tout ce qui reste : chaque document `dossiers` (en
-    JSON), chaque fichier (nom et octets), et sous DONNEES hors data/mails/
-    (carve-out : purge par ancienneté, pas par dossier) chaque chemin et fichier."""
+    JSON), chaque fichier (nom et octets)."""
     blobs, textes = [], []
     for d in store.db().dossiers.find():
         textes.append(json.dumps(d, ensure_ascii=False, default=str))
     for f in store.db().fichiers.find():
         textes.append(f["nom"])
         blobs.append(bytes(f["octets"]))
-    for p in config.DONNEES.rglob("*"):
-        if "mails" in p.relative_to(config.DONNEES).parts:
-            continue
-        textes.append(str(p))
-        if p.is_file():
-            blobs.append(p.read_bytes())
     return blobs, textes
 
 
@@ -183,11 +174,35 @@ def main():
                                      item.get("lien_comptable_epoch", 0))
         assert app.test_client().get(lot).status_code == 200
 
+        # --- base qui lâche pendant la boucle : un flash, pas un 500, rien
+        #     de purgé, et la boucle reste rejouable (passage suivant) ---
+        vraie_purge, vraie_db = store.purger, store.db
+
+        def perdue():
+            raise PyMongoError("hote-secret.exemple:27017 timed out")
+
+        def purge_sans_base(uid):           # la vraie purge, base coupee dessous
+            store.db = perdue
+            try:
+                return vraie_purge(uid)
+            finally:
+                store.db = vraie_db
+        store.purger = purge_sans_base
+        try:
+            r = c.post("/purger", follow_redirects=True)
+        finally:
+            store.purger = vraie_purge
+        page = r.get_data(as_text=True)
+        assert r.status_code == 200 and "purge incomplète" in page, r.status_code
+        assert "hote-secret" not in page, "le message brut de l'erreur Mongo est affiché"
+        assert not store.lire(remis).get("purge")
+        assert store.db().fichiers.count_documents({"uid": remis}), "pièces effacées malgré l'échec"
+
         # --- la purge, par la route ---
         r = c.post("/purger", follow_redirects=True)
         assert r.status_code == 200 and "2 dossier(s) purgé" in r.get_data(as_text=True), r.text[:400]
 
-        # 1. le nom / NIR / adresse : nulle part en base ni sous DONNEES (hors mails)
+        # 1. le nom / NIR / adresse : nulle part en base (hors collection mails)
         blobs, textes = octets_et_textes()
         for aiguille in PII:
             assert not any(aiguille in t for t in textes), \
@@ -275,7 +290,7 @@ def main():
         config.instance().pop("conservation", None)
 
     print(f"\nPurge OK — remis {remis} vidé, soumission {soumise} vidée, "
-          f"récent {recent} intact sous le seuil, épargné quand il bouge.\n{TEMP}")
+          f"récent {recent} intact sous le seuil, épargné quand il bouge.")
 
 
 if __name__ == "__main__":

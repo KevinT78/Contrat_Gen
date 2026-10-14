@@ -109,6 +109,13 @@ def db():
     return _db
 
 
+def poser_compte(ident, mdp):
+    """Cree ou remplace un compte de connexion (collection `comptes`)."""
+    from werkzeug.security import generate_password_hash
+    db().comptes.replace_one({"_id": ident}, {"mdp_hash": generate_password_hash(mdp)},
+                             upsert=True)
+
+
 # Racines de l'export zip (lot 4) : l'arborescence que la RH ouvre a la main.
 DOSSIERS = "DOSSIERS SALARIES"
 LEAVERS = "LEAVERS"
