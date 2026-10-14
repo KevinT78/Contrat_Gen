@@ -23,6 +23,8 @@ os.environ["DONNEES"] = TEMP
 import config   # noqa: E402
 import recap    # noqa: E402
 import store    # noqa: E402
+from _outils import compte  # noqa: E402
+compte("rh", "fixture")
 
 ETAB = "ACME Restauration / Lille Grand Place"
 ENTREE = {"par": "rh", "origine": "sharepoint"}
@@ -481,15 +483,14 @@ assert store.fichiers(s10, "pieces") == [] and len(sp._import["erreurs"]) == 1, 
 assert "BORNE S10 : video.mp4 (60 Mo) non importé" in page(f"/etablissements/recuperer?cle={ETAB}"), \
     "fichier écarté invisible pour la RH"
 
-jeton_fichier = config.DONNEES / "sharepoint-jeton.json"
-jeton_fichier.write_text("{}", encoding="utf-8")                  # connectée avant le retrait de msal
+store.db().etat.replace_one({"_id": "sharepoint-jeton"}, {"cache": "{}"}, upsert=True)                  # connectée avant le retrait de msal
 sys.modules["msal"], sp._msal, sp.compte = None, None, vrai_compte
 r = c.get(f"/etablissements/recuperer?cle={ETAB}")
 assert r.status_code == 200 and "pas installé" in _html.unescape(r.get_data(as_text=True)), r.status_code
 sys.modules.pop("msal")
 if vrai_msal:
     sys.modules["msal"] = vrai_msal
-jeton_fichier.unlink()
+store.db().etat.delete_one({"_id": "sharepoint-jeton"})
 sp._msal, sp.compte = None, lambda: "rh@acme.test"
 anciens = page("/salaries?anciens=1")                  # DUPONT : importé, archivé sans date d'entrée
 assert f"/dossier/{uid}" in anciens and "à compléter" not in anciens, \

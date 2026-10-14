@@ -21,6 +21,11 @@ from pathlib import Path
 
 from docx import Document
 
+# Les enfants (installer.py, _client_parcours.py) heritent de l'env : chacun a sa
+# base mongomock, le compte rh est cree par celui qui en a besoin.
+os.environ.setdefault("MONGO_URI", "mongomock://")
+os.environ["MONGO_DB"] = "test-clients"
+
 sys.stdout.reconfigure(encoding="utf-8")
 RACINE = Path(__file__).resolve().parent.parent
 CODE = ["app.py", "config.py", "apparence.py", "contrat.py", "mails.py",
@@ -220,6 +225,22 @@ def installer_copie(base, client):
     return copie
 
 
+def refus_base_deja_servie(base):
+    """MONGO_DB resté sur la base d'un autre client : son compte rh existe, le
+    réinstaller écraserait son mot de passe. Refus, et rien n'est créé. La base
+    mongomock de l'enfant est amorcée avec ce compte (MONGOMOCK_AMORCE)."""
+    copie = base / "base-deja-servie"
+    poser_code(copie)
+    amorce = base / "amorce-deja-servie.json"
+    amorce.write_text(json.dumps({"comptes": [{"_id": "rh", "mdp_hash": "x"}]}),
+                      encoding="utf-8")
+    r = subprocess.run([sys.executable, "installer.py", "Autre", "."], cwd=copie,
+                       capture_output=True, text=True, encoding="utf-8",
+                       env={**os.environ, "MONGOMOCK_AMORCE": str(amorce)})
+    assert r.returncode != 0 and "déjà un compte rh" in r.stderr, r.stderr
+    assert not (copie / "config").exists(), "refus après avoir créé config/"
+
+
 def refus_avant_config(base, client):
     """Juste après installer.py, sans societes.json rempli : refus de servir."""
     copie = base / (client["slug"] + "-nu")
@@ -249,6 +270,7 @@ def main():
     driver = str(Path(__file__).resolve().parent / "_client_parcours.py")
     vus = []
     try:
+        refus_base_deja_servie(base)
         for client in CLIENTS:
             refus_avant_config(base, client)
             copie = installer_copie(base, client)

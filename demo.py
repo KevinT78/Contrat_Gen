@@ -4,8 +4,9 @@
     python demo.py --vide     # suivi vide : c'est toi qui fais tout, du formulaire
                               # public à la remise au cabinet (pièces imprimées)
 
-Données dans data_demo/ (jamais data/), effacées à chaque lancement. Mails en
-mode console : data_demo/mails/*.eml. Identifiants RH : rh / demo-rh.
+Données dans la base de démo (mongomock, en mémoire, vide à chaque lancement) et
+data_demo/ pour le reste. Mails en mode console : collection `mails`, en-tête
+affiché ici. Identifiants RH : rh / demo-rh (compte créé au lancement).
 
 Quatre dossiers amorcés pour que le suivi ne soit pas vide au moment de
 présenter, chacun arrêté à une étape différente :
@@ -44,12 +45,18 @@ if not (Path(os.environ["CONFIG_DIR"]) / "instance.json").exists():
              "modèles de contrats, grille de salaires), pas une instance vide.")
 
 shutil.rmtree(os.environ["DONNEES"], ignore_errors=True)
-for zone in ("soumissions", "mails"):
+for zone in ("soumissions",):
     (Path(os.environ["DONNEES"]) / zone).mkdir(parents=True)
 
 import config  # noqa: E402
 import store   # noqa: E402
 import app as serveur  # noqa: E402
+from werkzeug.security import generate_password_hash  # noqa: E402
+
+# Les comptes vivent en base : sur mongomock (propre au process) la démo crée le
+# sien ici, avant demarrer() qui refuse de servir sans compte.
+store.db().comptes.replace_one(
+    {"_id": "rh"}, {"mdp_hash": generate_password_hash("demo-rh")}, upsert=True)
 
 PDF = b"%PDF-1.4\n1 0 obj<</Type/Catalog>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF"
 
@@ -147,10 +154,10 @@ Suivi vide : à toi de jouer, du formulaire public à la remise au cabinet.
        (CNI : sélectionne les DEUX fichiers cni_recto.pdf + cni_verso.pdf)
   2. /login (rh / demo-rh) -> « Demandes d'embauche » -> clic sur BENALI Sarah
   3. « Accepter — ouvrir le dossier »
-        -> mail « rappel DPAE » dans data_demo/mails/
+        -> mail « rappel DPAE » (en-tête affiché dans ce terminal)
   4. « Générer le contrat » -> aucun champ à saisir -> ouvre contrat.docx
   5. « DPAE créée et stockée » -> dépose l'accusé (un des PDF)  <- la DPAE dans le dossier
-  6. « Remettre au cabinet comptable » -> copie data_demo/compta/ + lien de lot
+  6. « Remettre au cabinet comptable » -> lien de lot (le cabinet l'ouvre sans compte)
   7. Salariés -> fiche du salarié -> « Déposer le contrat signé » (en haut) -> un des PDF
 
 Fiche candidat (parcours « contrat généré ») :
@@ -189,8 +196,7 @@ if __name__ == "__main__":
 Démo Contrat_Gen — {config.instance()['client']}
   Formulaire (public) : http://localhost:{os.environ['PORT']}/
   Espace RH           : http://localhost:{os.environ['PORT']}/login   (rh / demo-rh)
-  Mails « envoyés »   : {config.DONNEES / 'mails'}
-  Mail hebdo cabinet  : CONFIG_DIR=config.demo DONNEES=data_demo python recap.py
+  Mails « envoyés »   : collection mails de la base de démo (en-têtes dans ce terminal)
 {fiche}""", flush=True)
     sys.argv = [sys.argv[0]]
     serveur.demarrer()

@@ -33,6 +33,9 @@ from werkzeug.security import generate_password_hash          # noqa: E402
 import apparence                                              # noqa: E402
 import config                                                 # noqa: E402
 import placeholders                                           # noqa: E402
+import store                                                  # noqa: E402
+
+COMPTES = {"rh": {"mdp_hash": generate_password_hash("pas-demo")}}
 
 CONF = BASE / "config"
 (CONF / "contrats").mkdir(parents=True)
@@ -45,7 +48,6 @@ INSTANCE = {
     "mails": {"mode": "console", "hote": "", "port": 587, "utilisateur": "",
               "mot_de_passe": "", "expediteur": "rh@acme.example", "rh": ["rh@acme.example"],
               "dpae": None, "recap": None, "comptable_defaut": "c@acme.example"},
-    "utilisateurs": {"rh": {"mdp_hash": generate_password_hash("pas-demo")}},
     "motifs_ko": ["Autre"],
     "templates": {"Manager": "contrat.txt"},
 }
@@ -71,7 +73,10 @@ SOCIETES = [{"nom": "ACME", "siren": "111 111 111",
 
 
 def ecrire(instance=None, contrat="Bonjour {{Nom}}, poste {{Poste}}.",
-           formulaire=None, grille=None):
+           formulaire=None, grille=None, comptes=COMPTES):
+    store.db().comptes.delete_many({})
+    for ident, doc in comptes.items():
+        store.db().comptes.insert_one({"_id": ident, **doc})
     (CONF / "instance.json").write_text(
         json.dumps(instance or INSTANCE, ensure_ascii=False), encoding="utf-8")
     fg = CONF / "grille.json"
@@ -98,14 +103,24 @@ def test_mails_rh_vide_refuse_au_demarrage():
         assert "mails" in config.verifier(), f"{mails!r} passe le garde-fou"
 
 
-def test_utilisateurs_malforme_refuse_au_demarrage():
-    """Le bloc `utilisateurs` de instance.json est la seule source des comptes :
-    une forme cassée doit refuser le démarrage, pas planter login()."""
-    for mauvais in ({}, "pas-un-dict", {"rh": "pas-un-dict"},
-                    {"rh": {"role": "rh"}}, {"rh": {"mdp_hash": ""}}):
-        ecrire(instance={**INSTANCE, "utilisateurs": mauvais})
-        # verifier() ne doit pas planter et doit signaler « comptes »
+def test_comptes_absents_ou_malformes_refuses_au_demarrage():
+    """La collection `comptes` est la seule source des comptes : aucun compte,
+    ou un compte sans hash, refuse le démarrage au lieu de planter login()."""
+    for mauvais in ({}, {"rh": {}}, {"rh": {"mdp_hash": ""}}):
+        ecrire(comptes=mauvais)
         assert "comptes" in config.verifier(), f"{mauvais!r} passe le garde-fou"
+    ecrire(comptes={"rh": {"mdp_hash": generate_password_hash(config.MDP_PAR_DEFAUT)}})
+    assert "compte RH" in config.verifier(), "mot de passe par défaut accepté"
+
+
+def test_id_de_champ_avec_point_ou_dollar_refuse():
+    """store écrit `champs.<id>` : un « . » créerait un sous-document, un « $ »
+    en tête serait lu comme un opérateur."""
+    for mauvais in ("a.b", "$set"):
+        form = {**FORMULAIRE, "champs": FORMULAIRE["champs"]
+                + [{"id": mauvais, "libelle": "X", "type": "texte"}]}
+        ecrire(formulaire=form)
+        assert "champs" in config.verifier(), f"id {mauvais!r} accepté"
 
 
 def test_jeton_mal_ecrit_refuse_au_demarrage():

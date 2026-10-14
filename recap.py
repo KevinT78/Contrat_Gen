@@ -13,11 +13,10 @@ cabinet sans dossier.
 
 Remise lue dans le journal (« vers == RemisComptable », ou un
 « renvoi_comptable ») ; dernier envoi réussi et dernier échec par cabinet dans
-DONNEES/recap.json (écrit ici seulement, lu par l'écran Salariés). Un envoi
+la collection `recap` (écrite ici seulement, lu par l'écran Salariés). Un envoi
 raté ne fait rien avancer : les dossiers repartent au prochain passage.
 """
 import html
-import json
 import sys
 from datetime import datetime, timedelta, timezone
 
@@ -94,23 +93,14 @@ def lire_etat():
     """{cabinet: {"depuis": iso, "echec": {"le", "motif", "nombre"}?}} -- ecrit
     par recap.py SEUL, lu par l'app (bandeau Salaries). Jamais dans un dossier :
     l'etat d'envoi est celui du cabinet, pas d'un salarie."""
-    f = config.RECAP_ETAT
-    try:
-        return json.loads(f.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        return {}
-    except ValueError as e:
-        # Repartir d'un etat vide ramenerait chaque cabinet a la fenetre de
-        # --jours : les dossiers en attente plus anciens ne partiraient jamais.
-        sys.exit(f"{f} illisible ({e}) : réparez-le, ou supprimez-le en acceptant "
-                 "que le prochain envoi reparte de la fenêtre --jours.")
+    return {d.pop("_id"): d for d in store.db().recap.find()}
 
 
 def _ecrire_etat(etat):
-    f = config.RECAP_ETAT
-    tmp = f.with_suffix(".tmp")
-    tmp.write_text(json.dumps(etat, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.replace(f)
+    col = store.db().recap
+    col.delete_many({"_id": {"$nin": list(etat)}})
+    for cab, e in etat.items():
+        col.replace_one({"_id": cab}, e, upsert=True)
 
 
 def main(jours):

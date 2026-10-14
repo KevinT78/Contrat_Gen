@@ -22,6 +22,7 @@ sur un config/ déjà présent — une réinstallation par-dessus une instance q
 tourne effacerait ses secrets et ses comptes.
 """
 import json
+import os
 import secrets
 import shutil
 import sys
@@ -55,17 +56,30 @@ def main(nom, cible, drive=None):
             sys.exit(f"{drive} n'est pas vide — donnez un dossier neuf : "
                      f"deux instances sur le même dossier perdraient des données.")
 
+    # Le compte d'abord : sans base joignable (MONGO_URI/MONGO_DB), rien n'est
+    # cree et l'installateur dit quoi poser, au lieu d'une instance sans compte.
+    import store              # apres les refus ci-dessus : importe config
+    mdp = secrets.token_urlsafe(9)
+    try:
+        # Une base = une instance : un compte rh deja la, c'est la base d'un autre
+        # client (MONGO_DB oublie dans le shell), dont on ecraserait le mot de passe.
+        if store.db().comptes.find_one({"_id": "rh"}):
+            sys.exit(f"la base « {os.environ['MONGO_DB']} » a déjà un compte rh : elle "
+                     "sert une autre instance. Donnez une base neuve (MONGO_DB).")
+        store.db().comptes.insert_one(
+            {"_id": "rh", "mdp_hash": generate_password_hash(mdp)})
+    except RuntimeError as e:
+        sys.exit(str(e))
+
     shutil.copytree(SQUELETTE, config)
     if not drive:
         (cible / "data").mkdir(parents=True, exist_ok=True)
 
-    mdp = secrets.token_urlsafe(9)
     conf = json.loads((config / "instance.json").read_text(encoding="utf-8"))
     conf["client"] = nom
     conf["stockage"] = ({"mode": "dossier", "chemin": str(drive)} if drive
                         else {"mode": "local"})
     conf["secret"] = secrets.token_hex(32)
-    conf["utilisateurs"] = {"rh": {"mdp_hash": generate_password_hash(mdp)}}
     (config / "instance.json").write_text(
         json.dumps(conf, ensure_ascii=False, indent=2), encoding="utf-8")
 

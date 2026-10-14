@@ -28,7 +28,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from _outils import base_mongo  # noqa: E402
 base_mongo("doctor")
 
-from werkzeug.security import generate_password_hash          # noqa: E402
 import config                                                 # noqa: E402
 import contrat                                                # noqa: E402
 import doctor                                                 # noqa: E402
@@ -45,7 +44,6 @@ INSTANCE = {
     "mails": {"mode": "console", "hote": "", "port": 587, "utilisateur": "",
               "mot_de_passe": "", "expediteur": "rh@acme.example", "rh": ["rh@acme.example"],
               "dpae": None, "recap": None, "comptable_defaut": "c@acme.example"},
-    "utilisateurs": {"rh": {"mdp_hash": generate_password_hash("pas-demo")}},
     "motifs_ko": ["Autre"],
     "templates": {"Manager": "contrat.txt"},
 }

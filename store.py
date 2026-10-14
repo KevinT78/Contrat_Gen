@@ -21,6 +21,7 @@ base en memoire propre au process (tests).
 """
 import hashlib
 import hmac
+import json
 import os
 import random
 import re
@@ -28,6 +29,7 @@ import threading
 import time
 from collections import Counter
 from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 
 from pymongo import MongoClient, ReturnDocument
 from pymongo.errors import DuplicateKeyError
@@ -91,6 +93,14 @@ def db():
             else:
                 client = MongoClient(uri)
             base = client[nom]
+            if uri.startswith("mongomock://") and os.environ.get("MONGOMOCK_AMORCE"):
+                # Une base mongomock est propre a son process : un sous-process
+                # (serveur de dev, test) y retrouve ses comptes par ce fichier
+                # JSON {collection: [docs]}. Branche mongomock seulement : en
+                # prod, mongomock n'est pas installe et cette variable ne sert a rien.
+                for col, docs in json.loads(Path(os.environ["MONGOMOCK_AMORCE"])
+                                            .read_text(encoding="utf-8")).items():
+                    base[col].insert_many(docs)
             base.dossiers.create_index("import_cle", unique=True, sparse=True)
             base.fichiers.create_index([("uid", 1), ("bucket", 1)])
             _db = base
@@ -557,7 +567,7 @@ def valider(uid, par):
     def construire(it):
         if it["zone"] != "soumissions":
             raise ValueError("deja un dossier salarie")
-        return ({"de": "Soumise", "vers": "ATraiter", "le": maintenant(), "par": par},
+        return ({"de": etat(it), "vers": "ATraiter", "le": maintenant(), "par": par},
                 {"zone": "documents", "lien_comptable_epoch": 0}, None)
     _journaliser(uid, construire)
 
@@ -592,11 +602,15 @@ def completer_champs(uid, nouveaux):
     generation du contrat) dans item['champs']. Idempotent, ne journalise pas ;
     dernier ecrivain gagne, champ par champ."""
     item = lire(uid)
+    if item is None:
+        raise ValueError("dossier inconnu")
     pose = {f"champs.{k}": v for k, v in nouveaux.items() if v != ""}
     if not pose:
         return item
     doc = db().dossiers.find_one_and_update({"_id": uid}, {"$set": pose},
                                             return_document=ReturnDocument.AFTER)
+    if doc is None:
+        raise ValueError("dossier inconnu")
     return _vue(doc, item["_fichiers"])
 
 
@@ -637,6 +651,8 @@ def noter(uid, **entree):
 def bump_epoch(uid, cle):
     doc = db().dossiers.find_one_and_update({"_id": uid}, {"$inc": {cle: 1}},
                                             return_document=ReturnDocument.AFTER)
+    if doc is None:
+        raise ValueError("dossier inconnu")
     return doc[cle]
 
 

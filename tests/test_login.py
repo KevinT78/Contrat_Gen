@@ -26,6 +26,8 @@ os.environ["PROXIES"] = "1"        # ce fichier teste la config « derriere Cadd
 import config          # noqa: E402
 import app as module   # noqa: E402
 from app import app    # noqa: E402
+from _outils import compte  # noqa: E402
+compte("rh", "fixture")
 
 app.config["PROPAGATE_EXCEPTIONS"] = True
 for zone in ("soumissions",):

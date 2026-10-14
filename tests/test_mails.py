@@ -4,7 +4,7 @@
 
 Aucun reseau reel : smtplib.SMTP est remplace par un faux qui enregistre ses
 appels, et le dernier bloc remplace mails.envoyer lui-meme.
-  - mode console : rien ne part, un .eml est ecrit.
+  - mode console : rien ne part, un .eml est range en base.
   - MAILS_MODE surclasse le mode du fichier.
   - SMTP sans `utilisateur` (catcher local type MailHog) : pas de STARTTLS ni login.
   - SMTP avec `utilisateur` : STARTTLS verifie + login, non negociable.
@@ -24,6 +24,8 @@ base_mongo("mails")
 os.environ["DONNEES"] = tempfile.mkdtemp(prefix="contratgen-mails-")
 
 import config          # noqa: E402
+from _outils import compte  # noqa: E402
+compte("rh", "fixture")
 import mails           # noqa: E402
 
 MAILS = config.instance()["mails"]
@@ -65,18 +67,19 @@ def envoyer():
 
 
 def nb_eml():
-    return len(list((config.DONNEES / "mails").glob("*.eml")))
+    import store
+    return store.db().mails.count_documents({})
 
 
-# --- mode console : rien ne part, un .eml est ecrit --------------------------
+# --- mode console : rien ne part, un .eml est range en base --------------------------
 os.environ.pop("MAILS_MODE", None)
 MAILS["mode"] = "console"
 avant = nb_eml()
 ok, raison = envoyer()
 assert ok and raison is None, (ok, raison)
-assert nb_eml() == avant + 1, "le .eml n'a pas ete ecrit"
+assert nb_eml() == avant + 1, "le .eml n'a pas ete range"
 assert FauxSMTP.dernier is None, "SMTP appele alors qu'on est en console"
-print("OK  mode console : .eml ecrit, aucun SMTP")
+print("OK  mode console : .eml range en base, aucun SMTP")
 
 # --- MAILS_MODE=smtp surclasse le fichier reste sur console -----------------
 os.environ["MAILS_MODE"] = "smtp"
@@ -280,7 +283,7 @@ def _recap(jours, marche, dossiers=None):
     return code, envoyes
 
 
-config.RECAP_ETAT.unlink(missing_ok=True)
+store.db().recap.delete_many({})
 _code, _env = _recap(7, marche=False)
 assert _code == 1 and len(_env) == 1
 _s = _html.unescape(_c.get("/salaries").get_data(as_text=True))
@@ -296,18 +299,12 @@ assert _code == 0 and _env == [], "dossier deja annonce renvoye une seconde fois
 
 # Echec, puis le dossier en attente quitte RemisComptable (archive) : plus rien
 # n'est en attente, le bandeau ne doit pas rester pour toujours.
-config.RECAP_ETAT.unlink()
+store.db().recap.delete_many({})
 _recap(7, marche=False)
 _code, _env = _recap(7, marche=True, dossiers=[])
 assert _code == 0 and _env == []
 assert "n'est pas parti" not in _html.unescape(_c.get("/salaries").get_data(as_text=True)), \
     "bandeau d'echec reste alors que plus rien n'est en attente"
-
-# recap.json illisible : arret clair, pas un depart silencieux de zero.
-config.RECAP_ETAT.write_text("{tronqué", encoding="utf-8")
-_code, _env = _recap(7, marche=True)
-assert isinstance(_code, str) and "illisible" in _code and _env == [], _code
-config.RECAP_ETAT.unlink()
 
 # Le cabinet ouvre le lot (noter -> acces_lot, de == vers == RemisComptable) :
 # ce n'est pas une remise. Avant, le dossier repartait au recap suivant et la

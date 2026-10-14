@@ -31,7 +31,9 @@ os.environ["DONNEES"] = TEMP
 import config          # noqa: E402
 import store           # noqa: E402
 from app import app    # noqa: E402
-from _outils import corps_texte  # noqa: E402
+from _outils import compte  # noqa: E402
+compte("rh", "fixture")
+from _outils import corps_texte, mails  # noqa: E402
 
 (config.DONNEES / "soumissions").mkdir(parents=True, exist_ok=True)
 
@@ -66,9 +68,9 @@ def soumettre(c, s):
 
 
 def dernier_mail(nom):
-    fichiers = sorted((config.DONNEES / "mails").glob(f"*-{nom}.eml"))
-    assert fichiers, f"aucun mail « {nom} »"
-    msg = email.message_from_bytes(fichiers[-1].read_bytes())
+    envoyes = mails(nom)
+    assert envoyes, f"aucun mail « {nom} »"
+    msg = envoyes[-1]
     return corps_texte(msg)
 
 
@@ -194,9 +196,9 @@ def main():
             assert not any(b in blob for blob in blobs), f"« {aiguille} » dans un fichier"
         # carve-out assumé : les .eml, eux, portent encore le nom (purge par
         # ancienneté, pas par dossier — cf. purger.py et docs/ADR-stockage.md)
-        eml = b"".join(f.read_bytes() for f in (config.DONNEES / "mails").glob("*.eml"))
+        eml = b"".join(d["eml"] for d in store.db().mails.find())
         assert NOM.encode("utf-8") in eml, \
-            "le carve-out data/mails/ n'est plus vrai — revoir le test et la doc"
+            "le carve-out collection mails n'est plus vrai — revoir le test et la doc"
 
         # 2. pièces effacées (_versions comprises), marqueur, champs réduits, journal nettoyé
         item = store.lire(remis)

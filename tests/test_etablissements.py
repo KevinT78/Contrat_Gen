@@ -19,17 +19,12 @@ os.environ["CONFIG_DIR"] = str(CONF)
 os.environ["DONNEES"] = str(BASE / "data")
 
 RACINE = Path(__file__).resolve().parent.parent
-# pbkdf2, pas scrypt : le Python du venv (3.9 / LibreSSL) n'a pas hashlib.scrypt.
-# Mot de passe : fixture.
-HASH = ("pbkdf2:sha256:1000000$fzF3PX6YMJA6xP2K$"
-        "183c1168a388f21a0926e7b7fd33e66e2e0d55a08c3de92d199c28a867fec4e1")
 (CONF / "instance.json").write_text(json.dumps({
     "config_version": 1, "client": "ACME", "secret": "a" * 64, "url": "http://localhost",
     "signature": {"mode": "manuel"},
     "mails": {"mode": "console", "hote": "", "port": 587, "utilisateur": "",
               "mot_de_passe": "", "expediteur": "rh@acme.example", "rh": ["rh@acme.example"],
               "comptable_defaut": "c@acme.example"},
-    "utilisateurs": {"rh": {"mdp_hash": HASH}},
     "motifs_ko": ["Autre"], "templates": {},
 }), encoding="utf-8")
 (CONF / "formulaire.json").write_text(
@@ -51,6 +46,8 @@ from _outils import base_mongo  # noqa: E402
 base_mongo("etablissements")
 import config  # noqa: E402
 from app import app  # noqa: E402
+from _outils import compte  # noqa: E402
+compte("rh", "fixture")
 
 app.config["PROPAGATE_EXCEPTIONS"] = True
 c = app.test_client()

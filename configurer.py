@@ -25,6 +25,7 @@ import sys
 from werkzeug.security import generate_password_hash
 
 import config
+import store
 
 sys.stdout.reconfigure(encoding="utf-8")
 sys.stderr.reconfigure(encoding="utf-8")
@@ -35,8 +36,10 @@ if not sys.stdin.isatty():          # réponses par pipe : UTF-8, pas cp1252
 # Chemins depuis la racine de l'INSTANCE, prefixe compris : presque tout vit
 # sous config/, mais pas le modele generique de fiche salarie, verse avec le
 # code. Mettre « config/ » dans le format d'affichage le lui collait aussi.
-FICHIERS = {"secret": "config/instance.json", "compte RH": "config/instance.json",
-            "comptes": "config/instance.json", "mails": "config/instance.json",
+FICHIERS = {"secret": "config/instance.json",
+            "compte RH": "en base : python configurer.py compte <identifiant>",
+            "comptes": "en base : python configurer.py compte <identifiant>",
+            "champs": "config/formulaire.json", "mails": "config/instance.json",
             "config_version": "config/instance.json", "derives →": "config/instance.json",
             "templates →": "config/instance.json",
             "poste «": "config/instance.json", "url": "config/instance.json",
@@ -140,10 +143,6 @@ def avertissements():
     if url and not url.startswith("https://"):
         out.append(f"url « {url} » n'est pas en https : les liens des mails "
                    "partiraient en clair  [config/instance.json]")
-    if config.sharepoint() and config.stockage().get("mode") == "dossier":
-        out.append("sharepoint + stockage « dossier » : le jeton Microsoft de la RH "
-                   "(DONNEES/sharepoint-jeton.json) part dans le dossier synchronisé. "
-                   "Se déconnecter après chaque import  [config/instance.json]")
     if config.sharepoint() and importlib.util.find_spec("msal") is None:
         out.append("sharepoint déclaré mais le module msal manque : la connexion "
                    "Microsoft échouera. pip install -r requirements-sharepoint.txt")
@@ -181,9 +180,13 @@ def compte(ident):
     mdp = _mot_de_passe(f"Mot de passe de « {ident} »")
     if not mdp:
         return 1
-    _ecrire("instance.json", lambda d: {**d, "utilisateurs": {
-        **d.get("utilisateurs", {}), ident: {"mdp_hash": generate_password_hash(mdp)}}})
-    print(f"Compte « {ident} » écrit dans config/instance.json.")
+    try:
+        store.db().comptes.replace_one(
+            {"_id": ident}, {"mdp_hash": generate_password_hash(mdp)}, upsert=True)
+    except RuntimeError as e:     # pas de base : le dire, pas une trace
+        print(f"ÉCHEC — {e}")
+        return 1
+    print(f"Compte « {ident} » écrit en base.")
     return 0
 
 

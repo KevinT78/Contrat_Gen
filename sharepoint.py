@@ -3,7 +3,7 @@ les dossiers d'un SharePoint (Microsoft Graph), un établissement à la fois.
 
 Connexion : compte Microsoft de la RH, code à saisir sur le site de Microsoft
 (device flow MSAL, client public Office : ni app Azure ni consentement admin).
-Jeton en cache dans DONNEES/sharepoint-jeton.json, effacé par deconnecter().
+Jeton en cache dans la collection `etat` (doc `sharepoint-jeton`), effacé par deconnecter().
 
 Actif seulement si instance.json porte un bloc `sharepoint` ; tout le vocabulaire
 du client y vit (aucun nom propre à un client ici) :
@@ -302,8 +302,13 @@ _conn_lock = threading.Lock()
 _conn_code_pret = threading.Event()
 
 
-def _cache_fichier():
-    return config.DONNEES / "sharepoint-jeton.json"
+def _etat():
+    return store.db().etat
+
+
+def _cache_lu():
+    d = _etat().find_one({"_id": "sharepoint-jeton"})
+    return d["cache"] if d else None
 
 
 def _app():
@@ -317,10 +322,10 @@ def _app():
         conf = config.sharepoint()
         cache = msal.SerializableTokenCache()
         try:
-            if _cache_fichier().exists():
-                cache.deserialize(_cache_fichier().read_text(encoding="utf-8"))
+            if (texte := _cache_lu()) is not None:
+                cache.deserialize(texte)
         except ValueError:                  # jeton corrompu : reconnexion
-            _cache_fichier().unlink(missing_ok=True)
+            _etat().delete_one({"_id": "sharepoint-jeton"})
         # organizations : le tenant du compte, quel que soit le domaine du site
         _msal = (msal.PublicClientApplication(
             conf.get("client_id") or CLIENT_OFFICE,
@@ -330,12 +335,13 @@ def _app():
 
 def _sauver(cache):
     if cache.has_state_changed:
-        _cache_fichier().write_text(cache.serialize(), encoding="utf-8")
+        _etat().replace_one({"_id": "sharepoint-jeton"}, {"cache": cache.serialize()},
+                            upsert=True)
         cache.has_state_changed = False
 
 
 def jeton():
-    if not _cache_fichier().exists():
+    if _cache_lu() is None:
         raise NonConnecte("Connectez-vous à SharePoint.")
     app, cache = _app()
     comptes = app.get_accounts()
@@ -348,7 +354,7 @@ def jeton():
 
 def compte():
     """Adresse du compte connecté, ou None. Sans réseau."""
-    if not _cache_fichier().exists():
+    if _cache_lu() is None:
         return None
     comptes = _app()[0].get_accounts()
     return comptes[0]["username"] if comptes else None
@@ -405,7 +411,7 @@ def _flux():
 
 def deconnecter():
     global _msal
-    _cache_fichier().unlink(missing_ok=True)
+    _etat().delete_one({"_id": "sharepoint-jeton"})
     _msal = None
     with _conn_lock:
         _conn.clear()

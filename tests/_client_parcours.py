@@ -25,7 +25,8 @@ import config          # noqa: E402
 import doctor          # noqa: E402
 import store           # noqa: E402
 from app import app    # noqa: E402
-from _outils import corps_texte  # noqa: E402
+from _outils import compte, corps_texte, mails  # noqa: E402
+compte("rh", SPEC["password"])
 
 for zone in ("soumissions",):
     (config.DONNEES / zone).mkdir(parents=True, exist_ok=True)
@@ -152,9 +153,9 @@ def couloir(c, etab, mode, poste, attendus):
 def dernier_mail(nom):
     """Corps (To + texte) du dernier .eml « <horodatage>-<serie>-<nom>.eml »
     ecrit par mails.py en mode console -- meme lecture que test_parcours.py."""
-    fichiers = sorted((config.DONNEES / "mails").glob(f"*-{nom}.eml"))
-    assert fichiers, f"aucun mail « {nom} » envoyé"
-    msg = email.message_from_bytes(fichiers[-1].read_bytes())
+    envoyes = mails(nom)
+    assert envoyes, f"aucun mail « {nom} » envoyé"
+    msg = envoyes[-1]
     return msg["To"] + "\n" + corps_texte(msg)
 
 
@@ -208,11 +209,9 @@ def verifier_recap(uids_attendus, nom_attendu):
         recap.main(7)
     except SystemExit as e:
         assert e.code == 0, "le mail recap_hebdo n'est pas parti"
-    fichiers = sorted((config.DONNEES / "mails").glob("*-recap_hebdo.eml"))
-    assert fichiers, "aucun mail recap_hebdo envoyé"
-    corps = "\n".join(
-        corps_texte(email.message_from_bytes(f.read_bytes()))
-        for f in fichiers)
+    envoyes = mails("recap_hebdo")
+    assert envoyes, "aucun mail recap_hebdo envoyé"
+    corps = "\n".join(corps_texte(m) for m in envoyes)
     assert nom_attendu.upper() in corps, f"« {nom_attendu} » absent du récap :\n{corps}"
 
 

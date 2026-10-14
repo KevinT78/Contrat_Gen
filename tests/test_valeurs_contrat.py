@@ -116,7 +116,6 @@ INSTANCE = {
     "url": "https://embauche.mistral.test",
     "mails": {"mode": "console", "expediteur": "rh@mistral.test",
               "rh": ["rh@mistral.test"], "comptable_defaut": "cabinet-a@example.test"},
-    "utilisateurs": {"rh": {"mdp_hash": "pbkdf2:sha256:1000$x$" + "0" * 64}},
     "motifs_ko": ["Pièce illisible"],
     # Ordre significatif : la premiere regle dont TOUS les « quand » collent gagne.
     # Les cles de « quand » sont des ID DE CHAMPS du formulaire du client (ici
@@ -180,6 +179,8 @@ os.environ["DONNEES"] = str(TMP / "data")
 
 import config    # noqa: E402
 import contrat   # noqa: E402
+from _outils import compte  # noqa: E402
+compte("rh", "fixture")
 
 
 def saisie(**over):

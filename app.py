@@ -1085,14 +1085,11 @@ def _etablissement_form(creation):
 
 def _echecs_recap():
     """{cabinet: echec} des derniers mails hebdo rates. LU seulement :
-    config.RECAP_ETAT est ecrit par recap.py, qui tourne en tache planifiee
-    dans un autre process -- sans ce bandeau, un recap rate ne se voyait que
-    dans une sortie que personne ne lit."""
-    try:
-        etat = json.loads(config.RECAP_ETAT.read_text(encoding="utf-8"))
-    except (FileNotFoundError, ValueError):
-        return {}
-    return {cab: e["echec"] for cab, e in etat.items() if "echec" in e}
+    la collection `recap` est ecrite par recap.py, qui tourne en tache
+    planifiee dans un autre process -- sans ce bandeau, un recap rate ne se
+    voyait que dans une sortie que personne ne lit."""
+    return {d["_id"]: d["echec"]
+            for d in store.db().recap.find({"echec": {"$exists": True}})}
 
 
 @app.get("/dossier/<uid>")

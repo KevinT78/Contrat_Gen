@@ -30,7 +30,8 @@ os.environ["DONNEES"] = TEMP
 import config          # noqa: E402
 import store           # noqa: E402
 from app import app    # noqa: E402
-from _outils import corps_texte  # noqa: E402
+from _outils import compte, corps_texte, mails  # noqa: E402
+compte("rh", "fixture")
 
 for zone in ("soumissions",):
     (config.DONNEES / zone).mkdir(parents=True, exist_ok=True)
@@ -56,9 +57,9 @@ def base_saisie(etab, poste="Manager"):
 
 
 def dernier_mail(nom):
-    fichiers = sorted((config.DONNEES / "mails").glob(f"*-{nom}.eml"))
-    assert fichiers, f"aucun mail « {nom} » envoye"
-    msg = email.message_from_bytes(fichiers[-1].read_bytes())
+    envoyes = mails(nom)
+    assert envoyes, f"aucun mail « {nom} » envoye"
+    msg = envoyes[-1]
     return msg["To"] + "\n" + corps_texte(msg)
 
 
@@ -165,7 +166,7 @@ def couloir_dark_kitchen(c):
     c.post(f"/dossier/{uid}/remettre")
     item = store.lire(uid)
     assert store.etat(item) == "RemisComptable"
-    assert not list((config.DONNEES / "mails").glob("*-avis_comptable.eml")), \
+    assert not mails("avis_comptable"), \
         "un mail par dossier est encore parti à la remise"
     attendu = sorted(f"{store.BUCKETS[b]}/{store.nom_export(item, b, n)}"
                      for b in ("pieces", "contrat") for n in store.fichiers(item, b))
@@ -351,6 +352,50 @@ def cas_double_dpae():
     assert leve and "transition interdite" in str(leve), leve
 
 
+def cas_course_champs():
+    """Deux completer() au même état : le second a lu AVANT le premier. Le $set
+    champ par champ ne perd aucun des deux (un $set du dict entier perdait `a`)."""
+    uid = store.importer({"a": "", "b": ""}, "course-champs", {"par": "test"}, [])
+    perime = store.lire(uid)
+    store.completer(uid, {"a": "1"}, "test", "x")
+    vrai, servi = store.lire, []
+
+    def lire_perime(u):
+        if not servi:
+            servi.append(u)
+            return copy.deepcopy(perime)
+        return vrai(u)
+
+    store.lire = lire_perime
+    try:
+        store.completer(uid, {"b": "2"}, "test", "x")
+    finally:
+        store.lire = vrai
+    ch = store.lire(uid)["champs"]
+    assert servi, "l'item périmé n'a pas été servi : le test ne prouve rien"
+    assert ch["a"] == "1" and ch["b"] == "2", ch
+
+
+def cas_dossier_inconnu_et_valider_apres_rejet():
+    """Uid inconnu : ValueError comme _journaliser, pas un TypeError sur None.
+    Valider une soumission rejetée : le journal dit d'où elle part vraiment."""
+    for appel in (lambda: store.bump_epoch("inconnu", "lien_comptable_epoch"),
+                  lambda: store.completer_champs("inconnu", {"a": "1"})):
+        try:
+            appel()
+            raise AssertionError("uid inconnu accepté")
+        except ValueError as e:
+            assert "dossier inconnu" in str(e), e
+    champs = {config.role("nom_naissance"): "Durand", config.role("prenom"): "Léa",
+              config.role("etablissement"): "ACME Restauration / Lille Grand Place",
+              config.role("poste"): "Manager"}
+    uid = store.creer_soumission(champs, {})
+    store.rejeter(uid, "Autre", "", "test")
+    store.valider(uid, "test")
+    dernier = store.lire(uid)["journal"][-1]
+    assert (dernier["de"], dernier["vers"]) == ("Rejetee", "ATraiter"), dernier
+
+
 def fiche_generique_sans_cle(c):
     """Sans "fiche_salarie" dans instance.json, la fiche générique (modèle
     versé au dépôt, hors config/) est quand même produite."""
@@ -465,11 +510,10 @@ def recap_liste_la_semaine(uids):
         recap.main(7)
     except SystemExit as e:
         assert e.code == 0, "un mail hebdo n'est pas parti"
-    fichiers = sorted((config.DONNEES / "mails").glob("*-recap_hebdo.eml"))
-    assert len(fichiers) == 2, f"{len(fichiers)} mails hebdo pour 2 cabinets"
+    envoyes = mails("recap_hebdo")
+    assert len(envoyes) == 2, f"{len(envoyes)} mails hebdo pour 2 cabinets"
     par_cabinet = {}
-    for f in fichiers:
-        msg = email.message_from_bytes(f.read_bytes())
+    for msg in envoyes:
         assert msg["Cc"] == "rh@example.com", msg["Cc"]
         par_cabinet[msg["To"]] = corps_texte(msg)
     nord, sud = par_cabinet["cabinet-nord@example.com"], par_cabinet["cabinet-sud@example.com"]
@@ -499,6 +543,8 @@ def main():
     recap_liste_la_semaine([dk, resto])
     depart_leaver(c, dk)               # apres recap : Parti sort de remis_depuis()
     cas_double_dpae()
+    cas_course_champs()
+    cas_dossier_inconnu_et_valider_apres_rejet()
 
     # lien forgé
     anonyme = app.test_client()

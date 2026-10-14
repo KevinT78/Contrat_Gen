@@ -22,6 +22,8 @@ os.environ["DONNEES"] = tempfile.mkdtemp(prefix="contratgen-ecrans-")
 import config          # noqa: E402
 import store           # noqa: E402
 from app import app, _horodatage    # noqa: E402
+from _outils import compte  # noqa: E402
+compte("rh", "fixture")
 
 app.config["PROPAGATE_EXCEPTIONS"] = True
 for zone in ("soumissions",):

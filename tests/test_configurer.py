@@ -24,7 +24,9 @@ sys.path.insert(0, str(RACINE))
 from _outils import base_mongo  # noqa: E402
 base_mongo("configurer")
 
-from werkzeug.security import generate_password_hash, check_password_hash  # noqa: E402
+from werkzeug.security import check_password_hash  # noqa: E402
+from _outils import compte  # noqa: E402
+compte("rh", "pas-demo")      # le compte vit en base : lu par l'enfant via l'amorce
 
 INSTANCE = {
     "config_version": 1, "client": "ACME", "secret": "a" * 64, "url": "http://localhost",
@@ -33,7 +35,6 @@ INSTANCE = {
               "mot_de_passe": "", "expediteur": "rh@acme.example",
               "rh": ["rh@acme.example"], "dpae": None, "recap": None,
               "comptable_defaut": "c@acme.example"},
-    "utilisateurs": {"rh": {"mdp_hash": generate_password_hash("pas-demo")}},
     "motifs_ko": ["Autre"], "templates": {"Manager": "contrat.txt"},
 }
 FORMULAIRE = {"roles": {"nom": "nom"}, "champs": [
@@ -59,9 +60,10 @@ def ecrire(instance=None, societes=None):
     (CONF / "PLACEHOLDERS.md").unlink(missing_ok=True)
 
 
-def lancer(*args, entree=""):
+def lancer(*args, entree="", sans=()):
     # MAILS_MODE aussi : le .bat MailHog le pose, il surclasserait le mode des fixtures
-    env = {k: v for k, v in os.environ.items() if k not in ("PYTHONIOENCODING", "MAILS_MODE")}
+    env = {k: v for k, v in os.environ.items()
+           if k not in ("PYTHONIOENCODING", "MAILS_MODE", *sans)}
     env.update(CONFIG_DIR=str(CONF), DONNEES=str(BASE / "data"))
     p = subprocess.run([sys.executable, str(RACINE / "configurer.py"), *args],
                        input=entree.encode("utf-8"), capture_output=True, env=env)
@@ -131,12 +133,37 @@ def test_assistant_renseigne_les_mails():
 def test_compte_ajoute_un_utilisateur():
     ecrire()
     code, sortie = lancer("compte", "marc", entree="s3cret\nautre\n")
-    assert code == 1 and "marc" not in instance()["utilisateurs"], sortie
-    code, sortie = lancer("compte", "marc", entree="s3cret\ns3cret\n")
-    assert code == 0, sortie
-    users = instance()["utilisateurs"]
-    assert check_password_hash(users["marc"]["mdp_hash"], "s3cret")
-    assert users["rh"] == INSTANCE["utilisateurs"]["rh"], "compte rh écrasé"
+    assert code == 1 and "diffèrent" in sortie, sortie
+    # En process : la base mongomock d'un enfant n'est pas visible d'ici.
+    import configurer
+    import store
+    configurer._mot_de_passe = lambda question: "s3cret"
+    assert configurer.compte("marc") == 0
+    comptes = store.db().comptes
+    assert check_password_hash(comptes.find_one({"_id": "marc"})["mdp_hash"], "s3cret")
+    assert comptes.find_one({"_id": "rh"}), "compte rh écrasé"
+
+
+def test_bilan_sans_base_est_un_manque_pas_une_trace():
+    """Sans MONGO_*, les comptes sont illisibles : le bilan le dit (lancer()
+    refuse toute Traceback) au lieu de planter avant d'avoir rien affiché."""
+    ecrire()
+    code, sortie = lancer(sans=("MONGO_URI", "MONGO_DB"))
+    assert code == 1 and "base mongo non configurée" in sortie, sortie
+    assert "configurer.py compte" in sortie, sortie
+    code, sortie = lancer("compte", "rh", entree="s3cret\ns3cret\n",
+                          sans=("MONGO_URI", "MONGO_DB"))
+    assert code == 1 and "ÉCHEC" in sortie, sortie
+
+
+def test_bilan_refuse_un_id_de_champ_avec_point():
+    """store ecrit `champs.<id>` : « a.b » y creerait un sous-document."""
+    ecrire()
+    f = json.loads(json.dumps(FORMULAIRE))
+    f["champs"].append({"id": "a.b", "libelle": "X", "type": "texte"})
+    (CONF / "formulaire.json").write_text(json.dumps(f), encoding="utf-8")
+    code, sortie = lancer()
+    assert code == 1 and "« a.b »" in sortie and "[config/formulaire.json]" in sortie, sortie
 
 
 def test_bilan_refuse_un_chemin_de_drive_absent():
@@ -273,7 +300,7 @@ def test_mail_envoie_en_smtp_meme_en_mode_console():
     code, sortie = lancer("mail", "vous@acme.example")
     assert code == 0, sortie
     assert len(recus) == 1 and "vous@acme.example" in recus[0], (recus, sortie)
-    assert not list((BASE / "data" / "mails").glob("*.eml")), "ecrit en console au lieu d'envoyer"
+    assert "[MAIL" not in sortie, "ecrit en console au lieu d'envoyer"
 
     with socket.socket() as s:                        # port ferme -> echec lisible
         s.bind(("127.0.0.1", 0))

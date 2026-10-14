@@ -22,6 +22,8 @@ os.environ.pop("PROXIES", None)
 import config          # noqa: E402
 import app as module   # noqa: E402
 from app import app    # noqa: E402
+from _outils import compte  # noqa: E402
+compte("rh", "fixture")
 
 for zone in ("soumissions",):
     (config.DONNEES / zone).mkdir(parents=True, exist_ok=True)

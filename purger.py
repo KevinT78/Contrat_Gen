@@ -37,7 +37,7 @@ def main():
               "corbeille NI l'historique de versions du service de synchronisation. "
               "La version complète de dossier.json (NIR, adresse compris) y reste "
               "récupérable — à vider à la main côté service. Voir docs/ADR-stockage.md.")
-    print("\ndata/mails/*.eml : purgés par ancienneté, pas par dossier (aucun uid "
+    print("\ncollection mails (.eml) : purgés par ancienneté, pas par dossier (aucun uid "
           "dans le nom — artefact du mode console). En mode smtp, ces données sont "
           "dans les boîtes des destinataires, hors de portée.")
 

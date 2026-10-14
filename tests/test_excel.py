@@ -24,6 +24,8 @@ base_mongo("excel")
 os.environ["DONNEES"] = tempfile.mkdtemp(prefix="contratgen-excel-")
 
 import config   # noqa: E402
+from _outils import compte  # noqa: E402
+compte("rh", "fixture")
 
 SP = {"site": "https://acme.sharepoint.com/sites/rh", "racine": "SALARIES",
       "postes": {"Second managers": "Assistant Manager"}}

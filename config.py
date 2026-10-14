@@ -379,8 +379,11 @@ def sauver_etablissement(origine, societe_nom, societe, etablissement):
 
 
 def comptes():
-    """Les comptes de connexion : le bloc `utilisateurs` de instance.json."""
-    return instance().get("utilisateurs", {})
+    """Les comptes de connexion : la collection `comptes`, rendue sous la forme
+    {identifiant: {"mdp_hash": ...}}. Jamais dans config/ : un hash de mot de
+    passe n'est pas du parametrage."""
+    import store          # store importe config : import local, cycle sinon
+    return {d["_id"]: {"mdp_hash": d.get("mdp_hash")} for d in store.db().comptes.find()}
 
 
 def stockage():
@@ -472,8 +475,6 @@ def _donnees():
 # Fige au demarrage : deplacer les donnees d'une instance qui tourne n'est pas
 # un rechargement a chaud, c'est un redemarrage (et un deplacement de fichiers).
 DONNEES = _donnees()
-# Etat du mail hebdo par cabinet : ecrit par recap.py seul, lu par l'ecran Salaries.
-RECAP_ETAT = DONNEES / "recap.json"
 
 
 def recharger():
@@ -957,16 +958,17 @@ def _verifier_installation():
     if SECRET_A_INSTALLER in instance().get("secret", ""):
         manques["secret"] = [f"encore « {SECRET_A_INSTALLER} » — lancez : "
                              f"python installer.py \"<Client>\""]
-    # _verifier_comptes valide deja la FORME ; ici on garde quand meme les
-    # isinstance -- verifier() lance tous les checks, celui-ci tourne meme si
-    # le bloc utilisateurs est malforme, et ne doit pas planter dessus.
-    users = comptes()
-    if isinstance(users, dict) and any(
-            isinstance(u, dict) and isinstance(u.get("mdp_hash"), str)
-            and check_password_hash(u["mdp_hash"], MDP_PAR_DEFAUT)
-            for u in users.values()):
-        manques["compte RH"] = ["mot de passe par défaut — changez le hash dans "
-                                "config/instance.json (bloc utilisateurs)"]
+    # verifier() lance tous les checks : celui-ci tourne meme si un compte est
+    # malforme (_verifier_comptes le dit), et ne doit pas planter dessus.
+    try:
+        users = comptes()
+    except RuntimeError:          # pas de base : _verifier_comptes le dit deja
+        users = {}
+    if any(isinstance(u.get("mdp_hash"), str)
+           and check_password_hash(u["mdp_hash"], MDP_PAR_DEFAUT)
+           for u in users.values()):
+        manques["compte RH"] = ["mot de passe par défaut — changez-le : "
+                                "python configurer.py compte <identifiant>"]
     if not etablissements():
         manques["établissements"] = ["aucun établissement dans config/societes.json"]
     # Sans destinataire RH, chaque soumission part en `mail_echoue` dans le
@@ -990,16 +992,19 @@ def _verifier_installation():
 
 
 def _verifier_comptes():
-    """Forme de comptes() avant ses valeurs -- un bloc `utilisateurs` malforme
-    dans instance.json doit refuser de demarrer proprement, pas planter login()."""
-    d = comptes()
-    if not isinstance(d, dict) or not d:
-        return {"comptes": ["aucun compte de connexion — lancez : "
-                            "python installer.py \"<Client>\""]}
+    """Aucun compte en base = refus au demarrage ; un compte sans hash valide
+    aussi, plutot qu'un login() qui plante. Sans base configuree : un manque,
+    pas une trace -- doctor et configurer doivent rendre leur bilan."""
+    try:
+        d = comptes()
+    except RuntimeError as e:
+        return {"comptes": [str(e)]}
+    if not d:
+        return {"comptes": ["aucun compte de connexion en base — lancez : "
+                            "python configurer.py compte rh"]}
     raisons = [f"« {ident} » : mdp_hash absent ou invalide"
                for ident, u in d.items()
-               if not isinstance(u, dict) or not isinstance(u.get("mdp_hash"), str)
-               or not u["mdp_hash"]]
+               if not isinstance(u.get("mdp_hash"), str) or not u["mdp_hash"]]
     return {"comptes": raisons} if raisons else {}
 
 
@@ -1031,6 +1036,15 @@ def _verifier_derives():
         if raisons:
             manques[f"derives → {ph or '?'}"] = raisons
     return manques
+
+
+def _verifier_ids_champs():
+    """store ecrit `champs.<id>` : un id avec « . » creerait un sous-document, un
+    « $ » en tete serait lu comme un operateur Mongo."""
+    mauvais = [c["id"] for c in champs()
+               if not isinstance(c.get("id"), str) or "." in c["id"] or c["id"].startswith("$")]
+    return {"champs": [f"id « {i} » : ni « . » ni « $ » en tête dans un id de champ"
+                       for i in mauvais]} if mauvais else {}
 
 
 def _verifier_roles():
@@ -1285,7 +1299,7 @@ def verifier():
     for check in (_verifier_version, _verifier_comptes, _verifier_stockage,
                   _verifier_conservation, _verifier_sharepoint, _verifier_theme,
                   _verifier_installation,
-                  _verifier_derives, _verifier_roles, _verifier_placeholders,
+                  _verifier_derives, _verifier_ids_champs, _verifier_roles, _verifier_placeholders,
                   _verifier_regles, _verifier_postes, _verifier_grille):
         manques.update(check())
     return manques
