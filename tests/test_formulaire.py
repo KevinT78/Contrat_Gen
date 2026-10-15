@@ -13,6 +13,7 @@ La génération du contrat à la validation est couverte par test_parcours*.
 import io
 import os
 import sys
+import tempfile
 from pathlib import Path
 
 sys.stdout.reconfigure(encoding="utf-8")
@@ -97,7 +98,48 @@ def test_date_saisie_en_jj_mm_aaaa():
     assert compte_soumissions() == avant
 
 
+def test_piece_lourde_jamais_sur_disque():
+    """Au-dela de 500 Ko werkzeug spoole sur disque : le spool leve ici, et
+    %TEMP% ne doit pas bouger. Sans request_class, le POST casse en 500."""
+    import werkzeug.formparser as fp
+
+    def interdit(*a, **k):
+        raise AssertionError("fichier temporaire ouvert pour une piece deposee")
+
+    def temp():
+        return sorted(os.listdir(tempfile.gettempdir()))
+
+    # Corps multipart a la main : l'encodeur du test client spoole lui-meme
+    # sur disque au-dela de 500 Ko, ce qui fausserait le %TEMP% mesure.
+    pdf = b"%PDF-1.4\n%%EOF"
+    gros = b"%PDF-1.4\n" + b"x" * 1024 * 1024 + b"\n%%EOF"
+    parts = [b'--B\r\nContent-Disposition: form-data; name="%s"\r\n\r\n%s\r\n'
+             % (k.encode(), v.encode()) for k, v in BASE.items()]
+    for champ, nom, octets in [("identite", "recto.pdf", pdf), ("identite", "verso.pdf", pdf),
+                               ("carte_vitale", "cv.pdf", pdf), ("rib", "gros.pdf", gros)]:
+        parts.append(b'--B\r\nContent-Disposition: form-data; name="%s"; filename="%s"\r\n'
+                     b'Content-Type: application/pdf\r\n\r\n%s\r\n'
+                     % (champ.encode(), nom.encode(), octets))
+    corps = b"".join(parts) + b"--B--\r\n"
+    avant, vrai = temp(), fp.SpooledTemporaryFile
+    fp.SpooledTemporaryFile = interdit
+    try:
+        nb = compte_soumissions()
+        r = app.test_client().post(
+            "/", data=corps, headers=FETCH["headers"],
+            content_type="multipart/form-data; boundary=B")
+    finally:
+        fp.SpooledTemporaryFile = vrai
+    assert r.status_code == 200 and r.get_json()["ok"] is True, (r.status_code, r.data[:200])
+    assert compte_soumissions() == nb + 1
+    uid = max(i["id"] for i in store.tout())
+    assert any(len(d["octets"]) > 1024 * 1024
+               for d in store.db().fichiers.find({"uid": uid})), "la piece de 1 Mo n'est pas en base"
+    assert temp() == avant, set(temp()) ^ set(avant)
+
+
 cas("POST fetch en erreur -> 422 {ok:false}, aucune soumission écrite", test_fetch_erreur_ne_cree_rien)
 cas("POST fetch valide -> {ok:true}, soumission + 2 faces de CNI", test_fetch_valide_cree_la_soumission)
+cas("pièce de 1 Mo : aucun fichier temporaire, %TEMP% inchangé", test_piece_lourde_jamais_sur_disque)
 cas("date saisie jj/mm/aaaa -> stockée AAAA-MM-JJ ; 31/02 refusé", test_date_saisie_en_jj_mm_aaaa)
 print("\nFormulaire fetch OK — erreur sans écriture, envoi valide, CNI en deux fichiers, dates jj/mm/aaaa.")

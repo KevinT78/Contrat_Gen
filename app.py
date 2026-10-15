@@ -18,7 +18,7 @@ from datetime import date, datetime, timedelta
 from functools import wraps
 from pathlib import Path
 
-from flask import (Flask, Response, abort, flash, redirect, render_template,
+from flask import (Flask, Request, Response, abort, flash, redirect, render_template,
                    request, send_file, session, url_for)
 from pymongo.errors import PyMongoError
 from werkzeug.middleware.proxy_fix import ProxyFix
@@ -88,12 +88,23 @@ def _pot_rempli():
     """Honeypot : champ invisible que les bots remplissent mais pas les humains."""
     return bool(request.form.get("website"))
 
+
+class _RequeteEnMemoire(Request):
+    """Les pieces deposees portent des CNI et des NIR : werkzeug les spoole
+    sur disque (fichier temporaire) au-dela de 500 Ko, ce que l'installation
+    s'interdit. Chaque fichier va donc en memoire ; le plafond est
+    MAX_CONTENT_LENGTH. waitress a son propre spool : voir WAITRESS."""
+    def _get_file_stream(self, *args, **kwargs):
+        return io.BytesIO()
+
+
 # La marque du client (logo, favicon) vit dans SON instance, pas dans
 # le code partage : c'est Flask lui-meme qui la sert, pas une route maison --
 # mimetypes, en-tetes de cache et protection de chemin sont deja faits, et un
 # dossier absent 404 proprement (verifie). Le /static d'origine ne servait
 # rien : il pointait vers le dossier du code, commun a toutes les instances.
 app = Flask(__name__, static_folder=config.MARQUE, static_url_path="/marque")
+app.request_class = _RequeteEnMemoire
 # X-Forwarded-For n'est digne de confiance QUE s'il est pose par un proxy a
 # nous. Sans proxy devant, c'est un en-tete fourni par le client : le faire
 # tourner contournerait entierement les deux rate-limits ci-dessus (verifie).
@@ -113,6 +124,15 @@ if _PROXIES:
     app.wsgi_app = ProxyFix(app.wsgi_app, x_for=_PROXIES, x_proto=_PROXIES)
 app.secret_key = os.environ.get("SECRET_KEY")   # absent : verifier() refuse de demarrer
 app.config["MAX_CONTENT_LENGTH"] = 40 * 1024 * 1024
+# waitress spoole sur disque tout corps de requete > 512 Ko (inbuf_overflow) et
+# toute reponse en attente > 1 Mo (outbuf_overflow) : les deux tampons passent
+# donc au-dessus du plus gros envoi. Son plafond de corps (1 Go par defaut) est
+# lu AVANT Flask : MAX_CONTENT_LENGTH + 1 Mo, pour que Flask garde son message.
+# simplification volontaire : jusqu'a 64 Mo en RAM par connexion en cours, a
+# revoir si la charge monte (les 4 threads ne bornent pas les connexions).
+_TAMPON = 64 * 1024 * 1024
+WAITRESS = {"threads": 4, "inbuf_overflow": _TAMPON, "outbuf_overflow": _TAMPON,
+            "max_request_body_size": app.config["MAX_CONTENT_LENGTH"] + 2**20}
 app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
     # SameSite=Lax n'est PAS cosmetique : c'est la seule protection CSRF de
@@ -1090,7 +1110,7 @@ def _etablissement_form(creation):
             except ValueError as e:
                 erreurs = [str(e)]
             except PyMongoError as e:            # base injoignable : rien d'écrit
-                print(f"[etablissements] enregistrement impossible ({type(e).__name__}: {e})",
+                print(f"[etablissements] enregistrement impossible ({type(e).__name__})",
                       flush=True)
                 erreurs = ["L'enregistrement n'a pas abouti. Réessayez dans un moment."]
         if erreurs:
@@ -1805,8 +1825,8 @@ def demarrer():
         # drapeau, ProxyFix ne voit rien et PROXIES est sans effet (tous les
         # visiteurs = 127.0.0.1, liens en http://). Garde a 0 : sans proxy
         # declare, l'en-tete reste efface -- il serait fourni par le client.
-        serve(app, host=hote, port=port, threads=4,
-              clear_untrusted_proxy_headers=not _PROXIES)
+        serve(app, host=hote, port=port,
+              clear_untrusted_proxy_headers=not _PROXIES, **WAITRESS)
 
 
 if __name__ == "__main__":
