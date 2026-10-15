@@ -18,8 +18,8 @@ from datetime import date, datetime, timedelta
 from functools import wraps
 from pathlib import Path
 
-from flask import (Flask, abort, flash, redirect, render_template, request,
-                   send_file, session, url_for)
+from flask import (Flask, Response, abort, flash, redirect, render_template,
+                   request, send_file, session, url_for)
 from pymongo.errors import PyMongoError
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.security import check_password_hash
@@ -239,6 +239,7 @@ def _aides():
             # qui renomme ses champs, la colonne sortait VIDE au lieu de crier.
             "valeur": config.valeur,
             "depuis": _depuis,
+            "derniere_activite": store.derniere_activite,
             "date_fr": _date_fr,
             "horodatage": _horodatage,
             "libelle_etat": lambda e: LIBELLES_ETAT.get(e, e),
@@ -481,12 +482,10 @@ def suivi():
                            aujourdhui=date.today().isoformat())
 
 
-@app.get("/salaries")
-@rh
-def salaries():
-    """Les salaries dont la procedure est allee au bout (RemisComptable), ou
-    ceux partis (Parti), groupes par etablissement. Complement de /suivi
-    (demandes en cours)."""
+def _salaries_visibles():
+    """(anciens, tous, visibles, etab, q) d'apres la query string : l'onglet
+    (en poste / anciens), puis les filtres. Commun a /salaries et a son export,
+    qui doit livrer exactement ce que l'ecran montre."""
     anciens = request.args.get("anciens")
     cible = "Parti" if anciens else "RemisComptable"
     tous = [i for i in store.tout() if store.etat(i) == cible]
@@ -495,6 +494,30 @@ def salaries():
     visibles = [i for i in tous
                 if (not etab or config.valeur(i["champs"], "etablissement") == etab)
                 and (not q or _correspond(i, q))]
+    return anciens, tous, visibles, etab, q
+
+
+def _zip(items, nom):
+    """Reponse en flux. Nom de fichier sans donnee personnelle ; no-store :
+    l'archive contient les pieces d'identite. Chaque dossier exporte garde une
+    trace au journal (qui, quand, d'ou) : ce sont des pieces d'identite qui
+    sortent en masse. Notee AVANT l'envoi : pas d'export sans trace, quitte a
+    tracer un envoi interrompu. Seulement les dossiers dont une piece sort."""
+    uids, flux = store.zip_dossiers(items)  # chemins calcules ici : erreur = 500 propre
+    for uid in uids:
+        store.noter(uid, type="export", par=session["utilisateur"], ip=request.remote_addr)
+    return Response(flux, mimetype="application/zip",
+                    headers={"Content-Disposition": f'attachment; filename="{nom}"',
+                             "Cache-Control": "no-store"})
+
+
+@app.get("/salaries")
+@rh
+def salaries():
+    """Les salaries dont la procedure est allee au bout (RemisComptable), ou
+    ceux partis (Parti), groupes par etablissement. Complement de /suivi
+    (demandes en cours)."""
+    anciens, tous, visibles, etab, q = _salaries_visibles()
     groupes = {}
     for i in visibles:
         groupes.setdefault(config.valeur(i["champs"], "etablissement") or "—", []).append(i)
@@ -511,6 +534,15 @@ def salaries():
                            date_sortie=store.date_sortie,
                            cabinet=cabinet, signe_manquant=store.signe_manquant,
                            aujourdhui=date.today().isoformat())
+
+
+@app.get("/salaries/export")
+@rh
+def salaries_export():
+    """Zip des salaries affiches par /salaries (memes onglet et filtres)."""
+    anciens, _tous, visibles, _etab, _q = _salaries_visibles()
+    return _zip(visibles, f"{'anciens-salaries' if anciens else 'salaries'}-"
+                          f"{date.today().isoformat()}.zip")
 
 
 # Mentions legales saisies avec un etablissement. L'ordre est celui du formulaire.
@@ -1609,6 +1641,15 @@ def renvoyer(uid):
     return redirect(url_for("detail", uid=uid))
 
 
+@app.get("/dossier/<uid>/export")
+@rh
+def export_dossier(uid):
+    item = store.lire(uid) or abort(404)
+    if item.get("purge"):            # plus rien a livrer
+        abort(404)
+    return _zip([item], f"dossier-{uid}.zip")
+
+
 @app.post("/dossier/<uid>/archiver")
 @rh
 def archiver(uid):
@@ -1645,9 +1686,9 @@ def _apercu_purge():
     """Ce qui partirait : une ligne lisible par dossier eligible."""
     lignes = []
     for item, ecoule, duree in store.eligibles():
-        prenom, nom = config.identite(item["champs"])
         lignes.append({"id": item["id"],
-                       "nom": " ".join(p for p in (prenom, nom.upper()) if p) or item["id"],
+                       "nom": store.nom_complet(item["champs"], prenom_devant=True)
+                              or item["id"],
                        "etablissement": config.valeur(item["champs"], "etablissement"),
                        "etat": LIBELLES_ETAT.get(store.etat(item), store.etat(item)),
                        "ecoule": ecoule, "duree": duree})

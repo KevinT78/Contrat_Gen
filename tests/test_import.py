@@ -340,7 +340,7 @@ assert store.etat(item_ana) == "RemisComptable" and not recap._remis_apres(item_
 print("ok  importé : ni dépôt de contrat ni envoi au cabinet, « à compléter », date d'entrée saisie")
 
 # 18. revue du 10/10 : archivage, rapprochement, purge, session expirée
-assert "Archiver dans LEAVERS" in f, "départ impossible pour un importé"
+assert "Archiver dans les anciens salariés" in f, "départ impossible pour un importé"
 assert sp.dossier_de(AUTRE, [{"id": "R", "chemin": "RESTAURANTS/Restauration Nord"}]) is None, \
     "lié sur un mot du nom de la société"
 vraies_societes = config.societes      # une société par restaurant

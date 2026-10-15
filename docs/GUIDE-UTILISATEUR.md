@@ -348,7 +348,7 @@ Le lien ouvre le formulaire **pré-rempli**, avec le motif et le commentaire en 
 
 L'onglet **« Salariés »** (`/salaries`) liste les dossiers remis au cabinet, groupés par établissement. Deux vues : **En poste** et **Anciens salariés**. Une recherche et un filtre par établissement aident à retrouver quelqu'un.
 
-**Quand un salarié part :** sur sa fiche, la carte « Départ du salarié » demande la date de sortie (et un motif, facultatif). **« Archiver dans LEAVERS »** place son dossier parmi les anciens salariés (il ne change pas de place, il prend l'état « parti ») ; la colonne « Remis le » devient alors « Sorti le ».
+**Quand un salarié part :** sur sa fiche, la carte « Départ du salarié » demande la date de sortie (et un motif, facultatif). **« Archiver dans les anciens salariés »** place son dossier parmi les anciens salariés (il ne change pas de place, il prend l'état « parti ») ; la colonne « Remis le » devient alors « Sorti le ».
 
 ![La vue « Salariés »](pdf/img/20-salaries.png)
 

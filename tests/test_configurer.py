@@ -57,6 +57,9 @@ def ecrire(instance=None, societes=None):
     (CONF / "contrats" / "contrat.txt").write_text(
         "Bonjour {{Nom}}, poste {{Poste}}.", encoding="utf-8")
     (CONF / "PLACEHOLDERS.md").unlink(missing_ok=True)
+    (CONF / "mails").mkdir(exist_ok=True)
+    for m in ("nouvelle_soumission", "demande_validee", "rejet", "rappel_dpae", "recap_hebdo"):
+        (CONF / "mails" / f"{m}.txt").write_text("Objet: x\n\nBonjour", encoding="utf-8")
 
 
 def lancer(*args, entree="", sans=()):
@@ -347,6 +350,30 @@ def test_bilan_refuse_la_base_en_memoire_hors_demo():
     ecrire()
     code, sortie = lancer(sans=("BASE_EN_MEMOIRE",))
     assert code == 1 and "base en mémoire" in sortie, sortie
+
+
+def test_bilan_refuse_un_modele_de_mail_absent():
+    """Le mail « demande validée » manquait à une config réelle : l'envoi
+    échouait à chaque validation, noté au journal, sans que le bilan le dise."""
+    ecrire()
+    (CONF / "mails" / "demande_validee.txt").unlink()
+    code, sortie = lancer()
+    assert code == 1 and "mails/demande_validee.txt absent" in sortie, sortie
+    assert "[config/mails/]" in sortie, sortie
+    ecrire()
+    (CONF / "mails" / "rejet.txt").write_text("  \n", encoding="utf-8")
+    code, sortie = lancer()
+    assert code == 1 and "mails/rejet.txt vide" in sortie, sortie
+
+
+def test_recap_hebdo_absent_avertit_sans_bloquer():
+    """Mail du cron (recap.py), pas d'un dossier : son echec s'affiche deja en
+    bandeau sur /salaries. Une instance en place ne doit pas refuser de repartir."""
+    ecrire(PROD, SOCIETES_PROD)
+    (CONF / "mails" / "recap_hebdo.txt").unlink()
+    code, sortie = lancer()
+    avert = [l for l in sortie.splitlines() if "⚠" in l]
+    assert code == 0 and len(avert) == 1 and "recap_hebdo.txt absent" in avert[0], sortie
 
 
 def test_bilan_refuse_un_id_de_champ_avec_point():

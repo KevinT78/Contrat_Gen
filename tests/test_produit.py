@@ -85,6 +85,9 @@ def ecrire(instance=None, contrat="Bonjour {{Nom}}, poste {{Poste}}.",
         json.dumps(formulaire or FORMULAIRE), encoding="utf-8")
     poser_societes(societes)
     (CONF / "contrats" / "contrat.txt").write_text(contrat, encoding="utf-8")
+    (CONF / "mails").mkdir(exist_ok=True)
+    for m in config.MODELES_MAIL:
+        (CONF / "mails" / f"{m}.txt").write_text("Objet: x\n\nBonjour", encoding="utf-8")
     config._CACHE.clear()
 
 

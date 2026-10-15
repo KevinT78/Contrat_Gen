@@ -37,6 +37,8 @@ TMP = Path(tempfile.mkdtemp(prefix="contratgen-valeurs-"))
 CLIENT = TMP / "config"
 (CLIENT / "contrats").mkdir(parents=True)
 (CLIENT / "mails").mkdir()
+for _m in ("nouvelle_soumission", "demande_validee", "rejet", "rappel_dpae", "recap_hebdo"):
+    (CLIENT / "mails" / f"{_m}.txt").write_text("Objet: x\n\nBonjour", encoding="utf-8")
 
 # --- la config fabriquee ---------------------------------------------------
 #

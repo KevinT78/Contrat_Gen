@@ -9,15 +9,15 @@
   </defs>
 
   <rect x="10" y="10" width="620" height="150" rx="8" fill="#1e293b"/>
-  <text x="320" y="34" text-anchor="middle" fill="#fff" font-size="15" font-weight="600">config/  (CONFIG_DIR) — des données, aucun .py</text>
+  <text x="320" y="34" text-anchor="middle" fill="#fff" font-size="15" font-weight="600">config/  (CONFIG_DIR) — des données, ni code ni secret</text>
   <g font-size="12" fill="#cbd5e1">
     <text x="28" y="60" font-family="Consolas, monospace" fill="#fff">instance.json</text>
-    <text x="150" y="60">client, secret, mails, comptes,</text>
-    <text x="150" y="77">modèles par poste, stockage…</text>
+    <text x="150" y="60">client, mails, signature,</text>
+    <text x="150" y="77">modèles par poste, conservation…</text>
     <text x="28" y="100" font-family="Consolas, monospace" fill="#fff">formulaire.json</text>
     <text x="150" y="100">champs et rôles</text>
-    <text x="28" y="121" font-family="Consolas, monospace" fill="#fff">societes.json</text>
-    <text x="150" y="121">sociétés, établissements</text>
+    <text x="28" y="121" font-family="Consolas, monospace" fill="#fff">societes.amorce.json</text>
+    <text x="190" y="121">jeu de départ (démo, tests)</text>
     <text x="28" y="142" font-family="Consolas, monospace" fill="#fff">grille.json</text>
     <text x="150" y="142">salaires (optionnel)</text>
     <text x="350" y="60" font-family="Consolas, monospace" fill="#fff">contrats/</text>
@@ -25,8 +25,9 @@
     <text x="350" y="81" font-family="Consolas, monospace" fill="#fff">mails/</text>
     <text x="470" y="81">modèles .txt</text>
     <text x="350" y="102" font-family="Consolas, monospace" fill="#fff">theme.json</text>
-    <text x="470" y="102">couleurs, logo</text>
-    <text x="350" y="117" font-family="Consolas, monospace" fill="#fff">marque/</text>
+    <text x="470" y="102">couleurs</text>
+    <text x="350" y="123" font-family="Consolas, monospace" fill="#fff">marque/</text>
+    <text x="470" y="123">logo</text>
     <text x="350" y="142" font-family="Consolas, monospace" fill="#fff">PLACEHOLDERS.md</text>
     <text x="470" y="142">jetons valides</text>
   </g>
@@ -35,12 +36,12 @@
 
   <rect x="120" y="194" width="400" height="56" rx="8" fill="#b45309"/>
   <text x="320" y="217" text-anchor="middle" fill="#fff" font-size="15" font-weight="600" font-family="Consolas, monospace">config.py</text>
-  <text x="320" y="238" text-anchor="middle" fill="#fde68a" font-size="12.5">rôles du formulaire, mentions, grille, sociétés</text>
+  <text x="320" y="238" text-anchor="middle" fill="#fde68a" font-size="12.5">rôles du formulaire, mentions, grille ; sociétés lues en base</text>
   <line x1="320" y1="250" x2="320" y2="278" stroke="#475569" stroke-width="2" marker-end="url(#a)"/>
 
   <rect x="60" y="282" width="520" height="62" rx="8" fill="#0d4437"/>
   <text x="320" y="306" text-anchor="middle" fill="#fff" font-size="15" font-weight="600" font-family="Consolas, monospace">config.verifier()</text>
-  <text x="320" y="328" text-anchor="middle" fill="#a7c4ba" font-size="12">version, secret, comptes, mails, jetons, grille, stockage, thème…</text>
+  <text x="320" y="328" text-anchor="middle" fill="#a7c4ba" font-size="12">version, variables d'environnement, comptes et sociétés en base, mails…</text>
   <line x1="200" y1="344" x2="160" y2="370" stroke="#475569" stroke-width="2" marker-end="url(#a)"/>
   <line x1="440" y1="344" x2="480" y2="370" stroke="#475569" stroke-width="2" marker-end="url(#a)"/>
 

@@ -251,6 +251,9 @@
         <li><a href="{{ url_for('fichier', uid=item.id, bucket=bucket, nom=f) }}">{{ f }}</a></li>
       {% else %}<li class="vide">Aucun pour l'instant.</li>{% endfor %}
     </ul></div>
+    {% if not item.purge %}
+    <p><a class="bouton discret" href="{{ url_for('export_dossier', uid=item.id) }}">Exporter le dossier (.zip)</a></p>
+    {% endif %}
   </div>
 </div>
 
@@ -278,7 +281,7 @@
              title="jj/mm/aaaa" autocomplete="off" required></label>
     <label>Motif (facultatif)
       <input type="text" name="motif"></label>
-    <button class="discret">Archiver dans LEAVERS</button>
+    <button class="discret">Archiver dans les anciens salariés</button>
   </form>
   <p class="indice">Le dossier rejoindra l'onglet « Anciens salariés » (et le dossier
     <code>LEAVERS/</code> de l'export).</p>

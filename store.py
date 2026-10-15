@@ -27,6 +27,8 @@ import random
 import re
 import threading
 import time
+import unicodedata
+import zipfile
 from collections import Counter
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -116,10 +118,12 @@ def poser_compte(ident, mdp):
                              upsert=True)
 
 
-# Racines de l'export zip (lot 4) : l'arborescence que la RH ouvre a la main.
+# Racines de l'export zip : l'arborescence que la RH ouvre a la main. Elle est
+# recalculee depuis la config courante a chaque export (jamais stockee) : un
+# etablissement renomme change de dossier au prochain export.
 DOSSIERS = "DOSSIERS SALARIES"
 LEAVERS = "LEAVERS"
-BUCKETS = {"pieces": "FICHE PERSONNELLE", "contrat": "CONTRAT"}  # _versions non traduit
+BUCKETS = {"pieces": "FICHE PERSONNELLE", "contrat": "CONTRAT"}  # _versions jamais exporte
 _ILLEGAL = re.compile(r'[<>:"/\\|?*\x00-\x1f]+')
 _ACCENTS = str.maketrans("àâäéèêëîïôöùûüçÀÂÄÉÈÊËÎÏÔÖÙÛÜÇ",
                          "aaaeeeeiioouuucAAAEEEEIIOOUUUC")
@@ -319,9 +323,20 @@ def date_remise(item, repli=True):
     return date.today().isoformat() if repli else ""
 
 
+def nom_complet(champs, prenom_devant=False):
+    """« NOM Prenom » (ou « Prenom NOM ») d'un dossier, ou "". Le nom passe en
+    majuscules seulement quand le FORMULAIRE a un champ prenom, rempli ou non :
+    un champ unique « NOM Prenom » arrive deja compose, le mettre en majuscules
+    efface le prenom (ÉQUIPIER CAMILLE)."""
+    prenom, nom = config.identite(champs)
+    if config.role("prenom") in {c["id"] for c in config.champs()}:
+        nom = nom.upper()
+    parts = (prenom, nom) if prenom_devant else (nom, prenom)
+    return " ".join(p.strip() for p in parts if p and p.strip())
+
+
 def _qui(item):
-    prenom, nom_s = config.identite(item["champs"])
-    return " ".join(p for p in (nom_s.upper(), prenom) if p) or "SANS NOM"
+    return nom_complet(item["champs"]) or "SANS NOM"
 
 
 def _tete(nom):
@@ -459,11 +474,19 @@ def _deposer_champ(item, c, fichiers_recus):
             _poser(item, "pieces", c["role"], f, index=rang)
 
 
+# Longueur maximale d'un chemin DANS le zip : laisse 20 car. au dossier
+# d'extraction avant MAX_PATH (260). Segments a 40 car. : le nom de piece garde
+# au moins 28 car. dans le pire cas (cf. _entrees_zip).
+CHEMIN_MAX = 240
+_RESERVES = re.compile(r"^(con|prn|aux|nul|com\d|lpt\d)(\.|$)", re.I)
+
+
 def _segment(brut, defaut):
     """Un composant de chemin sur : illegaux Windows remplaces, points/espaces
-    de fin otes (NTFS les refuse), 60 car. max (MAX_PATH)."""
-    s = _ILLEGAL.sub("-", str(brut or "")).strip().rstrip(". ")[:60].strip()
-    return s or defaut
+    de fin otes (NTFS les refuse) apres troncature a 40 car., nom reserve
+    (CON, NUL...) prefixe."""
+    s = _ILLEGAL.sub("-", str(brut or "")).strip()[:40].rstrip(". ").strip() or defaut
+    return "_" + s if _RESERVES.match(s) else s
 
 
 def _hierarchie(item):
@@ -475,9 +498,95 @@ def _hierarchie(item):
         groupe, etab = config.groupe(cle), config.etablissement(cle)[1]["nom"]
     except KeyError:                       # etablissement retire de la config
         groupe, etab = "DIVERS", cle
-    prenom, nom = config.identite(ch)
-    qui = " ".join(p for p in (nom.upper(), prenom) if p) or item["id"]
-    return groupe, etab, config.valeur(ch, "poste"), qui
+    return groupe, etab, config.valeur(ch, "poste"), nom_complet(ch) or item["id"]
+
+
+class _Flux:
+    """Cible non positionnable de ZipFile : les octets ecrits attendent d'etre
+    pris par le generateur, le zip n'est jamais entier en memoire."""
+
+    def __init__(self):
+        self._morceaux = []
+
+    def write(self, octets):
+        self._morceaux.append(bytes(octets))
+        return len(octets)
+
+    def flush(self):
+        pass
+
+    def prendre(self):
+        sortie = b"".join(self._morceaux)
+        self._morceaux.clear()
+        return sortie
+
+
+def _nom_fichier(nom, maxi=100):
+    """Nom d'une piece dans le zip : illegaux Windows remplaces, point/espace de
+    fin otes, nom reserve (CON, NUL...) prefixe, `maxi` car. en gardant
+    l'extension."""
+    nom = _ILLEGAL.sub("-", nom).strip().rstrip(". ") or "fichier"
+    if _RESERVES.match(nom):
+        nom = "_" + nom
+    stem, ext = os.path.splitext(nom)
+    return stem[:max(maxi - len(ext), 1)].rstrip(". ") + ext
+
+
+def _entrees_zip(items):
+    """[(chemin, uid, bucket, nom)] de l'export, calcule AVANT le premier octet
+    envoye : une erreur de config devient une 500 propre, pas une archive
+    tronquee. Tri par id : le dossier « nu » d'un homonyme ne change pas quand
+    un nouveau salarie arrive. Les doublons sont compares sans casse ni forme
+    Unicode (l'explorateur Windows fusionne `Martin` et `MARTIN`)."""
+    sortie, bases, noms = [], set(), set()
+
+    def libre(chemin, deja):
+        cle = unicodedata.normalize("NFC", chemin).casefold()
+        return cle if cle not in deja else None
+
+    for item in sorted(items, key=lambda i: i["id"]):
+        if item.get("purge"):
+            continue
+        groupe, etab, poste, qui = _hierarchie(item)
+        base = "/".join((LEAVERS if etat(item) == "Parti" else DOSSIERS,
+                         _segment(groupe, "DIVERS"), _segment(etab, "SANS ETABLISSEMENT"),
+                         _segment(poste, "SANS POSTE"), _segment(qui, item["id"])))
+        if libre(base, bases) is None:
+            base += f" ({item['id'][-4:]})"
+        bases.add(unicodedata.normalize("NFC", base).casefold())
+        for bucket, rep in BUCKETS.items():
+            maxi = min(100, CHEMIN_MAX - len(base) - len(rep) - 7)   # 2 « / » + « (nn) »
+            for nom in fichiers(item, bucket):
+                chemin = f"{base}/{rep}/{_nom_fichier(nom, maxi)}"
+                stem, ext = os.path.splitext(chemin)
+                n = 2
+                while libre(chemin, noms) is None:      # deux noms devenus identiques
+                    chemin, n = f"{stem} ({n}){ext}", n + 1
+                noms.add(unicodedata.normalize("NFC", chemin).casefold())
+                sortie.append((chemin, item["id"], bucket, nom))
+    return sortie
+
+
+def zip_dossiers(items):
+    """Zip en flux (iterable d'octets) de `items` :
+    <DOSSIERS SALARIES|LEAVERS>/<groupe>/<etablissement>/<poste>/<NOM Prenom>/
+    {FICHE PERSONNELLE,CONTRAT}/<piece>. LEAVERS pour l'etat Parti. Un dossier
+    purge n'a plus rien a donner : ignore. Sans `_versions` (anciennes
+    versions : pas pour la RH). Un homonyme au meme poste prend les 4 derniers
+    caracteres de son identifiant. -> (uids dont au moins une piece sort, flux)."""
+    entrees = _entrees_zip(items)
+
+    def flux():
+        sortie = _Flux()
+        with zipfile.ZipFile(sortie, "w", zipfile.ZIP_DEFLATED) as z:
+            for chemin, uid, bucket, nom in entrees:
+                octets = ouvrir(uid, bucket, nom)
+                if octets is None:             # efface entre la liste et la lecture
+                    continue
+                z.writestr(chemin, octets)
+                yield sortie.prendre()
+        yield sortie.prendre()
+    return sorted({e[1] for e in entrees}), flux()
 
 
 def creer_soumission(champs, fichiers_recus):
@@ -672,6 +781,17 @@ def bump_epoch(uid, cle):
 
 _CHAMPS_GARDES = ("etablissement", "poste", "date_debut")   # roles que /suivi lit
 _JOURNAL_GARDE = ("le", "jour", "de", "vers", "par", "type")
+
+
+# Notes de journal qui ne font pas avancer le dossier.
+_TECHNIQUES = {"export", "acces_lot", "mail_echoue", "fiche_echouee"}
+
+
+def derniere_activite(item):
+    """Date de la derniere entree qui n'est pas une note technique : un export
+    ou un mail rate ne remet pas la « derniere activite » de /suivi a zero."""
+    return next((e["le"] for e in reversed(item["journal"])
+                 if e.get("type") not in _TECHNIQUES), item["journal"][0]["le"])
 
 
 def _entree_etat_courant(item):

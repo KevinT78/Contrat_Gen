@@ -502,7 +502,7 @@ que dans `TRANSITIONS`, pour les dossiers écrits avant la suppression de l'éta
 échoue (`mail_echoue`). Les transitions permises sont
 dans `store.TRANSITIONS` — un `POST` hors séquence est refusé côté serveur, pas
 seulement caché dans le template. `Parti` est terminal (aucune transition
-sortante) : le départ d'un salarié (bouton « Archiver dans LEAVERS », onglet
+sortante) : le départ d'un salarié (bouton « Archiver dans les anciens salariés », onglet
 « Anciens salariés » de `/salaries`) ne déplace rien : le dossier reste où il
 est et prend l'état `Parti`, avec la date de sortie au journal.
 

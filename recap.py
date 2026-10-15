@@ -48,9 +48,7 @@ def lien(item):
 
 def resume(item):
     c = item["champs"]
-    prenom, nom = config.identite(c)
-    # prenom vide quand le formulaire n'a qu'un champ « Nom Prénom »
-    return (f"{' '.join(filter(None, (prenom, nom.upper())))} — {config.valeur(c, 'poste')} — "
+    return (f"{store.nom_complet(c, prenom_devant=True)} — {config.valeur(c, 'poste')} — "
             f"{config.valeur(c, 'etablissement')} — "
             f"début {contrat.date_fr(config.valeur(c, 'date_debut', '?'))}")
 

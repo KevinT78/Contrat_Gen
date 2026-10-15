@@ -27,8 +27,7 @@ def main():
         print(f"{len(elig)} dossier(s) éligible(s) — conservation {conf.get('jours')} j, "
               f"candidatures jamais validées {cand} j :")
         for item, ecoule, duree in elig:
-            prenom, nom = config.identite(item["champs"])
-            libelle = " ".join(p for p in (prenom, nom.upper()) if p) or item["id"]
+            libelle = store.nom_complet(item["champs"], prenom_devant=True) or item["id"]
             print(f"  {item['id']}  {libelle:32}  {store.etat(item):16}  "
                   f"{ecoule} j / {duree} j")
 

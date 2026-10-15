@@ -42,6 +42,7 @@
   </div>
   <div class="fin" id="fin-filtres" data-maj>
     <button type="submit">Filtrer</button>
+    <a class="bouton discret" href="{{ url_for('salaries_export', anciens=1 if anciens else none, etablissement=etab or none, q=q or none) }}">Exporter (.zip)</a>
     {% if etab or q %}
       <a class="bouton discret" href="{{ url_for('salaries', anciens=1 if anciens else none) }}">Tout afficher</a>
     {% endif %}

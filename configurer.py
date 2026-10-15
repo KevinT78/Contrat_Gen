@@ -45,6 +45,7 @@ FICHIERS = {"mongo / secrets": "fichier d'environnement .env (écrit par install
             "poste «": "config/instance.json", "url": "config/instance.json",
             "conservation": "config/instance.json",
             "theme.json": "config/theme.json",
+            "modèles de mail": "config/mails/",
             "établissements": "en base : python configurer.py --assister",
             "roles": "config/formulaire.json", "grille": "config/grille.json",
             "fiche salarié": "modeles/fiche_salarie.docx"}
@@ -135,6 +136,9 @@ def avertissements():
         if sans_cabinet := [s["nom"] for s in config.societes() if not s.get("comptable_email")]:
             out.append(f"aucun cabinet comptable pour {', '.join(sans_cabinet)} : le mail "
                        "hebdomadaire (recap.py) échouera  [écran Établissements]")
+    if q := config.modele_mail_manquant("recap_hebdo"):
+        out.append(f"mails/recap_hebdo.txt {q} : le mail hebdomadaire au cabinet "
+                   "(recap.py) échouera  [config/mails/]")
     url = config.url_publique()
     if url and not url.startswith("https://"):
         out.append(f"url « {url} » n'est pas en https : les liens des mails "

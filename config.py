@@ -742,6 +742,27 @@ def _verifier_sharepoint():
     return {"sharepoint": raisons} if raisons else {}
 
 
+# Les modeles que l'app envoie a chaque dossier (app.py : _mail). Un modele
+# absent ne casse rien au demarrage : le mail echoue plus tard, note au journal
+# du dossier, et personne n'est prevenu (config_wingstop sans demande_validee).
+# recap_hebdo n'en est pas : il part d'un cron (recap.py), son echec s'affiche
+# deja en bandeau sur /salaries ; configurer.avertissements() le signale.
+MODELES_MAIL = ("nouvelle_soumission", "demande_validee", "rejet", "rappel_dpae")
+
+
+def modele_mail_manquant(m):
+    """config/mails/<m>.txt -> "absent", "vide", ou None s'il est utilisable."""
+    p = CLIENT / "mails" / f"{m}.txt"
+    if not p.is_file():
+        return "absent"
+    return None if p.read_text(encoding="utf-8").strip() else "vide"
+
+
+def _verifier_mails():
+    manques = [f"mails/{m}.txt {q}" for m in MODELES_MAIL if (q := modele_mail_manquant(m))]
+    return {"modèles de mail": manques} if manques else {}
+
+
 def _verifier_theme():
     """La DA du client. Patron de _verifier_conservation : la FORME avant les
     valeurs, et un KO propre qui nomme le sujet.
@@ -1161,6 +1182,7 @@ def verifier():
     lisent_base = lisent_societes | {_verifier_comptes}
     for check in (_verifier_version, _verifier_comptes,
                   _verifier_conservation, _verifier_sharepoint, _verifier_theme,
+                  _verifier_mails,
                   _verifier_installation,
                   _verifier_derives, _verifier_ids_champs, _verifier_roles, _verifier_placeholders,
                   _verifier_regles, _verifier_postes, _verifier_grille):

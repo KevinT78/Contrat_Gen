@@ -83,7 +83,7 @@
       <td {{ 'class=manque'|safe if retard }}>{{ date_fr(debut) or '—' }}
         {{ '· en retard' if retard }}</td>
       <td><span class="badge {{ ton_etat(e) }}">{{ libelle_etat(e) }}</span></td>
-      {% set j = depuis(i.journal[-1].le) %}
+      {% set j = depuis(derniere_activite(i)) %}
       <td class="{{ 'manque' if j > 7 and e not in inactifs else 'secondaire' }}">
         {{ "aujourd'hui" if j <= 0 else 'hier' if j == 1 else 'il y a ' ~ j ~ ' j' }}</td>
       <td class="{{ 'manque' if nb }}">{{ nb if nb else '—' }}</td>

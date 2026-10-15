@@ -14,7 +14,8 @@ import email
 import os
 import re
 import sys
-from datetime import date
+from collections import Counter
+from datetime import date, datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
 from zipfile import ZipFile
@@ -281,6 +282,165 @@ def dpae_sans_signature(c):
     item = store.lire(uid)
     assert store.etat(item) == "RemisComptable", item["journal"][-1]
     assert not store.fichiers_role(item, "contrat", "contrat-signe")
+
+
+def export_zip(c, dk, resto, apres_depart=False):
+    """Export RH : arborescence recalculée, LEAVERS/ après le départ, purgé
+    absent, jamais `_versions`, accents lisibles, mêmes filtres que /salaries."""
+    def noms(url):
+        r = c.get(url)
+        assert r.status_code == 200 and r.mimetype == "application/zip", (url, r.status_code)
+        assert "no-store" in r.headers["Cache-Control"], "archive de pièces d'identité cachable"
+        return ZipFile(BytesIO(r.data)).namelist()
+
+    racine = "LEAVERS" if apres_depart else "DOSSIERS SALARIES"
+    avant_j = sum(e.get("type") == "export" for e in store.lire(dk)["journal"])
+    z = noms(f"/dossier/{dk}/export")
+    trace = store.lire(dk)["journal"][-1]
+    assert trace.get("type") == "export" and trace["par"] == "rh" and trace.get("ip"), trace
+    assert sum(e.get("type") == "export" for e in store.lire(dk)["journal"]) == avant_j + 1
+    assert c.get("/dossier/inconnu/export").status_code == 404
+    assert sum(e.get("type") == "export" for e in store.lire(dk)["journal"]) == avant_j + 1, \
+        "trace écrite sans export"
+    assert z and all(n.startswith(f"{racine}/DARK KITCHENS/Lille Grand Place/Manager/"
+                                  "MARTIN Camille/") for n in z), z
+    assert any("/FICHE PERSONNELLE/Fiche salarié - MARTIN Camille.docx" in n for n in z), z
+    assert any("/CONTRAT/" in n for n in z), z
+    assert {n.split("/")[-2] for n in z} == {"FICHE PERSONNELLE", "CONTRAT"}, \
+        "anciennes versions exportées"
+    assert app.test_client().get(f"/dossier/{dk}/export").status_code == 302, "export sans login"
+    # un <img> tiers ne declenche pas l'export (ni sa trace) : cookie non envoye
+    assert app.config["SESSION_COOKIE_SAMESITE"] in ("Lax", "Strict")
+
+    onglet = "/salaries/export?anciens=1" if apres_depart else "/salaries/export"
+    lot = noms(onglet)
+    assert set(z) <= set(lot), "le dossier manque à l'export de son onglet"
+    en_poste = noms("/salaries/export")
+    assert not any(n.startswith("LEAVERS/") for n in en_poste), "un ancien parmi les salariés en poste"
+    assert (set(z) <= set(en_poste)) == (not apres_depart), "onglet en poste"
+    assert not apres_depart or not set(z) & set(en_poste), "un ancien parmi les salariés en poste"
+    # deux salariés de même nom au même poste restent deux dossiers distincts
+    avec_pieces = [i for i in store.tout() if store.etat(i) == "RemisComptable"
+                   and not i.get("purge") and store.fichiers(i, "pieces")]
+    assert len(avec_pieces) >= 3, "le jeu d'essai n'a plus d'homonymes"
+    assert len({"/".join(n.split("/")[:5]) for n in en_poste}) == len(avec_pieces), \
+        "deux homonymes fusionnés dans le même dossier du zip"
+    # mêmes filtres que /salaries : un autre établissement ne livre pas Martin
+    filtre = noms(onglet + ("&" if "?" in onglet else "?")
+                  + "etablissement=ACME Sud / Marseille Prado")
+    assert not any("DARK KITCHENS" in n for n in filtre), filtre
+    if not apres_depart:
+        assert any("/Marseille Prado/" in n for n in filtre), "le filtre vide l'export"
+        assert noms(onglet + "?q=zzzintrouvable") == [], "la recherche est ignorée"
+        brut = c.get(f"/dossier/{dk}/export").data
+        zdk = ZipFile(BytesIO(brut))
+        assert zdk.testzip() is None and len(zdk.namelist()) == len(set(zdk.namelist()))
+        base = [store.ouvrir(dk, b, f) for b in store.BUCKETS
+                for f in store.fichiers(store.lire(dk), b)]
+        assert len(zdk.namelist()) == len(base) and \
+            Counter(zdk.read(n) for n in zdk.namelist()) == Counter(base), \
+            "octets exportés différents de ceux de la base"
+        export_sans_piece_ni_trace(c, dk)
+
+    # purgé : plus rien à exporter, ni par dossier ni dans le lot
+    avant = noms(onglet)
+    store.db().dossiers.update_one({"_id": dk}, {"$set": {"purge": {"le": "x", "jours": 1}}})
+    try:
+        tracees = sum(e.get("type") == "export" for e in store.lire(dk)["journal"])
+        apres = noms(onglet)
+        assert sum(e.get("type") == "export" for e in store.lire(dk)["journal"]) == tracees, \
+            "export tracé pour un dossier purgé, dont rien n'est sorti"
+        assert len(apres) < len(avant), "dossier purgé exporté (ou rien retiré)"
+        assert c.get(f"/dossier/{dk}/export").status_code == 404, "dossier purgé exporté seul"
+    finally:
+        store.db().dossiers.update_one({"_id": dk}, {"$unset": {"purge": ""}})
+
+
+def export_sans_piece_ni_trace(c, dk):
+    """Un dossier sans pièce : zip vide, rien au journal (rien n'est sorti). Et
+    une note technique (mail raté, export) ne remet pas « dernière activité »
+    de /suivi à aujourd'hui."""
+    vide = store.creer_soumission(dict(store.lire(dk)["champs"]), {})
+    il_y_a_10_j = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat(timespec="seconds")
+    store.db().dossiers.update_one({"_id": vide}, {"$set": {"journal.0.le": il_y_a_10_j}})
+    try:
+        r = c.get(f"/dossier/{vide}/export")
+        assert r.status_code == 200 and ZipFile(BytesIO(r.data)).namelist() == [], r.status_code
+        assert not any(e.get("type") == "export" for e in store.lire(vide)["journal"]), \
+            "export tracé pour un dossier dont rien n'est sorti"
+        store.noter(vide, type="mail_echoue", par="systeme")
+        store.noter(vide, type="export", par="rh")
+        assert store.derniere_activite(store.lire(vide)) == il_y_a_10_j
+        page = c.get("/suivi").get_data(as_text=True)
+        ligne = page.split(f'/dossier/{vide}"', 1)[1].split("</tr>", 1)[0]
+        assert "il y a 10 j" in ligne, "dernière activité remise à zéro par une note technique"
+    finally:
+        store.db().dossiers.delete_one({"_id": vide})
+
+
+def cas_noms_du_zip():
+    """Noms du zip sous Windows : homonymes à la casse près, caractères
+    illégaux, noms réservés, noms longs, doublons après nettoyage ; ordre stable."""
+    modele = next(i for i in store.tout() if store.etat(i) == "RemisComptable")
+
+    def faux(uid, prenom, pieces):
+        return {**modele, "id": uid, "journal": modele["journal"],
+                "champs": {**modele["champs"], "prenom": prenom, "nom_naissance": "Dupont"},
+                "_fichiers": {"pieces": pieces}}
+
+    # formulaire à champ unique « NOM Prénom » : identite() rend ("", "Équipier
+    # Camille") ; le prénom ne doit pas passer en majuscules
+    identite, champs = config.identite, config.champs
+    config.identite = lambda ch: ("", "Équipier Camille")
+    config.champs = lambda: [c for c in champs() if c["id"] != config.role("prenom")]
+    try:
+        assert store._hierarchie(modele)[3] == "Équipier Camille", store._hierarchie(modele)
+        assert store._qui(modele) == "Équipier Camille", store._qui(modele)
+    finally:
+        config.identite, config.champs = identite, champs
+    # champs séparés, prénom facultatif laissé vide : le nom reste en majuscules,
+    # partout où un nom est composé (export, aperçu de purge, mail hebdo)
+    sans_prenom = faux("01AAAA0003", "", [])
+    assert store._qui(sans_prenom) == "DUPONT", store._qui(sans_prenom)
+    import recap
+    assert recap.resume(sans_prenom).startswith("DUPONT — "), recap.resume(sans_prenom)
+    assert store.nom_complet(modele["champs"], prenom_devant=True) == "Camille MARTIN"
+
+    # segments : point de fin après troncature, nom réservé
+    assert store._segment("x" * 38 + ". y", "D") == "x" * 38, store._segment("x" * 38 + ". y", "D")
+    assert store._segment("nul", "D") == "_nul"
+    # LEAVERS pour un Parti, purgé ignoré
+    parti = {**faux("01AAAA0005", "Léa", ["ID.pdf"]),
+             "journal": modele["journal"] + [{**modele["journal"][-1], "vers": "Parti"}]}
+    purge = {**faux("01AAAA0006", "Zoé", ["ID.pdf"]), "purge": {"le": "x", "jours": 1}}
+    entrees = store._entrees_zip([parti, purge])
+    assert [e[1] for e in entrees] == ["01AAAA0005"], entrees
+    assert entrees[0][0].startswith("LEAVERS/"), entrees
+    # chemin complet sous CHEMIN_MAX, même au pire (homonyme, doublon après troncature)
+    geant = {**modele, "id": "01AAAA0007", "journal": modele["journal"],
+             "champs": {**modele["champs"], "etablissement": "E" * 80, "poste": "P" * 80,
+                        "nom_naissance": "N" * 80, "prenom": "Q" * 80},
+             "_fichiers": {"pieces": ["y" * 300 + "1.pdf", "y" * 300 + "2.pdf"]}}
+    double = {**geant, "id": "01AAAA0008"}
+    longs = [e[0] for e in store._entrees_zip([geant, double])]
+    assert len(longs) == 4 and len(set(longs)) == 4, longs
+    assert all(len(c) <= store.CHEMIN_MAX and c.endswith(".pdf") for c in longs), \
+        [len(c) for c in longs]
+
+    longue = "x" * 300 + ".pdf"
+    a = faux("01AAAA0001", "Camille", ["a:b.pdf", "a-b.pdf", "CON.pdf", longue, "fin. "])
+    b = faux("01AAAA0002", "camille", ["ID.pdf"])
+    chemins = [e[0] for e in store._entrees_zip([b, a])]
+    assert chemins == [e[0] for e in store._entrees_zip([a, b])], "ordre d'arrivée"
+    assert len({c.casefold() for c in chemins}) == len(chemins), chemins
+    assert not any(":" in c for c in chemins), chemins
+    assert any(c.endswith("/_CON.pdf") for c in chemins), chemins
+    assert all(len(c.rsplit("/", 1)[1]) <= 100 for c in chemins), chemins
+    assert any(c.endswith(".pdf") and len(c.rsplit("/", 1)[1]) > 90 for c in chemins), chemins
+    dossiers = {c.rsplit("/", 2)[0] for c in chemins}
+    assert len({d.casefold() for d in dossiers}) == 2, dossiers
+    assert any(d.endswith("DUPONT camille (0002)") for d in dossiers), dossiers
+    assert not any(c.endswith(".") or c.endswith(" ") for c in chemins), chemins
 
 
 def depart_leaver(c, uid):
@@ -567,7 +727,10 @@ def main():
     rejet_part_au_manager_de_l_etablissement(c)
     dpae_sans_signature(c)
     recap_liste_la_semaine([dk, resto])
+    export_zip(c, dk, resto)
+    cas_noms_du_zip()
     depart_leaver(c, dk)               # apres recap : Parti sort de remis_depuis()
+    export_zip(c, dk, resto, apres_depart=True)
     cas_double_dpae()
     cas_course_champs()
     cas_dossier_inconnu_et_valider_apres_rejet()
