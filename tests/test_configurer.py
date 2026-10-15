@@ -348,7 +348,12 @@ def test_bilan_refuse_la_base_en_memoire_hors_demo():
     """mongomock:// recopié dans le .env d'un client : base vidée à chaque
     redémarrage. Refusé tant que BASE_EN_MEMOIRE n'est pas posé."""
     ecrire()
-    code, sortie = lancer(sans=("BASE_EN_MEMOIRE",))
+    vraie = os.environ["MONGO_URI"]
+    os.environ["MONGO_URI"] = "mongomock://"
+    try:
+        code, sortie = lancer(sans=("BASE_EN_MEMOIRE",))
+    finally:
+        os.environ["MONGO_URI"] = vraie
     assert code == 1 and "base en mémoire" in sortie, sortie
 
 

@@ -169,13 +169,22 @@ def poser_code(copie):
     shutil.copytree(RACINE / "config.exemple", copie / "config.exemple")
 
 
+def base_neuve(nom):
+    """Env d'un enfant sur la base `nom`, vide. mongomock l'est d'office (une
+    base par process) ; un mongod réel garde la base d'un lancement à l'autre."""
+    if not os.environ["MONGO_URI"].startswith("mongomock://"):
+        import pymongo
+        pymongo.MongoClient(os.environ["MONGO_URI"]).drop_database(nom)
+    return {**os.environ, "MONGO_DB": nom}
+
+
 def installer_copie(base, client):
     copie = base / client["slug"]
     poser_code(copie)
 
     out = subprocess.run([sys.executable, "installer.py", client["nom"], "."],
                          cwd=copie, capture_output=True, text=True, encoding="utf-8",
-                         env={**os.environ, "MONGO_DB": f"test-{client['slug']}"})
+                         env=base_neuve(f"test-{client['slug']}"))
     assert out.returncode == 0, out.stderr
     mdp = re.search(r"rh / (\S+)", out.stdout)
     assert mdp, out.stdout
@@ -232,7 +241,8 @@ def refus_base_deja_servie(base):
                       encoding="utf-8")
     r = subprocess.run([sys.executable, "installer.py", "Autre", "."], cwd=copie,
                        capture_output=True, text=True, encoding="utf-8",
-                       env={**os.environ, "MONGOMOCK_AMORCE": str(amorce)})
+                       env={**os.environ, "MONGO_URI": "mongomock://",
+                            "MONGOMOCK_AMORCE": str(amorce)})
     assert r.returncode != 0 and "déjà un compte rh" in r.stderr, r.stderr
     assert not (copie / "config").exists(), "refus après avoir créé config/"
 
@@ -241,15 +251,17 @@ def refus_avant_config(base, client):
     """Juste après installer.py, sans société en base : refus de servir."""
     copie = base / (client["slug"] + "-nu")
     poser_code(copie)
+    env = base_neuve(f"test-{client['slug']}-nu")
     subprocess.run([sys.executable, "installer.py", client["nom"], "."],
-                   cwd=copie, capture_output=True, text=True, encoding="utf-8", check=True)
+                   cwd=copie, capture_output=True, text=True, encoding="utf-8", check=True,
+                   env=env)
     assert subprocess.run([sys.executable, "installer.py", client["nom"], "."],
                           cwd=copie, capture_output=True, text=True,
-                          encoding="utf-8").returncode != 0, \
+                          encoding="utf-8", env=env).returncode != 0, \
         "réinstaller par-dessus une instance existante doit être refusé"
     r = subprocess.run(
         [sys.executable, "-c", "import config,sys; sys.exit(0 if config.verifier() else 1)"],
-        cwd=copie, capture_output=True, text=True, encoding="utf-8")
+        cwd=copie, capture_output=True, text=True, encoding="utf-8", env=env)
     assert r.returncode == 0, "une copie fraîchement installée devrait refuser de servir"
     assert not list((copie / "config").rglob("*.docx")), "des .docx ont survécu à l'installation"
     for j in (copie / "config").rglob("*.json"):
