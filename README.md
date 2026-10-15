@@ -511,6 +511,14 @@ compare-and-swap. Il reste que les plafonds de rate-limit (formulaire public,
 `/login`) sont en mémoire, donc multipliés par le nombre de process ; waitress
 mono-process reste le lancement recommandé.
 
+**Compression des pièces.** Toute pièce stockée (formulaire, dépôt RH, import
+SharePoint) passe par `compression.py` : une photo devient un `.jpg` de 2000 px
+au plus, un PDF voit ses images recompressées (son texte n'est jamais touché).
+Clé optionnelle `"compression": "gris"` d'`instance.json` : niveaux de gris,
+1600 px, un peu plus léger ; absente = `"couleur"`. Fichier abîmé, format
+inconnu ou résultat plus lourd : l'original est gardé. Mesuré sur le SharePoint
+Wingstop : -44 % en couleur, -49 % en gris (photos -80 à -90 %, PDF -36 à -41 %).
+
 **Conservation et purge.** Bloc optionnel `conservation` d'`instance.json` :
 
 ```json

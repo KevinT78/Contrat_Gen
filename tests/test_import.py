@@ -494,4 +494,82 @@ assert f"/dossier/{uid}" in anciens and "à compléter" not in anciens, \
     "ancien « à compléter » alors que la date ne se saisit plus après l'archivage"
 print("ok  homonyme importable, nom unique, bornes de taille, dossier tout trop gros, msal retiré sans 500")
 
+# 17. compression : photos et PDF scannés allégés, le reste intact
+import io  # noqa: E402
+
+import pikepdf  # noqa: E402
+from PIL import Image  # noqa: E402
+
+import compression  # noqa: E402
+
+
+def photo(fmt, cote=2600):
+    b = io.BytesIO()
+    Image.merge("RGB", [Image.effect_noise((cote, cote), 40)] * 3).save(b, fmt, quality=98)
+    return b.getvalue()
+
+
+png = photo("PNG")
+nom, jpg = compression.compresser("Vitale.PNG", png)
+assert nom == "Vitale.jpg" and len(jpg) < len(png), (nom, len(jpg), len(png))
+assert Image.open(io.BytesIO(jpg)).size == (2000, 2000)
+nom, gris = compression.compresser("cni.jpeg", photo("JPEG"), "gris")
+assert nom == "cni.jpg" and Image.open(io.BytesIO(gris)).mode == "L"
+scan = photo("PDF")                                     # Pillow : une page, une image JPEG
+nom, leger = compression.compresser("titre.pdf", scan, "gris")
+assert nom == "titre.pdf" and len(leger) < len(scan) / 2, (len(leger), len(scan))
+with pikepdf.open(io.BytesIO(leger)) as doc:
+    xo, = doc.pages[0].get_images().values()
+    assert len(doc.pages) == 1 and xo.Width == 1600 and xo.ColorSpace == "/DeviceGray"
+signe = scan.replace(b"%%EOF", b"/ByteRange [0 1 2 3] %%EOF")    # signature électronique
+assert signe != scan and compression.compresser("s.pdf", scan)[1] != scan, "cas signé non exercé"
+for nom_, octets in [("signe.pdf", signe), ("abime.pdf", b"%PDF x"), ("abime.jpg", b"pas une image"),
+                     ("contrat.docx", png), ("cni.pdf", png)]:
+    assert compression.compresser(nom_, octets) == (nom_, octets), nom_
+texte = io.BytesIO()
+with pikepdf.new() as doc:
+    doc.add_blank_page()
+    doc.pages[0].Contents = doc.make_stream(b"BT /F1 12 Tf 72 720 Td (Contrat) Tj ET")
+    doc.save(texte)
+with pikepdf.open(io.BytesIO(compression.compresser("c.pdf", texte.getvalue())[1])) as doc:
+    assert doc.pages[0].Contents.read_bytes().endswith(b"(Contrat) Tj ET"), "texte d'un PDF modifié"
+
+# à l'import : tout passe par la compression, même au-delà de TAILLE_MAX
+arbre = {"S11": [{"name": "photo.heic", "id": "H", "file": {}, "size": 1000},
+                 {"name": "scan.pdf", "id": "SC", "file": {}, "size": 40 * 2**20},
+                 {"name": "film.mov", "id": "FI", "file": {}, "size": 40 * 2**20},
+                 {"name": "enorme.pdf", "id": "EN", "file": {}, "size": sp.TELECHARGE_MAX + 1}]}
+contenu = {"H": png, "SC": scan}
+ouverts = []
+sp.ouvrir = lambda it: ouverts.append(it["id"]) or contenu[it["id"]]
+vraie_compression, config.compression = config.compression, lambda: "gris"
+sp._import.update(etat="en_cours", erreurs=[])
+sp._un_salarie(ETAB, SP_ETAB, {"id": "S11", "nom": "ZIP Léa", "dossier": "x", "heures": "", "poste": ""},
+               arbre.get, "rh", set())
+sp.ouvrir, sp._import["etat"], config.compression = vrai_ouvrir, "fini", vraie_compression
+assert ouverts == ["H", "SC"], "vidéo ou fichier au-delà du plafond téléchargé"
+lea = next(i for i in store.tout() if i.get("import_cle") == sp.cle("S11"))
+assert sorted(store.fichiers(lea, "pieces")) == ["photo.jpg", "scan.pdf"], store.fichiers(lea, "pieces")
+assert [e.split(" : ")[1].split(" (")[0] for e in sp._import["erreurs"]] == ["film.mov", "enorme.pdf"],     sp._import["erreurs"]
+
+# au dépôt (formulaire, RH) : même compression, l'extension suit
+from werkzeug.datastructures import FileStorage  # noqa: E402
+
+depot = store.creer_soumission({"etablissement": ETAB, "nom_naissance": "Photo", "prenom": "Zoé"}, {})
+nom = store.deposer(depot, "pieces", "cni", FileStorage(io.BytesIO(png), filename="IMG_0001.png"))
+octets = store.db().fichiers.find_one({"uid": depot, "nom": nom})["octets"]
+assert nom == "cni.jpg" and len(octets) < len(png) / 2, (nom, len(octets))
+nom = store.deposer(depot, "pieces", "rib", FileStorage(io.BytesIO(b"%PDF x"), filename="rib.pdf"))
+assert store.db().fichiers.find_one({"uid": depot, "nom": nom})["octets"] == b"%PDF x"
+
+# réglage : clé racine d'instance.json
+for valeur, attendu in [(None, "couleur"), ("gris", "gris"), ("noir", "couleur")]:
+    config.instance = lambda v=valeur: {} if v is None else {"compression": v}
+    assert config.compression() == attendu, valeur
+    assert ("compression" in config._verifier_compression()) == (valeur == "noir"), valeur
+config.instance = vrai_instance
+
+print("ok  compression : photo -> .jpg, PDF scanné allégé en gris, texte et fichiers abîmés intacts, "
+      "gros scan importé, vidéo écartée, dépôt formulaire compressé, réglage vérifié")
+
 print("\nOK test_import")

@@ -146,6 +146,9 @@ def avertissements():
     if config.sharepoint() and importlib.util.find_spec("msal") is None:
         out.append("sharepoint déclaré mais le module msal manque : la connexion "
                    "Microsoft échouera. pip install -r requirements-sharepoint.txt")
+    if not all(importlib.util.find_spec(m) for m in ("pikepdf", "PIL")):
+        out.append("pikepdf ou Pillow manque : les pièces sont stockées sans "
+                   "compression. pip install -r requirements.txt")
     if not config.conservation():
         out.append("aucun bloc « conservation » : les pièces ne sont jamais purgées "
                    "(RGPD)  [config/instance.json]")

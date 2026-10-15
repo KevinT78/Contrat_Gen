@@ -22,6 +22,7 @@ import time
 import unicodedata
 from urllib.parse import quote, urlparse
 
+import compression
 import config
 import store
 
@@ -31,6 +32,9 @@ CLIENT_OFFICE = "d3590ed6-52b3-4102-aeff-aad2292ab01c"   # client public Office
 # Au-delà : fichier laissé à la RH (vidéo, scan géant). Plafonné par la taille
 # d'un document de la base (16 Mo), comme store.TAILLE_MAX.
 TAILLE_MAX = store.TAILLE_MAX
+# Photo ou PDF plus lourd que TAILLE_MAX : téléchargé quand même, la compression
+# le fait souvent passer. Au-delà de ce plafond, laissé à la RH sans essayer.
+TELECHARGE_MAX = 100 * 1024 * 1024
 
 _TRANSPORT = None   # tests : fn(url, entetes) -> (statut, octets, entetes)
 _session = None
@@ -472,17 +476,27 @@ def _travail(cle_etab, sp_etab, ids, par):
 def _un_salarie(cle_etab, sp_etab, s, enfants, par, deja):
     try:
         if cle(s["id"]) not in deja:
-            pris = fichiers_a_prendre(enfants, s["id"])
-            fichiers = [(b, it["name"], lambda it=it: ouvrir(it))
-                        for b, it in pris if it.get("size", 0) <= TAILLE_MAX]
-            gros = [it for _, it in pris if it.get("size", 0) > TAILLE_MAX]
+            # téléchargés avant importer() : une photo compressée devient un .jpg,
+            # son nom n'est connu qu'après
+            fichiers, gros = [], []
+            for b, it in fichiers_a_prendre(enfants, s["id"]):
+                taille = it.get("size", 0)
+                if taille > TELECHARGE_MAX or (taille > TAILLE_MAX
+                                               and not compression.compressible(it["name"])):
+                    gros.append(it)
+                    continue
+                nom, octets = compression.compresser(it["name"], ouvrir(it), config.compression())
+                if len(octets) > TAILLE_MAX:
+                    gros.append(it)
+                    continue
+                fichiers.append((b, nom, lambda o=octets: o))
             entree = {"par": par, "origine": "sharepoint", "sp_dossier": s["dossier"]}
             if store.importer(champs_de(cle_etab, s), cle(s["id"]), entree, fichiers,
                               racine={"sp_etab": sp_etab}):
                 with _import_lock:
                     _import["crees"] += 1
                     _import["erreurs"] += [
-                        f"{s['nom']} : {it['name']} ({round(it['size'] / 2**20)} Mo) "
+                        f"{s['nom']} : {it['name']} ({round(it.get('size', 0) / 2**20)} Mo) "
                         "non importé, à récupérer à la main" for it in gros]
     except Exception as e:                                  # noqa: BLE001 — on passe au suivant
         with _import_lock:

@@ -270,6 +270,17 @@ def conservation():
     return c if isinstance(c, dict) else {}
 
 
+def compression():
+    """`compression` d'instance.json : "couleur" (défaut) ou "gris". Pièces
+    déposées (formulaire, RH) et importées de SharePoint passent par
+    compression.py. Lecture GARDEE comme conservation()."""
+    try:
+        c = instance().get("compression")
+    except (OSError, ValueError, KeyError):
+        return "couleur"
+    return c if c in ("couleur", "gris") else "couleur"
+
+
 def sharepoint():
     """Le bloc `sharepoint` d'instance.json : le site d'ou le bouton
     « Récupérer les dossiers » importe les salaries deja en poste. Lecture
@@ -672,6 +683,14 @@ def _verifier_mongo():
     # main, sans MongoClient qui resout le DNS d'une adresse mongodb+srv://.
     elif not uri.split("://", 1)[1].split("/", 1)[0].rsplit("@", 1)[-1].strip(", "):
         return {"mongo / secrets": ["MONGO_URI sans adresse de serveur après mongodb://"]}
+    return {}
+
+
+def _verifier_compression():
+    """Clé absente = "couleur"."""
+    c = instance().get("compression", "couleur")
+    if c not in ("couleur", "gris"):
+        return {"compression": [f"attend \"couleur\" ou \"gris\" (reçu : {c!r})"]}
     return {}
 
 
@@ -1181,7 +1200,7 @@ def verifier():
     lisent_societes = {_verifier_placeholders, _verifier_regles}
     lisent_base = lisent_societes | {_verifier_comptes}
     for check in (_verifier_version, _verifier_comptes,
-                  _verifier_conservation, _verifier_sharepoint, _verifier_theme,
+                  _verifier_conservation, _verifier_compression, _verifier_sharepoint, _verifier_theme,
                   _verifier_mails,
                   _verifier_installation,
                   _verifier_derives, _verifier_ids_champs, _verifier_roles, _verifier_placeholders,
