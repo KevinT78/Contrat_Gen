@@ -168,6 +168,23 @@ def main():
         assert elig[remis][1] == 30 and elig[soumise][1] == 10, elig
         assert elig[remis][0] >= 395, "note d'accès prise pour la date d'entrée"
 
+        # purger.py en simulation : sa sortie finit dans le journal systemd du
+        # VPS, donc sur disque. Les dossiers y sont, leurs titulaires non.
+        import contextlib
+        import purger
+        sortie, code = io.StringIO(), None
+        with contextlib.redirect_stdout(sortie):
+            try:
+                purger.main()
+            except SystemExit as e:
+                code = e.code
+        assert code == 1, f"des dossiers à purger : code 1 attendu, pas {code}"
+        sortie = sortie.getvalue()
+        assert remis in sortie and soumise in sortie and recent not in sortie, sortie
+        assert "Lille Grand Place" in sortie, sortie
+        for fuite in PII + ["Temoin", "Sam"]:
+            assert fuite not in sortie, f"« {fuite} » dans la sortie de purger.py"
+
         # jeton de lot émis AVANT la purge
         item = store.lire(remis)
         lot = "/lot/" + store.signer("lot_comptable", remis,

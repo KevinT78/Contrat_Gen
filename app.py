@@ -128,10 +128,14 @@ app.config["MAX_CONTENT_LENGTH"] = 40 * 1024 * 1024
 # toute reponse en attente > 1 Mo (outbuf_overflow) : les deux tampons passent
 # donc au-dessus du plus gros envoi. Son plafond de corps (1 Go par defaut) est
 # lu AVANT Flask : MAX_CONTENT_LENGTH + 1 Mo, pour que Flask garde son message.
-# simplification volontaire : jusqu'a 64 Mo en RAM par connexion en cours, a
-# revoir si la charge monte (les 4 threads ne bornent pas les connexions).
+# Jusqu'a 64 Mo en RAM par connexion ouverte, et les 4 threads ne bornent pas
+# les connexions : connection_limit le fait (au-dela, la suivante attend dans
+# la file du noyau). waitress y compte ses 2 sockets internes : 18 clients au
+# plus, soit ~1,2 Go de tampons au pire. simplification volontaire : a revoir si
+# des visiteurs attendent alors que la RAM du VPS le permettrait.
 _TAMPON = 64 * 1024 * 1024
-WAITRESS = {"threads": 4, "inbuf_overflow": _TAMPON, "outbuf_overflow": _TAMPON,
+WAITRESS = {"threads": 4, "connection_limit": 20,
+            "inbuf_overflow": _TAMPON, "outbuf_overflow": _TAMPON,
             "max_request_body_size": app.config["MAX_CONTENT_LENGTH"] + 2**20}
 app.config.update(
     SESSION_COOKIE_HTTPONLY=True,

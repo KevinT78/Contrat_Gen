@@ -11,6 +11,7 @@ import os
 import re
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 sys.stdout.reconfigure(encoding="utf-8")
@@ -164,9 +165,55 @@ def sous_waitress():
     assert not ouverts, f"waitress a ouvert {len(ouverts)} fichier(s) temporaire(s)"
 
 
+def connexions_bornees():
+    """Chaque connexion peut tenir 64 Mo de tampon en RAM : WAITRESS borne leur
+    nombre. Une fois la limite tenue par des connexions lentes, la suivante
+    attend ; les connexions fermées rendent la place."""
+    import socket
+    import threading
+    import urllib.request
+    from waitress import create_server
+    srv = create_server(app, host="127.0.0.1", port=0, **WAITRESS)
+    threading.Thread(target=srv.run, daemon=True).start()
+    base = f"http://127.0.0.1:{srv.effective_port}"
+    lentes = []
+    try:
+        with urllib.request.urlopen(base + "/login", timeout=5) as r:
+            assert r.status == 200 and r.read()
+        # 18 = 20 - les 2 sockets internes que waitress compte avec les clients :
+        # la limite tout juste atteinte. connection_limit à 21 servirait la suivante.
+        for _ in range(18):
+            s = socket.create_connection(("127.0.0.1", srv.effective_port))
+            s.sendall(b"GET /login HTTP/1.1\r\nHost: x\r\n")   # en-têtes jamais finis
+            lentes.append(s)
+        time.sleep(1)
+        suivante = socket.create_connection(("127.0.0.1", srv.effective_port))
+        lentes.append(suivante)
+        suivante.sendall(b"GET /login HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+        suivante.settimeout(2)
+        try:
+            suivante.recv(64)
+            raise AssertionError("connexion servie au-delà de connection_limit")
+        except TimeoutError:
+            pass
+        while len(lentes) > 1:
+            lentes.pop(0).close()
+        suivante.settimeout(10)
+        reponse = b""
+        while bloc := suivante.recv(65536):   # jusqu'au bout : srv.close() pendant
+            reponse += bloc                    # l'écriture trace une erreur waitress
+        assert reponse.startswith(b"HTTP/1.1 200"), \
+            "la connexion en attente n'a pas été servie une fois les places rendues"
+    finally:
+        for s in lentes:
+            s.close()
+        srv.close()
+
+
 cas("formulaire public : pièce de 700 Ko en base, aucun fichier temporaire", depot_public)
 cas("contrat déposé, contrat signé, accusé DPAE de 700 Ko", lambda: contrat_depose_signe_dpae(depot_public()))
 cas("correction par lien avec pièce de 700 Ko", correction_par_lien)
 cas("import Excel de 700 Ko : lu en mémoire", excel_lourd)
 cas("waitress réel : corps de 700 Ko reçu et export zip servi sans fichier temporaire", sous_waitress)
+cas("waitress réel : connexions bornées, la suivante attend une place", connexions_bornees)
 print("\nZéro disque OK — spool piégé, %TEMP% inchangé sur toutes les routes de dépôt.")

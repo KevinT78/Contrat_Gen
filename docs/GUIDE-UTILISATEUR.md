@@ -472,7 +472,7 @@ Un dossier est proposé à la purge quand il est dans l'un des états listés da
 
 **Le nom du salarié est effacé, lui aussi :** c'est une donnée personnelle. Le dossier ne s'identifie plus que par son identifiant. La fiche reste consultable et indique la date de purge ; elle ne permet plus de savoir de qui il s'agissait.
 
-> **Astuce :** `python purger.py` affiche la même liste en ligne de commande sans rien effacer.
+> **Astuce :** `python purger.py` affiche la même liste en ligne de commande sans rien effacer, par identifiant et établissement, sans le nom des salariés (sa sortie peut finir dans le journal du serveur).
 
 ---
 

@@ -26,9 +26,11 @@ def main():
         cand = conf.get("jours_candidature", conf.get("jours"))
         print(f"{len(elig)} dossier(s) éligible(s) — conservation {conf.get('jours')} j, "
               f"candidatures jamais validées {cand} j :")
+        # Ni nom ni NIR : sur le VPS, cette sortie finit dans le journal systemd,
+        # sur le disque. L'id suffit à retrouver le dossier dans l'app.
         for item, ecoule, duree in elig:
-            libelle = store.nom_complet(item["champs"], prenom_devant=True) or item["id"]
-            print(f"  {item['id']}  {libelle:32}  {store.etat(item):16}  "
+            etab = item["champs"].get("etablissement") or "?"
+            print(f"  {item['id']}  {etab:40}  {store.etat(item):16}  "
                   f"{ecoule} j / {duree} j")
 
     print("\ncollection mails (.eml) : purgés par ancienneté, pas par dossier (aucun uid "
