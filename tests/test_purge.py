@@ -4,32 +4,36 @@
 
 Le test qui vaut tous les autres : dérouler un parcours complet jusqu'à
 RemisComptable, purger, puis affirmer que le nom du salarié (et le NIR, et
-l'adresse) n'apparaît dans AUCUN octet ni AUCUN nom de chemin sous
-config.DONNEES — hors data/mails/, carve-out documenté (purge par ancienneté,
-pas par dossier). Puis rejouer la purge : ni exception, ni changement.
+l'adresse) n'apparaît dans AUCUN document des collections `dossiers` et
+`fichiers` (octets compris) — hors collection `mails`, carve-out documenté
+(purge par ancienneté, pas par dossier). Puis rejouer la purge : ni exception,
+ni changement.
 
-Écrit dans un dossier temporaire, ne touche jamais data/.
+Écrit dans une base vide, rien sur le disque.
 """
 import email
 import io
+import json
 import os
 import re
 import sys
-import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from pymongo.errors import PyMongoError
+
 sys.stdout.reconfigure(encoding="utf-8")
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-TEMP = tempfile.mkdtemp(prefix="contratgen-purge-")
-os.environ["DONNEES"] = TEMP
+from _outils import base_mongo  # noqa: E402
+base_mongo("purge")
 
 import config          # noqa: E402
 import store           # noqa: E402
 from app import app    # noqa: E402
-from _outils import corps_texte  # noqa: E402
+from _outils import compte  # noqa: E402
+compte("rh", "fixture")
+from _outils import corps_texte, mails  # noqa: E402
 
-(config.DONNEES / "soumissions").mkdir(parents=True, exist_ok=True)
 
 PDF = (b"%PDF-1.4\n1 0 obj<</Type/Catalog>>endobj\n%%EOF", "p.pdf")
 NOM, PRENOM = "Delacroix-Nkemba", "Eugénie"
@@ -62,9 +66,9 @@ def soumettre(c, s):
 
 
 def dernier_mail(nom):
-    fichiers = sorted((config.DONNEES / "mails").glob(f"*-{nom}.eml"))
-    assert fichiers, f"aucun mail « {nom} »"
-    msg = email.message_from_bytes(fichiers[-1].read_bytes())
+    envoyes = mails(nom)
+    assert envoyes, f"aucun mail « {nom} »"
+    msg = envoyes[-1]
     return corps_texte(msg)
 
 
@@ -99,27 +103,28 @@ def parcours_jusqua_remis(c):
 def antidater_etat_courant(uid, jours):
     """Recule la date de l'entrée qui a fait entrer dans l'état courant."""
     item = store.lire(uid)
-    d = Path(item["_dir"])
     courant = store.etat(item)
     vieux = (datetime.now(timezone.utc) - timedelta(days=jours)).isoformat(timespec="seconds")
     for e in item["journal"]:
         if e.get("vers") == courant and e.get("de") != e.get("vers"):
             e["le"] = vieux
-    store._ecrire(d, item)
-    store._carte.clear()
+    store.db().dossiers.update_one({"_id": uid}, {"$set": {"journal": item["journal"]}})
 
 
-def octets_et_chemins():
-    """(tous les octets de fichiers, tous les noms de chemins) sous DONNEES,
-    hors data/mails/ (carve-out : purge par ancienneté, pas par dossier)."""
-    blobs, chemins = [], []
-    for p in config.DONNEES.rglob("*"):
-        if "mails" in p.relative_to(config.DONNEES).parts:
-            continue
-        chemins.append(str(p))
-        if p.is_file():
-            blobs.append(p.read_bytes())
-    return blobs, chemins
+def octets_et_textes():
+    """(octets, textes) de tout ce qui reste : chaque document `dossiers` (en
+    JSON), chaque fichier (nom et octets)."""
+    blobs, textes = [], []
+    for d in store.db().dossiers.find():
+        textes.append(json.dumps(d, ensure_ascii=False, default=str))
+    for f in store.db().fichiers.find():
+        textes.append(f["nom"])
+        blobs.append(bytes(f["octets"]))
+    return blobs, textes
+
+
+def brut(uid):
+    return store.db().dossiers.find_one({"_id": uid}), store.db().fichiers.count_documents({"uid": uid})
 
 
 def main():
@@ -163,32 +168,73 @@ def main():
         assert elig[remis][1] == 30 and elig[soumise][1] == 10, elig
         assert elig[remis][0] >= 395, "note d'accès prise pour la date d'entrée"
 
+        # purger.py en simulation : sa sortie finit dans le journal systemd du
+        # VPS, donc sur disque. Les dossiers y sont, leurs titulaires non.
+        import contextlib
+        import purger
+        sortie, code = io.StringIO(), None
+        with contextlib.redirect_stdout(sortie):
+            try:
+                purger.main()
+            except SystemExit as e:
+                code = e.code
+        assert code == 1, f"des dossiers à purger : code 1 attendu, pas {code}"
+        sortie = sortie.getvalue()
+        assert remis in sortie and soumise in sortie and recent not in sortie, sortie
+        assert "Lille Grand Place" in sortie, sortie
+        for fuite in PII + ["Temoin", "Sam"]:
+            assert fuite not in sortie, f"« {fuite} » dans la sortie de purger.py"
+
         # jeton de lot émis AVANT la purge
         item = store.lire(remis)
         lot = "/lot/" + store.signer("lot_comptable", remis,
                                      item.get("lien_comptable_epoch", 0))
         assert app.test_client().get(lot).status_code == 200
 
+        # --- base qui lâche pendant la boucle : un flash, pas un 500, rien
+        #     de purgé, et la boucle reste rejouable (passage suivant) ---
+        vraie_purge, vraie_db = store.purger, store.db
+
+        def perdue():
+            raise PyMongoError("hote-secret.exemple:27017 timed out")
+
+        def purge_sans_base(uid):           # la vraie purge, base coupee dessous
+            store.db = perdue
+            try:
+                return vraie_purge(uid)
+            finally:
+                store.db = vraie_db
+        store.purger = purge_sans_base
+        try:
+            r = c.post("/purger", follow_redirects=True)
+        finally:
+            store.purger = vraie_purge
+        page = r.get_data(as_text=True)
+        assert r.status_code == 200 and "purge incomplète" in page, r.status_code
+        assert "hote-secret" not in page, "le message brut de l'erreur Mongo est affiché"
+        assert not store.lire(remis).get("purge")
+        assert store.db().fichiers.count_documents({"uid": remis}), "pièces effacées malgré l'échec"
+
         # --- la purge, par la route ---
         r = c.post("/purger", follow_redirects=True)
         assert r.status_code == 200 and "2 dossier(s) purgé" in r.get_data(as_text=True), r.text[:400]
 
-        # 1. le nom / NIR / adresse : nulle part sous DONNEES (hors mails)
-        blobs, chemins = octets_et_chemins()
+        # 1. le nom / NIR / adresse : nulle part en base (hors collection mails)
+        blobs, textes = octets_et_textes()
         for aiguille in PII:
-            assert not any(aiguille in ch for ch in chemins), \
-                f"« {aiguille} » dans un nom de chemin"
+            assert not any(aiguille in t for t in textes), \
+                f"« {aiguille} » dans un document, un nom de fichier ou un chemin"
             b = aiguille.encode("utf-8")
             assert not any(b in blob for blob in blobs), f"« {aiguille} » dans un fichier"
         # carve-out assumé : les .eml, eux, portent encore le nom (purge par
         # ancienneté, pas par dossier — cf. purger.py et docs/ADR-stockage.md)
-        eml = b"".join(f.read_bytes() for f in (config.DONNEES / "mails").glob("*.eml"))
+        eml = b"".join(d["eml"] for d in store.db().mails.find())
         assert NOM.encode("utf-8") in eml, \
-            "le carve-out data/mails/ n'est plus vrai — revoir le test et la doc"
+            "le carve-out collection mails n'est plus vrai — revoir le test et la doc"
 
-        # 2. répertoire renommé, marqueur, champs réduits, journal nettoyé
+        # 2. pièces effacées (_versions comprises), marqueur, champs réduits, journal nettoyé
         item = store.lire(remis)
-        assert Path(item["_dir"]).name == f"purge-{remis}"
+        assert store.db().fichiers.count_documents({"uid": remis}) == 0
         assert item["purge"]["jours"] == 30 and item["purge"]["le"]
         assert set(item["champs"]) <= {config.role("etablissement"), config.role("poste"),
                                        config.role("date_debut")}, item["champs"]
@@ -214,37 +260,54 @@ def main():
         assert c.get(f"/dossier/{remis}").status_code == 200
         assert c.get(f"/dossier/{soumise}").status_code == 200
 
-        # 6. soumission purgée : répertoire NON renommé (ULID = pas de PII),
-        #    buckets vides, toujours vue par _scan
-        sitem = store.lire(soumise)
-        assert Path(sitem["_dir"]).name == soumise, "une soumission a été renommée"
-        assert not (Path(sitem["_dir"]) / "FICHE PERSONNELLE").exists()
-        assert soumise in store._scan()
+        # 6. soumission purgée : pièces effacées, toujours listée
+        assert store.db().fichiers.count_documents({"uid": soumise}) == 0
+        assert soumise in {i["id"] for i in store.tout()}
 
         # 7. rejouable : deux passages de plus, ni exception ni changement
         #    (le marqueur `purge` est là → reprise directe aux effacements,
         #    sans re-vérifier l'éligibilité)
-        avant = store._fichier_json(Path(item["_dir"])).read_bytes()
+        avant = brut(remis)
         store.purger(remis)
         store.purger(remis)
-        assert store._fichier_json(Path(store.lire(remis)["_dir"])).read_bytes() == avant, \
-            "un second passage de purge a modifié le dossier"
+        assert brut(remis) == avant, "un second passage de purge a modifié le dossier"
 
         # 8. le dossier récent (15 j) n'a pas été touché — et purger() appelé
         #    directement dessus revérifie l'éligibilité et sort sans rien faire
         #    (garde anti-TOCTOU : la liste de l'écran peut avoir vieilli).
-        avant_recent = store._fichier_json(Path(store.lire(recent)["_dir"])).read_bytes()
+        avant_recent = brut(recent)
+        assert avant_recent[1], "contrôle : le dossier récent a des pièces"
         store.purger(recent)
         ritem = store.lire(recent)
         assert not ritem.get("purge"), "dossier récent purgé à tort"
-        assert store._fichier_json(Path(ritem["_dir"])).read_bytes() == avant_recent, \
+        assert brut(recent) == avant_recent, \
             "purger() a touché un dossier sous le seuil de conservation"
         assert config.identite(ritem["champs"]) == ("Max", "Recent"), ritem["champs"]
+
+        # 9. le dossier bouge entre la lecture et l'écriture de la purge (le
+        #    cabinet ouvre le lot) : la mise à jour conditionnée ne s'applique
+        #    pas, rien n'est effacé ; le passage suivant purge.
+        antidater_etat_courant(recent, 40)
+        vraie = store._eligibilite
+
+        def eligibilite_puis_note(item, conf):
+            store.noter(item["id"], type="acces_lot", par=None)
+            return vraie(item, conf)
+        store._eligibilite = eligibilite_puis_note
+        try:
+            store.purger(recent)
+        finally:
+            store._eligibilite = vraie
+        doc, n = brut(recent)
+        assert "purge" not in doc and n == avant_recent[1], "purgé malgré un journal qui a bougé"
+        store.purger(recent)
+        doc, n = brut(recent)
+        assert doc.get("purge") and n == 0, "le passage suivant n'a pas purgé"
     finally:
         config.instance().pop("conservation", None)
 
     print(f"\nPurge OK — remis {remis} vidé, soumission {soumise} vidée, "
-          f"récent {recent} intact.\n{TEMP}")
+          f"récent {recent} intact sous le seuil, épargné quand il bouge.")
 
 
 if __name__ == "__main__":

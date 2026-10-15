@@ -33,3 +33,6 @@ docs/pdf/img/*
 
 # environnement virtuel (avec le point)
 .venv/
+
+# cache local du graphe graft : régénérable, non versionné (`graft build`).
+/graft/

@@ -6,11 +6,14 @@ solutions déjà en place, celles évoquées dans les guides sans être codées,
 d'autres pistes jamais discutées. Il ne remplace pas [ADR-stockage.md](ADR-stockage.md)
 (le raisonnement derrière le design actuel) ni les guides pas-à-pas.
 
-Contrainte commune à toutes les solutions : l'app est **mono-process** (waitress,
-verrou `store._verrou` intra-process). Toute solution qui suppose plusieurs
-serveurs actifs sur les mêmes données est hors périmètre.
+> **Obsolète depuis la bascule MongoDB (2026-10-14).** Ce comparatif date de septembre et portait sur des solutions de stockage sur disque ou sur drive synchronisé. Toutes les données (dossiers, journal, pièces, contrats, comptes, sociétés) vivent désormais dans une base MongoDB, une par client ; le disque ne garde que `config/`. Le bloc `stockage`, les modes `local` et `dossier`, la variable `DONNEES`, le dossier `data/`, les copies `COMPTA/` et le verrou `.serveur-actif.json` n'existent plus. Les solutions numérotées ci-dessous ne sont plus des options : elles sont conservées comme trace de ce qui a été comparé. La décision en vigueur est dans [ADR-stockage.md](ADR-stockage.md) ; un guide d'hébergement MongoDB Atlas détaillé n'est pas encore écrit.
 
-Rappel de ce que le code sait faire aujourd'hui :
+Contrainte commune à toutes les solutions *(septembre)* : l'app était **mono-process**
+(waitress, verrou `store._verrou` intra-process). Ce n'est plus une contrainte de
+données : le journal s'écrit par compare-and-swap en base, seuls les plafonds de
+rate-limit sont multipliés par le nombre de process.
+
+Rappel de ce que le code savait faire en septembre *(supprimé depuis)* :
 
 - Bloc `stockage` dans `config/instance.json`, deux modes : `local` et `dossier`.
 - `installer.py` choisit le mode à l'installation (3e argument = chemin du dossier

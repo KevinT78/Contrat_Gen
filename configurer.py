@@ -4,6 +4,7 @@
     python configurer.py --assister      # pose les questions pour ce qu'il sait remplir
     python configurer.py compte <ident>  # ajoute ou remplace un compte de connexion
     python configurer.py mail <adresse>  # envoi de test en SMTP, même en mode console
+    python configurer.py importer-societes <fichier.json>  # charge des sociétés en base
 
 Piloté par CONFIG_DIR comme doctor.py. Le bilan est le garde-fou de démarrage
 (config.verifier()) rendu lisible AVANT de lancer le serveur : chaque manque
@@ -12,19 +13,17 @@ personne ne lançait verifier() avant le parcours, et un print cp1252 faisait
 passer ses messages accentués pour un bug d'encodage.
 
 L'assistant ne remplit que ce qui se dicte (adresses, comptes, société et
-établissements, secret). Le balisage des modèles, les rôles et la grille
+établissements). Le balisage des modèles, les rôles et la grille
 restent un travail d'éditeur : il montre où, puis attend qu'on ait corrigé.
 """
 import getpass
 import importlib.util
 import json
 import os
-import secrets
 import sys
 
-from werkzeug.security import generate_password_hash
-
 import config
+import store
 
 sys.stdout.reconfigure(encoding="utf-8")
 sys.stderr.reconfigure(encoding="utf-8")
@@ -35,17 +34,22 @@ if not sys.stdin.isatty():          # réponses par pipe : UTF-8, pas cp1252
 # Chemins depuis la racine de l'INSTANCE, prefixe compris : presque tout vit
 # sous config/, mais pas le modele generique de fiche salarie, verse avec le
 # code. Mettre « config/ » dans le format d'affichage le lui collait aussi.
-FICHIERS = {"secret": "config/instance.json", "compte RH": "config/instance.json",
-            "comptes": "config/instance.json", "mails": "config/instance.json",
+FICHIERS = {"mongo / secrets": "fichier d'environnement .env (écrit par installer.py)",
+            "signature": "fichier d'environnement .env",
+            "SMTP_MOT_DE_PASSE": "fichier d'environnement .env",
+            "compte RH": "en base : python configurer.py compte <identifiant>",
+            "comptes": "en base : python configurer.py compte <identifiant>",
+            "champs": "config/formulaire.json", "mails": "config/instance.json",
             "config_version": "config/instance.json", "derives →": "config/instance.json",
             "templates →": "config/instance.json",
             "poste «": "config/instance.json", "url": "config/instance.json",
-            "stockage": "config/instance.json", "conservation": "config/instance.json",
+            "conservation": "config/instance.json",
             "theme.json": "config/theme.json",
-            "établissements": "config/societes.json",
+            "modèles de mail": "config/mails/",
+            "établissements": "en base : python configurer.py --assister",
             "roles": "config/formulaire.json", "grille": "config/grille.json",
             "fiche salarié": "modeles/fiche_salarie.docx"}
-REPARABLES = ("secret", "stockage", "conservation", "url", "mails", "comptes",
+REPARABLES = ("conservation", "url", "mails", "comptes",
               "compte RH", "établissements")
 
 
@@ -122,28 +126,23 @@ def avertissements():
         out.append("mails.mode = « console » : aucun mail ne part. En production : "
                    "« smtp », après un essai avec `configurer.py mail <adresse>`  "
                    "[config/instance.json]")
-    if config.supabase_actif():
-        out.append("sociétés lues depuis Supabase : un établissement s'ajoute dans "
-                   "la base. societes.json est réécrit tout seul, c'est la copie "
-                   "de secours si Supabase ne répond pas")
     sans_manager = [f"{s['nom']} / {e['nom']}" for s in config.societes()
                     for e in s["etablissements"] if not e.get("manager_email")]
     if sans_manager:
         out.append(f"manager_email absent ({', '.join(sans_manager)}) : le lien de "
                    "correction d'un rejet et l'avis de validation partent à la RH "
-                   "(mails.rh), qui devra transmettre  [config/societes.json]")
+                   "(mails.rh), qui devra transmettre  [écran Établissements]")
     if not m.get("comptable_defaut"):
         if sans_cabinet := [s["nom"] for s in config.societes() if not s.get("comptable_email")]:
             out.append(f"aucun cabinet comptable pour {', '.join(sans_cabinet)} : le mail "
-                       "hebdomadaire (recap.py) échouera  [config/societes.json]")
+                       "hebdomadaire (recap.py) échouera  [écran Établissements]")
+    if q := config.modele_mail_manquant("recap_hebdo"):
+        out.append(f"mails/recap_hebdo.txt {q} : le mail hebdomadaire au cabinet "
+                   "(recap.py) échouera  [config/mails/]")
     url = config.url_publique()
     if url and not url.startswith("https://"):
         out.append(f"url « {url} » n'est pas en https : les liens des mails "
                    "partiraient en clair  [config/instance.json]")
-    if config.sharepoint() and config.stockage().get("mode") == "dossier":
-        out.append("sharepoint + stockage « dossier » : le jeton Microsoft de la RH "
-                   "(DONNEES/sharepoint-jeton.json) part dans le dossier synchronisé. "
-                   "Se déconnecter après chaque import  [config/instance.json]")
     if config.sharepoint() and importlib.util.find_spec("msal") is None:
         out.append("sharepoint déclaré mais le module msal manque : la connexion "
                    "Microsoft échouera. pip install -r requirements-sharepoint.txt")
@@ -163,7 +162,8 @@ def mail(adresse):
     relais = f"{m.get('hote')}:{m.get('port')}"
     if not m.get("hote"):
         print("ÉCHEC — mails.hote vide : renseignez le relais SMTP (hote, port, "
-              "utilisateur, mot_de_passe)  [config/instance.json]")
+              "utilisateur)  [config/instance.json], mot de passe dans "
+              "SMTP_MOT_DE_PASSE  [.env]")
         return 1
     ok, raison = mails.envoyer("nouvelle_soumission", adresse, nom="Test d'envoi Contrat_Gen",
                                id="test", lien=config.url_publique() or "-")
@@ -181,33 +181,41 @@ def compte(ident):
     mdp = _mot_de_passe(f"Mot de passe de « {ident} »")
     if not mdp:
         return 1
-    _ecrire("instance.json", lambda d: {**d, "utilisateurs": {
-        **d.get("utilisateurs", {}), ident: {"mdp_hash": generate_password_hash(mdp)}}})
-    print(f"Compte « {ident} » écrit dans config/instance.json.")
+    try:
+        store.poser_compte(ident, mdp)
+    except RuntimeError as e:     # pas de base : le dire, pas une trace
+        print(f"ÉCHEC — {e}")
+        return 1
+    print(f"Compte « {ident} » écrit en base.")
+    return 0
+
+
+def importer_societes(chemin):
+    """Charge un fichier JSON [{nom, siren, ..., etablissements: [...]}] en base :
+    chaque société remplace celle de même nom, les autres restent."""
+    try:
+        liste = json.loads(open(chemin, encoding="utf-8").read())
+    except (OSError, ValueError) as e:
+        print(f"ÉCHEC — {chemin} illisible : {e}")
+        return 1
+    if not isinstance(liste, list) or not all(
+            isinstance(s, dict) and isinstance(s.get("nom"), str) for s in liste):
+        print(f"ÉCHEC — {chemin} : une liste de sociétés, chacune avec un « nom », est attendue")
+        return 1
+    try:
+        config.importer_societes(liste)
+    except RuntimeError as e:     # pas de base : le dire, pas une trace
+        print(f"ÉCHEC — {e}")
+        return 1
+    print(f"{len(liste)} société(s) écrite(s) en base.")
     return 0
 
 
 # --- assistant : une fonction par sujet réparable -------------------------
 
-def _reparer_secret(_raisons):
-    _ecrire("instance.json", lambda d: {**d, "secret": secrets.token_hex(32)})
-    print("  secret généré.")
-
-
 def _reparer_url(_raisons):
     if url := _demander("Adresse publique de l'app (ex. https://embauche.acme.fr)"):
         _ecrire("instance.json", lambda d: {**d, "url": url})
-
-
-def _reparer_stockage(_raisons):
-    rep = _demander("Où vivent les données ? [1] dans l'instance  "
-                    "[2] dossier synchronisé (OneDrive, SharePoint, Google Drive)")
-    if rep == "1":
-        _ecrire("instance.json", lambda d: {**d, "stockage": {"mode": "local"}})
-    elif rep == "2" and (chemin := _demander(
-            "Chemin du dossier répliqué par le client de synchronisation")):
-        _ecrire("instance.json",
-                lambda d: {**d, "stockage": {"mode": "dossier", "chemin": chemin}})
 
 
 def _reparer_conservation(_raisons):
@@ -272,12 +280,25 @@ def _reparer_etablissements(_raisons):
         soc["etablissements"].append(etab)
         if not _demander("Un autre établissement ? [o/N]").lower().startswith("o"):
             break
-    if soc["etablissements"]:
-        _ecrire("societes.json", lambda d: (d or []) + [soc])
+    etabs = soc.pop("etablissements")
+    try:
+        existe = any(s.get("nom") == nom for s in config.societes())
+    except RuntimeError as e:                   # pas de base
+        print(f"  ÉCHEC — {e}")
+        return
+    if existe:
+        print(f"  « {nom} » existe déjà : établissements ajoutés à cette société, "
+              "sa fiche (SIREN, cabinet, mentions) n'est pas modifiée.")
+    fiche = None if existe else soc
+    for etab in etabs:
+        try:
+            config.sauver_etablissement(None, nom, fiche, etab)
+            fiche = None                        # société créée par le premier
+        except ValueError as e:                 # doublon : les suivants passent quand même
+            print(f"  « {etab['nom']} » ignoré — {e}")
 
 
-REPARATIONS = {"secret": _reparer_secret, "stockage": _reparer_stockage,
-               "conservation": _reparer_conservation,
+REPARATIONS = {"conservation": _reparer_conservation,
                "url": _reparer_url, "mails": _reparer_mails,
                "comptes": _reparer_comptes, "compte RH": _reparer_compte_rh,
                "établissements": _reparer_etablissements}
@@ -314,4 +335,6 @@ if __name__ == "__main__":
         sys.exit(compte(args[1]))
     if len(args) == 2 and args[0] == "mail":
         sys.exit(mail(args[1]))
+    if len(args) == 2 and args[0] == "importer-societes":
+        sys.exit(importer_societes(args[1]))
     sys.exit(__doc__)

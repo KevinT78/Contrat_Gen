@@ -10,19 +10,19 @@ Sort 0 si le plafond est bien atteint malgre l'en-tete tournant.
 """
 import os
 import sys
-import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-os.environ["DONNEES"] = tempfile.mkdtemp(prefix="contratgen-noproxy-")
+from _outils import base_mongo  # noqa: E402
+base_mongo("login_sans_proxy")
 os.environ.pop("PROXIES", None)
 
 import config          # noqa: E402
 import app as module   # noqa: E402
 from app import app    # noqa: E402
+from _outils import compte  # noqa: E402
+compte("rh", "fixture")
 
-for zone in ("soumissions",):
-    (config.DONNEES / zone).mkdir(parents=True, exist_ok=True)
 
 c = app.test_client()
 vus = set()

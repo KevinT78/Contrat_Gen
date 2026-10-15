@@ -12,7 +12,7 @@ config produit vraiment, pas un modèle abstrait. Ce que le test prouve :
     un client qui branche sur l'établissement voit les siens, et un poste en
     texte libre reste couvert par les postes que ses règles nomment ;
   - un établissement en contrat déposé est ignoré, pas compté en échec ;
-  - doctor ne touche pas à data/ : il tourne chez un client en production.
+  - doctor n'écrit rien en base : il tourne chez un client en production.
 """
 import json
 import os
@@ -23,10 +23,10 @@ from pathlib import Path
 sys.stdout.reconfigure(encoding="utf-8")
 BASE = Path(tempfile.mkdtemp(prefix="contratgen-doctor-"))
 os.environ["CONFIG_DIR"] = str(BASE / "config")
-os.environ["DONNEES"] = str(BASE / "data")
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from _outils import base_mongo, societes as poser_societes  # noqa: E402
+base_mongo("doctor")
 
-from werkzeug.security import generate_password_hash          # noqa: E402
 import config                                                 # noqa: E402
 import contrat                                                # noqa: E402
 import doctor                                                 # noqa: E402
@@ -38,12 +38,11 @@ CONF = BASE / "config"
 INSTANCE = {
     "config_version": 1,
     "client": "ACME",
-    "secret": "a" * 64, "url": "http://localhost",
+    "url": "http://localhost",
     "signature": {"mode": "manuel"},
     "mails": {"mode": "console", "hote": "", "port": 587, "utilisateur": "",
-              "mot_de_passe": "", "expediteur": "rh@acme.example", "rh": ["rh@acme.example"],
+              "expediteur": "rh@acme.example", "rh": ["rh@acme.example"],
               "dpae": None, "recap": None, "comptable_defaut": "c@acme.example"},
-    "utilisateurs": {"rh": {"mdp_hash": generate_password_hash("pas-demo")}},
     "motifs_ko": ["Autre"],
     "templates": {"Manager": "contrat.txt"},
 }
@@ -75,8 +74,7 @@ def ecrire(instance=None, modele=MODELE, grille=None, formulaire=None, societes=
         encoding="utf-8")
     (CONF / "formulaire.json").write_text(
         json.dumps(formulaire or FORMULAIRE), encoding="utf-8")
-    (CONF / "societes.json").write_text(
-        json.dumps(societes or SOCIETES), encoding="utf-8")
+    poser_societes(societes or SOCIETES)
     (CONF / "contrats" / "contrat.txt").write_text(modele, encoding="utf-8")
     f = CONF / "grille.json"
     if grille is None:
@@ -434,16 +432,16 @@ def test_modele_absent_marque_refuse_pas_de_crash():
 
 def test_ne_touche_pas_aux_donnees():
     """doctor tourne chez un client en production, sur des dossiers réels."""
-    donnees = BASE / "data"
-    (donnees / "soumissions").mkdir(parents=True, exist_ok=True)
-    (donnees / "soumissions" / "temoin.json").write_text("{}", encoding="utf-8")
-    avant = {p: p.stat().st_mtime_ns for p in donnees.rglob("*")}
-
+    import store
+    store.db().dossiers.insert_one({"_id": "temoin", "zone": "documents", "journal": []})
+    photo = lambda: {c: list(store.db()[c].find())                 # noqa: E731
+                     for c in sorted(store.db().list_collection_names())}
     ecrire({"templates": {"Manager": "contrat.txt", "Leavers": "contrat.txt"}})
+    avant = photo()          # apres ecrire(), qui repose les societes
     doctor.examiner()
 
-    assert {p: p.stat().st_mtime_ns for p in donnees.rglob("*")} == avant, \
-        "doctor a écrit dans data/"
+    assert photo() == avant, "doctor a écrit en base"
+    store.db().dossiers.delete_one({"_id": "temoin"})
 
 
 if __name__ == "__main__":
@@ -454,7 +452,7 @@ if __name__ == "__main__":
                 fn()
                 print(f"  ✓ {nom}")
         print("\ndoctor : couverture vérifiée en produisant les contrats, axes "
-              "dérivés de la config, data/ intact.")
+              "dérivés de la config, base intacte.")
     finally:
         shutil.rmtree(BASE, ignore_errors=True)
         shutil.rmtree(doctor.DOSSIER, ignore_errors=True)

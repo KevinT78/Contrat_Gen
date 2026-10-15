@@ -1,0 +1,3 @@
+# Tests seulement : MONGO_URI=mongomock:// remplace le serveur Mongo par une base en memoire.
+#   pip install -r requirements.txt -r requirements-dev.txt
+mongomock==4.3.0

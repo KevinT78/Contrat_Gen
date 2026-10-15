@@ -4,26 +4,26 @@
 
 La suite existante vérifie les transitions mais n'ouvre jamais GET /dossier :
 une faute de template (fil d'étapes, badge, journal) passait inaperçue.
-Écrit dans un dossier temporaire, ne touche jamais data/.
+Écrit dans une base vide (mongomock), rien sur le disque.
 """
 import os
 import sys
-import tempfile
 from io import BytesIO
 from pathlib import Path
 
 sys.stdout.reconfigure(encoding="utf-8")
 sys.stderr.reconfigure(encoding="utf-8")
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-os.environ["DONNEES"] = tempfile.mkdtemp(prefix="contratgen-ecrans-")
+from _outils import base_mongo  # noqa: E402
+base_mongo("ecrans")
 
 import config          # noqa: E402
 import store           # noqa: E402
 from app import app, _horodatage    # noqa: E402
+from _outils import compte  # noqa: E402
+compte("rh", "fixture")
 
 app.config["PROPAGATE_EXCEPTIONS"] = True
-for zone in ("soumissions",):
-    (config.DONNEES / zone).mkdir(parents=True, exist_ok=True)
 
 ETAB = config.etablissements()[0][0]
 # Un établissement « déposé » : la validation n'y génère pas le contrat, l'écran
@@ -194,10 +194,10 @@ def main():
     ancien = soumettre(c, ETAB_DEPOSE)
     c.post(f"/dossier/{ancien}/valider")
     c.post(f"/dossier/{ancien}/contrat-depose", data={"contrat": piece()}, **fichier)
-    item = store.lire(ancien)
-    item["journal"].append({"de": "ContratPret", "vers": "ContratSigne",
-                            "le": store.maintenant(), "par": "rh"})
-    store._ecrire(Path(item["_dir"]), item)
+    store.db().dossiers.update_one({"_id": ancien}, {
+        "$push": {"journal": {"de": "ContratPret", "vers": "ContratSigne",
+                              "le": store.maintenant(), "par": "rh"}},
+        "$set": {"etat": "ContratSigne"}})
     assert store.etat(store.lire(ancien)) == "ContratSigne"
     texte = ecran(c, f"/dossier/{ancien}")
     frise = etapes(texte)
@@ -253,7 +253,7 @@ def main():
 
     manque = set(store.ETATS) - vus
     assert not manque, f"états jamais rendus : {sorted(manque)}"
-    print(f"ÉCRANS OK — {len(vus)} états rendus, {config.DONNEES}")
+    print(f"ÉCRANS OK — {len(vus)} états rendus")
 
 
 if __name__ == "__main__":

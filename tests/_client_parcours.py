@@ -3,12 +3,13 @@
     python tests/_client_parcours.py <racine-copie> <spec.json>
 
 Lancé en sous-processus par tests/test_clients.py, une fois par client factice.
-Sort 0 si le parcours passe, imprime « PARCOURS OK <client> <secret8> <donnees> ».
+Sort 0 si le parcours passe, imprime « PARCOURS OK <client> <secret8> <base> ».
 """
 import email
 import html
 import io
 import json
+import os
 import re
 import sys
 import zipfile
@@ -17,16 +18,18 @@ from pathlib import Path
 RACINE = sys.argv[1]
 SPEC = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
 sys.path.insert(0, RACINE)
+from _outils import base_mongo  # noqa: E402
+base = os.environ["MONGO_DB"]          # celle du .env de l'instance
+base_mongo(base.removeprefix("test-"))
 sys.stdout.reconfigure(encoding="utf-8")
 
 import config          # noqa: E402
 import doctor          # noqa: E402
 import store           # noqa: E402
 from app import app    # noqa: E402
-from _outils import corps_texte  # noqa: E402
+from _outils import compte, corps_texte, mails  # noqa: E402
+compte("rh", SPEC["password"])
 
-for zone in ("soumissions",):
-    (config.DONNEES / zone).mkdir(parents=True, exist_ok=True)
 
 # instance.json -> url : base des liens de TOUS les mails (app._lien), jamais
 # le Host de la requete -- un Host forge sur le formulaire public ferait
@@ -95,7 +98,7 @@ def couloir(c, etab, mode, poste, attendus):
     if not config.instance().get("fiche_salarie"):
         from docx import Document
         import contrat as moteur
-        doc = Document(str(store.chemin(item["id"], "pieces", noms_fiche[0])))
+        doc = Document(io.BytesIO(store.ouvrir(item["id"], "pieces", noms_fiche[0])))
         texte = "\n".join(p.text for p in moteur.paragraphes(doc))
         assert "{{" not in texte, "fiche générique trouée"
         # etab = « Societe / Etablissement » : la fiche montre l'etablissement
@@ -106,7 +109,7 @@ def couloir(c, etab, mode, poste, attendus):
         from docx import Document
         import contrat as moteur
         nom_ct = store.fichiers_role(item, "contrat", "contrat")[0]
-        doc = Document(str(store.chemin(item["id"], "contrat", nom_ct)))
+        doc = Document(io.BytesIO(store.ouvrir(item["id"], "contrat", nom_ct)))
         texte = "\n".join(p.text for p in moteur.paragraphes(doc))
         assert "{{" not in texte, "contrat troué"
         for a in attendus:
@@ -141,8 +144,6 @@ def couloir(c, etab, mode, poste, attendus):
     from urllib.parse import quote
     assert anonyme.get(f"/lot/{jeton}/fichier/contrat/{quote(signe[0])}").status_code == 404, \
         "contrat signé téléchargeable par le lien du cabinet"
-    copie = store.copier_compta(item)
-    assert not (copie / "CONTRAT" / export).exists(), "contrat signé copié dans COMPTA/"
     lot = html.unescape(anonyme.get(f"/lot/{jeton}").text)
     assert poste in lot and etab in lot, "page du lot comptable : champ lu en dur"
     assert "Contrat signé" not in lot, "contrat signé listé sur la page du lot"
@@ -152,9 +153,9 @@ def couloir(c, etab, mode, poste, attendus):
 def dernier_mail(nom):
     """Corps (To + texte) du dernier .eml « <horodatage>-<serie>-<nom>.eml »
     ecrit par mails.py en mode console -- meme lecture que test_parcours.py."""
-    fichiers = sorted((config.DONNEES / "mails").glob(f"*-{nom}.eml"))
-    assert fichiers, f"aucun mail « {nom} » envoyé"
-    msg = email.message_from_bytes(fichiers[-1].read_bytes())
+    envoyes = mails(nom)
+    assert envoyes, f"aucun mail « {nom} » envoyé"
+    msg = envoyes[-1]
     return msg["To"] + "\n" + corps_texte(msg)
 
 
@@ -208,11 +209,9 @@ def verifier_recap(uids_attendus, nom_attendu):
         recap.main(7)
     except SystemExit as e:
         assert e.code == 0, "le mail recap_hebdo n'est pas parti"
-    fichiers = sorted((config.DONNEES / "mails").glob("*-recap_hebdo.eml"))
-    assert fichiers, "aucun mail recap_hebdo envoyé"
-    corps = "\n".join(
-        corps_texte(email.message_from_bytes(f.read_bytes()))
-        for f in fichiers)
+    envoyes = mails("recap_hebdo")
+    assert envoyes, "aucun mail recap_hebdo envoyé"
+    corps = "\n".join(corps_texte(m) for m in envoyes)
     assert nom_attendu.upper() in corps, f"« {nom_attendu} » absent du récap :\n{corps}"
 
 
@@ -230,7 +229,7 @@ def main():
     verifier_recap(uids, "Nkemba")
 
     inst = config.instance()
-    print(f"PARCOURS OK\t{inst['client']}\t{inst['secret'][:8]}\t{config.DONNEES}")
+    print(f"PARCOURS OK\t{inst['client']}\t{config.secret().decode()[:8]}\t{base}")
 
 
 if __name__ == "__main__":

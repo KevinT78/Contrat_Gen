@@ -2,27 +2,25 @@
 
     python tests/test_pieces_multi.py
 
-Ecrit dans un dossier temporaire, ne touche jamais data/.
+Ecrit dans une base vide (mongomock), rien sur le disque.
 Couvre : nommage indexe (1er = nom nu, retro-compatible), fichiers_role,
 _extraire_role, manquantes (max_fichiers = nombre exige), et le
 chemin dict simple (import du logiciel RH / tests) qui n'a pas .getlist.
 """
 import os
 import sys
-import tempfile
 from io import BytesIO
 from pathlib import Path
 
 sys.stdout.reconfigure(encoding="utf-8")
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-os.environ["DONNEES"] = tempfile.mkdtemp(prefix="contratgen-multi-")
+from _outils import base_mongo  # noqa: E402
+base_mongo("pieces_multi")
 
 from werkzeug.datastructures import FileStorage   # noqa: E402
 import config          # noqa: E402
 import store           # noqa: E402
 
-for zone in ("soumissions",):
-    (config.DONNEES / zone).mkdir(parents=True, exist_ok=True)
 
 PDF = b"%PDF-1.4\n1 0 obj<</Type/Catalog>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF"
 

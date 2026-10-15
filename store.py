@@ -1,33 +1,23 @@
-"""Stockage : le disque est la base. Aucune DB.
+"""Stockage : MongoDB. Aucune donnee salarie sur le disque.
 
-Deux zones (ticket 07) :
-  data/soumissions/<ulid>/soumission.json  + pieces/
-  data/DOSSIERS SALARIES/<Groupe>/<Etablissement>/<Poste>/<NOM Prenom>/
-      dossier.json + FICHE PERSONNELLE/ + CONTRAT/ + _versions/
+Deux collections :
+  dossiers  un document par soumission/dossier, `_id` = ULID.
+            {zone: soumissions|documents, etat, champs, journal, link_epoch, ...}
+  fichiers  un document par piece, octets inline (TAILLE_MAX 15 Mo < 16 Mo BSON).
+            {uid, bucket: pieces|contrat|_versions, nom, octets, le}
 
-Le dossier valide EST l'arborescence que la RH ouvre a la main hors de l'app.
-Les clefs de bucket internes (pieces / contrat / _versions) restent le
-vocabulaire du reste de l'app ; la traduction vers les libelles humains se fait
-dans chemin() seul.
+Le journal append-only fait foi sur l'etat : `etat(item)` le lit toujours.
+Le champ `etat` du document n'est qu'un cache de journal[-1].vers, ecrit dans la
+meme mise a jour atomique, qui sert de filtre de compare-and-swap
+(cf. _journaliser) : deux ecrivains concurrents, meme dans deux process, ne
+perdent plus d'entree de journal.
 
-Le journal append-only de `<zone>.json` fait foi sur l'etat. La presence d'un
-fichier est une preuve corroborante, jamais decisive.
+lire()/tout() rendent le document avec `id` (au lieu de `_id`) et `_fichiers`
+({bucket: [noms]}). Les pieces ne se lisent et ne s'ecrivent que par ce module :
+ouvrir, deposer, poser_octets, fichiers.
 
-SEAM DE STOCKAGE DES PIECES -- rien hors de ce module ne construit un chemin de
-piece ni n'ouvre un fichier de bucket. Pour basculer vers S3 / SharePoint /
-autre le jour ou le stockage sera decide, reimplementer ce petit jeu suffit,
-sans toucher app.py ni contrat.py :
-    chemin(uid, bucket, nom=None)   -- localiser  (interne : seul ce module l'appelle)
-    ouvrir(uid, bucket, nom)        -- lire  -> octets | None
-    deposer(uid, bucket, role, f)   -- ecrire un upload (liste blanche + archivage)
-    poser_octets(uid, bucket, nom, o) -- ecrire des octets qu'on produit
-    fichiers(item, bucket)          -- lister
-La purge (_effacer_pieces) supprime les buckets via chemin(), efface les copies
-compta (data/COMPTA/) et renomme le repertoire du dossier : un backend
-S3/SharePoint doit donc aussi porter une operation de SUPPRESSION, pas seulement
-lire/ecrire/lister.
-Le journal (dossier.json) et son deplacement soumissions->documents (valider())
-restent sur disque local quoi qu'il arrive -- c'est l'etat, pas des pieces.
+Base : MONGO_URI + MONGO_DB (env, sans defaut). MONGO_URI=mongomock:// donne une
+base en memoire propre au process (tests).
 """
 import hashlib
 import hmac
@@ -35,12 +25,16 @@ import json
 import os
 import random
 import re
-import shutil
 import threading
 import time
+import unicodedata
+import zipfile
 from collections import Counter
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+
+from pymongo import MongoClient, ReturnDocument
+from pymongo.errors import DuplicateKeyError
 
 import config
 
@@ -69,7 +63,6 @@ TRANSITIONS = {
 TERMINES = {"RemisComptable", "Parti"}
 
 _B32 = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"          # Crockford, sans I L O U
-_verrous, _garde = {}, threading.Lock()
 
 
 def nouvel_id():
@@ -82,115 +75,82 @@ def maintenant():
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def _verrou(uid):
-    """Exclusion entre threads d'UN SEUL process.
+# --- base ----------------------------------------------------------------
 
-    Servi depuis un serveur multi-process, ce verrou n'exclut plus rien : deux
-    read-modify-write concurrents sur le meme dossier.json (cf. transition())
-    perdent une entree de journal — de la perte de donnees, pas une lenteur.
-
-    `python app.py` demarre donc waitress, mono-process par construction. Mais
-    `app` reste un objet WSGI importable : `gunicorn app:app` ou un waitress
-    multi-process cassent l'invariant SANS RIEN SIGNALER. Il tient a la facon
-    de lancer, pas au code. Y passer exige d'abord un verrou fichier ici
-    (portalocker ; fcntl n'existe pas sous Windows) et un compteur partage pour
-    les pots de rate-limit d'app.py."""
-    with _garde:
-        return _verrous.setdefault(uid, threading.Lock())
+_db = None
+_init = threading.Lock()   # deux threads au premier appel ouvriraient deux bases mongomock
 
 
-# --- chemins -------------------------------------------------------------
+def db():
+    global _db
+    with _init:
+        if _db is None:
+            uri, nom = os.environ.get("MONGO_URI"), os.environ.get("MONGO_DB")
+            if not uri or not nom:
+                raise RuntimeError("base mongo non configurée : MONGO_URI et MONGO_DB "
+                                   "sont requis dans l'environnement")
+            if uri.startswith("mongomock://"):
+                import mongomock
+                client = mongomock.MongoClient()
+            else:
+                client = MongoClient(uri)
+            base = client[nom]
+            if uri.startswith("mongomock://") and os.environ.get("MONGOMOCK_AMORCE"):
+                # Une base mongomock est propre a son process : un sous-process
+                # (serveur de dev, test) y retrouve ses comptes par ce fichier
+                # JSON {collection: [docs]}. Branche mongomock seulement : en
+                # prod, mongomock n'est pas installe et cette variable ne sert a rien.
+                for col, docs in json.loads(Path(os.environ["MONGOMOCK_AMORCE"])
+                                            .read_text(encoding="utf-8")).items():
+                    if docs:          # insert_many refuse une liste vide
+                        base[col].insert_many(docs)
+            base.dossiers.create_index("import_cle", unique=True, sparse=True)
+            base.fichiers.create_index([("uid", 1), ("bucket", 1)])
+            base.societes.create_index("nom", unique=True)
+            _db = base
+    return _db
 
+
+def poser_compte(ident, mdp):
+    """Cree ou remplace un compte de connexion (collection `comptes`)."""
+    from werkzeug.security import generate_password_hash
+    db().comptes.replace_one({"_id": ident}, {"mdp_hash": generate_password_hash(mdp)},
+                             upsert=True)
+
+
+# Racines de l'export zip : l'arborescence que la RH ouvre a la main. Elle est
+# recalculee depuis la config courante a chaque export (jamais stockee) : un
+# etablissement renomme change de dossier au prochain export.
 DOSSIERS = "DOSSIERS SALARIES"
-COMPTA = "COMPTA"
 LEAVERS = "LEAVERS"
-BUCKETS = {"pieces": "FICHE PERSONNELLE", "contrat": "CONTRAT"}  # _versions non traduit
-BUCKETS_COMPTA = BUCKETS                       # meme vocabulaire humain cote compta
+BUCKETS = {"pieces": "FICHE PERSONNELLE", "contrat": "CONTRAT"}  # _versions jamais exporte
 _ILLEGAL = re.compile(r'[<>:"/\\|?*\x00-\x1f]+')
 _ACCENTS = str.maketrans("àâäéèêëîïôöùûüçÀÂÄÉÈÊËÎÏÔÖÙÛÜÇ",
                          "aaaeeeeiioouuucAAAEEEEIIOOUUUC")
 
-_carte = {}   # uid -> Path. cache process : l'app est mono-process par
-              # construction (cf. _verrou) ; index disque si ca change.
-_scan_items = {}   # uid -> dossier.json deja parse par _scan(), consomme par
-                   # tout() dans la foulee. Pas un cache : rempli et lu dans le
-                   # meme appel, jamais invalide. Divise par deux l'I/O de
-                   # /suivi, qui reparse sinon chaque dossier.json (scan + lire).
+
+# --- lecture --------------------------------------------------------------
+
+def _noms(filtre):
+    """{uid: {bucket: [noms tries]}} des fichiers qui matchent, sans les octets."""
+    out = {}
+    for f in db().fichiers.find(filtre, {"uid": 1, "bucket": 1, "nom": 1}):
+        out.setdefault(f["uid"], {}).setdefault(f["bucket"], set()).add(f["nom"])
+    return {u: {b: sorted(n) for b, n in bs.items()} for u, bs in out.items()}
 
 
-def _scan():
-    """Le disque fait foi : le nom du dossier ne porte plus l'ULID, mais
-    dossier.json porte "id". Profondeur fixe, quelques dizaines de ms."""
-    global _scan_items
-    _scan_items = {}
-    carte = {f.parent.name: f.parent
-             for f in (config.DONNEES / "soumissions").glob("*/soumission.json")}
-    for zone in (DOSSIERS, LEAVERS):
-        for f in (config.DONNEES / zone).glob("*/*/*/*/dossier.json"):
-            item = json.loads(f.read_text(encoding="utf-8"))
-            carte[item["id"]] = f.parent
-            _scan_items[item["id"]] = item
-    return carte
-
-
-def dossier_de(uid):
-    """Le repertoire de l'unite, quelle que soit sa zone. None si inconnue."""
-    global _carte
-    d = _carte.get(uid)
-    if d and d.is_dir():      # is_dir, PAS le json : creer_soumission depose des
-        return d              # pieces avant d'ecrire soumission.json
-    _carte = _scan()          # miss, ou dossier deplace a la main par la RH
-    return _carte.get(uid)
-
-
-def _soumission(d):
-    return d.parent == config.DONNEES / "soumissions"
-
-
-def _fichier_json(d):
-    return d / ("soumission.json" if _soumission(d) else "dossier.json")
-
-
-def _rep(item):
-    """Le repertoire d'un item DEJA lu ; lire() l'a pose dans _dir. Le rebatir
-    par zone/uid n'est plus possible."""
-    return Path(item["_dir"])
-
-
-def chemin(uid, bucket, nom=None):
-    """Repertoire d'un bucket de pieces (pieces / contrat / _versions), ou un
-    fichier nomme dedans. None si le dossier est inconnu.
-
-    LE seul endroit hors de ce module ou l'agencement <dossier>/<bucket>/<nom>
-    est construit -- avec deposer() et poser_octets(). Sortir les pieces vers un
-    SharePoint ou un stockage objet se joue ici, sans toucher a app.py."""
-    d = dossier_de(uid)
-    if not d:
-        return None
-    d = d / BUCKETS.get(bucket, bucket)
-    return d / nom if nom else d
-
-
-# --- lecture / ecriture --------------------------------------------------
-
-def lire(uid):
-    d = dossier_de(uid)
-    if not d:
-        return None
-    item = json.loads(_fichier_json(d).read_text(encoding="utf-8"))
-    item["_dir"] = str(d)
-    # etiquette logique desormais, plus un nom de repertoire.
-    item["_zone"] = "soumissions" if _soumission(d) else "documents"
+def _vue(doc, noms):
+    item = dict(doc)
+    item["id"] = item.pop("_id")
+    item["_fichiers"] = noms
     return item
 
 
-def _ecrire(d, item):
-    """temp-puis-rename : jamais de JSON a moitie ecrit."""
-    item = {k: v for k, v in item.items() if not k.startswith("_")}
-    f = _fichier_json(d)
-    tmp = f.with_suffix(".tmp")
-    tmp.write_text(json.dumps(item, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(tmp, f)
+def lire(uid):
+    doc = db().dossiers.find_one({"_id": uid})
+    if not doc:
+        return None
+    return _vue(doc, _noms({"uid": uid}).get(uid, {}))
 
 
 def etat(item):
@@ -199,16 +159,8 @@ def etat(item):
 
 def tout():
     """Collection complete, soumissions + dossiers, la plus recente d'abord."""
-    global _carte
-    _carte = _scan()
-    items = []
-    for uid, d in _carte.items():
-        item = _scan_items.get(uid)               # dossier.json deja parse au scan
-        if item is None:                          # soumission : json non lu au scan
-            item = json.loads(_fichier_json(d).read_text(encoding="utf-8"))
-        item["_dir"] = str(d)
-        item["_zone"] = "soumissions" if _soumission(d) else "documents"
-        items.append(item)
+    noms = _noms({})
+    items = [_vue(d, noms.get(d["_id"], {})) for d in db().dossiers.find()]
     return sorted(items, key=lambda i: config.valeur(i["champs"], "date_debut") or "9999",
                   reverse=False)
 
@@ -218,6 +170,46 @@ def tout():
 SAIN = re.compile(r"[^A-Za-z0-9._-]+")
 EXTENSIONS = {".pdf", ".jpg", ".jpeg", ".png"}
 TAILLE_MAX = 15 * 1024 * 1024
+
+
+def _inserer(uid, bucket, nom, octets):
+    # `le` sert seulement a vider_orphelins ; la derniere version se trouve par
+    # _id (deux ecritures dans la meme seconde sont a egalite sur une date).
+    return db().fichiers.insert_one({"uid": uid, "bucket": bucket, "nom": nom,
+                                     "octets": octets, "le": maintenant()}).inserted_id
+
+
+def _archiver(f):
+    stem, ext = os.path.splitext(f["nom"])
+    db().fichiers.update_one({"_id": f["_id"]}, {"$set": {
+        "bucket": "_versions", "nom": f"{stem}-{int(time.time())}{ext}"}})
+
+
+def _poser(item, bucket, role, fichier, extensions=EXTENSIONS, index=None):
+    """Corps de deposer() sur un item deja en memoire (creer_soumission le
+    pose avant d'inserer le dossier)."""
+    ext = os.path.splitext(fichier.filename or "")[1].lower()
+    if ext not in extensions:
+        raise ValueError(f"format refuse ({ext or 'sans extension'}) : "
+                         + ", ".join(sorted(extensions)))
+    octets = fichier.read(TAILLE_MAX + 1)
+    if len(octets) > TAILLE_MAX:
+        raise ValueError(f"fichier trop lourd (max {TAILLE_MAX // 1024 // 1024} Mo)")
+    if item["zone"] == "soumissions":
+        nom = SAIN.sub("-", role) + (f"_{index}" if index and index > 1 else "") + ext
+        perimes = []
+    else:
+        nom = nom_piece(item, SAIN.sub("-", role), ext, index)
+        # Dossier valide d'avant le renommage : le fichier de meme role est encore
+        # au nom court et cohabiterait avec le nom lisible. Archive comme un re-depot.
+        perimes = [v for v in fichiers_role(item, bucket, role) if v != nom]
+    # Le nouveau d'abord, l'ancien ensuite : jamais de fenetre sans piece.
+    nouveau = _inserer(item["id"], bucket, nom, octets)
+    for f in list(db().fichiers.find({"uid": item["id"], "bucket": bucket,
+                                      "nom": {"$in": [nom, *perimes]},
+                                      "_id": {"$lt": nouveau}}, {"nom": 1})):
+        _archiver(f)
+    return nom
 
 
 def deposer(uid, bucket, role, fichier, extensions=EXTENSIONS, index=None):
@@ -232,73 +224,55 @@ def deposer(uid, bucket, role, fichier, extensions=EXTENSIONS, index=None):
 
     Nom du fichier : technique (`{role}.{ext}`) tant que le dossier est en
     soumission ; lisible (`<Libellé> - NOM Prénom.ext`, cf. nom_piece) une fois
-    validé -- c'est le dossier que la RH ouvre a la main.
+    validé.
     """
-    d = dossier_de(uid)
-    if not d:
+    item = lire(uid)
+    if not item:
         raise ValueError(f"dossier inconnu : {uid}")
-    ext = os.path.splitext(fichier.filename or "")[1].lower()
-    if ext not in extensions:
-        raise ValueError(f"format refuse ({ext or 'sans extension'}) : "
-                         + ", ".join(sorted(extensions)))
-    if _soumission(d):
-        nom_role = SAIN.sub("-", role)
-        if index is not None and index > 1:
-            nom_role = f"{nom_role}_{index}"
-        cible = chemin(uid, bucket, nom_role + ext)
-    else:
-        item = json.loads(_fichier_json(d).read_text(encoding="utf-8"))
-        cible = chemin(uid, bucket, nom_piece(item, SAIN.sub("-", role), ext, index))
-        # Dossier valide d'avant le renommage : le fichier de meme role est encore
-        # au nom court. cible.exists() (plus bas) ne le verrait pas -> il
-        # cohabiterait avec le nom lisible. On l'archive ici, comme un re-depot.
-        for vieux in fichiers_role(item, bucket, role):
-            if vieux != cible.name:
-                p = chemin(uid, bucket, vieux)
-                arch = chemin(uid, "_versions", f"{p.stem}-{int(time.time())}{p.suffix}")
-                arch.parent.mkdir(parents=True, exist_ok=True)
-                shutil.move(str(p), str(arch))
-    cible.parent.mkdir(parents=True, exist_ok=True)
-    # Valider le fichier entrant AVANT de deplacer l'ancien : sinon un re-depot
-    # refuse (trop lourd) laisse le dossier sans piece et l'ancienne copie
-    # valide echouee dans _versions.
-    tmp = cible.with_name(cible.name + ".entrant")
-    fichier.save(str(tmp))
-    if tmp.stat().st_size > TAILLE_MAX:
-        tmp.unlink()
-        raise ValueError(f"fichier trop lourd (max {TAILLE_MAX // 1024 // 1024} Mo)")
-    if cible.exists():
-        vers = chemin(uid, "_versions", f"{cible.stem}-{int(time.time())}{ext}")
-        vers.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(cible), str(vers))
-    os.replace(tmp, cible)
-    return cible.name
+    return _poser(item, bucket, role, fichier, extensions, index)
 
 
 def poser_octets(uid, bucket, nom, octets):
     """Ecrit des octets qu'on produit nous-memes (PDF revenu de l'e-signature).
-    Atomique, sans validation d'upload : la source n'est pas le formulaire
-    public. -> le nom de fichier ecrit."""
-    cible = chemin(uid, bucket, nom)
-    if not cible:
+    Ecrase un fichier de meme nom, sans validation d'upload : la source n'est
+    pas le formulaire public. -> le nom de fichier ecrit."""
+    if not db().dossiers.find_one({"_id": uid}, {"_id": 1}):
         raise ValueError(f"dossier inconnu : {uid}")
-    cible.parent.mkdir(parents=True, exist_ok=True)
-    tmp = cible.with_suffix(cible.suffix + ".tmp")
-    tmp.write_bytes(octets)
-    os.replace(tmp, cible)
-    return cible.name
+    nouveau = _inserer(uid, bucket, nom, octets)
+    db().fichiers.delete_many({"uid": uid, "bucket": bucket, "nom": nom,
+                               "_id": {"$lt": nouveau}})
+    return nom
 
 
 def ouvrir(uid, bucket, nom):
-    """Le contenu d'une piece (octets), ou None si absente. Point de lecture
-    unique -- cf. le SEAM en tete de module."""
-    p = chemin(uid, bucket, nom)
-    return p.read_bytes() if p and p.is_file() else None
+    """Le contenu d'une piece (octets), ou None si absente."""
+    f = db().fichiers.find_one({"uid": uid, "bucket": bucket, "nom": nom},
+                               sort=[("_id", -1)])
+    return bytes(f["octets"]) if f else None
 
 
 def fichiers(item, bucket):
-    d = chemin(item["id"], bucket)
-    return sorted(f.name for f in d.glob("*") if f.is_file()) if d and d.is_dir() else []
+    noms = item.get("_fichiers")
+    if noms is None:
+        noms = _noms({"uid": item["id"]}).get(item["id"], {})
+    return noms.get(bucket, [])
+
+
+def _effacer_fichiers(uid):
+    """Tous les fichiers de l'uid, _versions compris. Idempotent."""
+    db().fichiers.delete_many({"uid": uid})
+
+
+def vider_orphelins():
+    """Fichiers de plus d'une heure sans dossier : un depot ou un import
+    interrompu (arret du serveur) entre les fichiers et insert_one. -> nombre
+    d'uids nettoyes."""
+    limite = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(timespec="seconds")
+    vieux = {f["uid"] for f in db().fichiers.find({"le": {"$lt": limite}}, {"uid": 1})}
+    orph = vieux - set(db().dossiers.distinct("_id", {"_id": {"$in": list(vieux)}}))
+    if orph:
+        db().fichiers.delete_many({"uid": {"$in": sorted(orph)}})
+    return len(orph)
 
 
 # Libelle lisible d'un role de piece. CONTRAINTE : chaque valeur doit se
@@ -312,9 +286,9 @@ LIBELLES_PIECE = {"contrat": "Contrat", "contrat-signe": "Contrat signé",
 
 
 def date_sortie(item):
-    """Date de sortie saisie a l'archivage LEAVERS ('' si le dossier n'est pas
-    Parti). Meme forme que date_remise : la date vit dans le journal, pas un
-    champ a part."""
+    """Date de sortie saisie a l'archivage ('' si le dossier n'est pas Parti).
+    Meme forme que date_remise : la date vit dans le journal, pas un champ a
+    part."""
     return next((e.get("date_sortie", "") for e in reversed(item["journal"])
                 if e.get("vers") == "Parti"), "")
 
@@ -349,9 +323,20 @@ def date_remise(item, repli=True):
     return date.today().isoformat() if repli else ""
 
 
+def nom_complet(champs, prenom_devant=False):
+    """« NOM Prenom » (ou « Prenom NOM ») d'un dossier, ou "". Le nom passe en
+    majuscules seulement quand le FORMULAIRE a un champ prenom, rempli ou non :
+    un champ unique « NOM Prenom » arrive deja compose, le mettre en majuscules
+    efface le prenom (ÉQUIPIER CAMILLE)."""
+    prenom, nom = config.identite(champs)
+    if config.role("prenom") in {c["id"] for c in config.champs()}:
+        nom = nom.upper()
+    parts = (prenom, nom) if prenom_devant else (nom, prenom)
+    return " ".join(p.strip() for p in parts if p and p.strip())
+
+
 def _qui(item):
-    prenom, nom_s = config.identite(item["champs"])
-    return " ".join(p for p in (nom_s.upper(), prenom) if p) or "SANS NOM"
+    return nom_complet(item["champs"]) or "SANS NOM"
 
 
 def _tete(nom):
@@ -387,31 +372,10 @@ def nom_export(item, bucket, nom):
 
 
 def fichiers_compta(item, bucket):
-    """Fichiers d'un bucket partages avec le cabinet (copie COMPTA/, lot) : tout
+    """Fichiers d'un bucket partages avec le cabinet (lot comptable) : tout
     sauf le contrat signe, garde cote RH pour l'instant."""
     return [f for f in fichiers(item, bucket)
             if not (bucket == "contrat" and _extraire_role(f) == "contrat-signe")]
-
-
-def copier_compta(item):
-    """Duplique les pieces dans data/COMPTA/<GROUPE>/<ETABLISSEMENT>/<POSTE>/
-    <NOM PRENOM - id>/{FICHE PERSONNELLE,CONTRAT}/, le dossier que le cabinet
-    recupere (miroite sur un Drive au besoin). Segments en capitales sans accents,
-    fichiers renommes (cf. nom_export). Rejouable : un renvoi ecrase la copie
-    precedente. -> le repertoire."""
-    groupe, etab, poste, qui = _hierarchie(item)
-    dest = (config.DONNEES / COMPTA
-            / _segment_maj(groupe, "DIVERS")
-            / _segment_maj(etab, "SANS ETABLISSEMENT")
-            / _segment_maj(poste, "SANS POSTE")
-            / f'{_segment_maj(qui, item["id"])} - {item["id"]}')
-    for bucket in ("pieces", "contrat"):           # jamais _versions
-        sous = dest / BUCKETS_COMPTA[bucket]
-        sous.mkdir(parents=True, exist_ok=True)
-        for nom_f in fichiers_compta(item, bucket):
-            (sous / nom_export(item, bucket, nom_f)).write_bytes(
-                ouvrir(item["id"], bucket, nom_f))
-    return dest
 
 
 def _extraire_role(nom_fichier):
@@ -447,7 +411,7 @@ def signe_manquant(item):
 
 
 def manquantes(item):
-    """Pieces requises par le schema et absentes du disque.
+    """Pieces requises par le schema et absentes du dossier.
 
     Retourne une liste de dicts {'champ': config}.  `max_fichiers` est le
     nombre exigé : une piece est satisfaite quand son role compte au moins
@@ -455,8 +419,8 @@ def manquantes(item):
     Compatible bool : [] == tout est la.
     """
     # Un dossier purge n'a plus ses pieces (effacees expres) : sans ce garde,
-    # rmtree ferait repasser toutes les pieces requises en « manquantes » et
-    # /suivi afficherait un rouge permanent et faux. Couvre les quatre appelants
+    # toutes les pieces requises repasseraient en « manquantes » et /suivi
+    # afficherait un rouge permanent et faux. Couvre les quatre appelants
     # (suivi, detail, _saisie, _fiche_salarie).
     if item.get("purge") or item.get("import_cle"):     # importe : cf. signe_manquant
         return []
@@ -468,7 +432,31 @@ def manquantes(item):
 
 # --- cycle de vie --------------------------------------------------------
 
-def _deposer_champ(uid, c, fichiers_recus):
+def _journaliser(uid, construire):
+    """Le seul ecrivain du journal. `construire(item frais)` -> (entree, $set,
+    $inc), ou None pour ne rien ecrire. La mise a jour n'est appliquee que si
+    l'etat n'a pas bouge depuis la lecture (filtre sur le cache `etat`) ; sinon
+    on relit et reconstruit : un double clic rejoue la garde de TRANSITIONS sur
+    l'etat frais au lieu d'ecrire deux fois. -> item apres ecriture."""
+    for _ in range(3):
+        item = lire(uid)
+        if item is None:
+            raise ValueError(f"dossier inconnu : {uid}")
+        maj = construire(item)
+        if maj is None:
+            return item
+        entree, pose, inc = maj
+        op = {"$push": {"journal": entree}, "$set": {**pose, "etat": entree["vers"]}}
+        if inc:
+            op["$inc"] = inc
+        doc = db().dossiers.find_one_and_update({"_id": uid, "etat": etat(item)}, op,
+                                                return_document=ReturnDocument.AFTER)
+        if doc:
+            return _vue(doc, item["_fichiers"])
+    raise RuntimeError(f"{uid} : modifié en continu, écriture abandonnée après 3 essais")
+
+
+def _deposer_champ(item, c, fichiers_recus):
     """Depose le(s) fichier(s) recu(s) pour un champ piece_jointe.
 
     `fichiers_recus` peut etre un MultiDict (request.files) ou un simple dict
@@ -483,67 +471,141 @@ def _deposer_champ(uid, c, fichiers_recus):
     for f in recus:
         if f and f.filename:
             rang += 1
-            deposer(uid, "pieces", c["role"], f, index=rang)
+            _poser(item, "pieces", c["role"], f, index=rang)
+
+
+# Longueur maximale d'un chemin DANS le zip : laisse 20 car. au dossier
+# d'extraction avant MAX_PATH (260). Segments a 40 car. : le nom de piece garde
+# au moins 28 car. dans le pire cas (cf. _entrees_zip).
+CHEMIN_MAX = 240
+_RESERVES = re.compile(r"^(con|prn|aux|nul|com\d|lpt\d)(\.|$)", re.I)
 
 
 def _segment(brut, defaut):
     """Un composant de chemin sur : illegaux Windows remplaces, points/espaces
-    de fin otes (NTFS les refuse), 60 car. max (MAX_PATH)."""
-    s = _ILLEGAL.sub("-", str(brut or "")).strip().rstrip(". ")[:60].strip()
-    return s or defaut
-
-
-def _segment_maj(brut, defaut):
-    """Comme _segment, mais capitales sans accents -- l'arbo COMPTA seulement."""
-    return _segment(str(brut or "").translate(_ACCENTS).upper(), defaut)
+    de fin otes (NTFS les refuse) apres troncature a 40 car., nom reserve
+    (CON, NUL...) prefixe."""
+    s = _ILLEGAL.sub("-", str(brut or "")).strip()[:40].rstrip(". ").strip() or defaut
+    return "_" + s if _RESERVES.match(s) else s
 
 
 def _hierarchie(item):
-    """(groupe, etablissement, poste, "NOM Prenom") brut, non segmente.
-    Commun a _dossier_cible (DOSSIERS SALARIES) et copier_compta (COMPTA)."""
+    """(groupe, etablissement, poste, "NOM Prenom") brut, non segmente : les
+    niveaux de l'arborescence d'export."""
     ch = item["champs"]
     cle = config.valeur(ch, "etablissement")
     try:
         groupe, etab = config.groupe(cle), config.etablissement(cle)[1]["nom"]
     except KeyError:                       # etablissement retire de la config
         groupe, etab = "DIVERS", cle
-    prenom, nom = config.identite(ch)
-    qui = " ".join(p for p in (nom.upper(), prenom) if p) or item["id"]
-    return groupe, etab, config.valeur(ch, "poste"), qui
+    return groupe, etab, config.valeur(ch, "poste"), nom_complet(ch) or item["id"]
 
 
-def _dossier_cible(item):
-    """Calcule UNE FOIS, a la validation : renommer un etablissement en config
-    ne deplace donc jamais un dossier deja cree."""
-    groupe, etab, poste, qui = _hierarchie(item)
-    parent = (config.DONNEES / DOSSIERS / _segment(groupe, "DIVERS")
-              / _segment(etab, "SANS ETABLISSEMENT")
-              / _segment(poste, "SANS POSTE"))
-    nom_d = _segment(qui, item["id"])
-    cible = parent / nom_d
-    # Homonyme : sans ce suffixe, shutil.move fusionnerait deux salaries.
-    return cible if not cible.exists() else parent / f"{nom_d} ({item['id'][-4:]})"
+class _Flux:
+    """Cible non positionnable de ZipFile : les octets ecrits attendent d'etre
+    pris par le generateur, le zip n'est jamais entier en memoire."""
+
+    def __init__(self):
+        self._morceaux = []
+
+    def write(self, octets):
+        self._morceaux.append(bytes(octets))
+        return len(octets)
+
+    def flush(self):
+        pass
+
+    def prendre(self):
+        sortie = b"".join(self._morceaux)
+        self._morceaux.clear()
+        return sortie
+
+
+def _nom_fichier(nom, maxi=100):
+    """Nom d'une piece dans le zip : illegaux Windows remplaces, point/espace de
+    fin otes, nom reserve (CON, NUL...) prefixe, `maxi` car. en gardant
+    l'extension."""
+    nom = _ILLEGAL.sub("-", nom).strip().rstrip(". ") or "fichier"
+    if _RESERVES.match(nom):
+        nom = "_" + nom
+    stem, ext = os.path.splitext(nom)
+    return stem[:max(maxi - len(ext), 1)].rstrip(". ") + ext
+
+
+def _entrees_zip(items):
+    """[(chemin, uid, bucket, nom)] de l'export, calcule AVANT le premier octet
+    envoye : une erreur de config devient une 500 propre, pas une archive
+    tronquee. Tri par id : le dossier « nu » d'un homonyme ne change pas quand
+    un nouveau salarie arrive. Les doublons sont compares sans casse ni forme
+    Unicode (l'explorateur Windows fusionne `Martin` et `MARTIN`)."""
+    sortie, bases, noms = [], set(), set()
+
+    def libre(chemin, deja):
+        cle = unicodedata.normalize("NFC", chemin).casefold()
+        return cle if cle not in deja else None
+
+    for item in sorted(items, key=lambda i: i["id"]):
+        if item.get("purge"):
+            continue
+        groupe, etab, poste, qui = _hierarchie(item)
+        base = "/".join((LEAVERS if etat(item) == "Parti" else DOSSIERS,
+                         _segment(groupe, "DIVERS"), _segment(etab, "SANS ETABLISSEMENT"),
+                         _segment(poste, "SANS POSTE"), _segment(qui, item["id"])))
+        if libre(base, bases) is None:
+            base += f" ({item['id'][-4:]})"
+        bases.add(unicodedata.normalize("NFC", base).casefold())
+        for bucket, rep in BUCKETS.items():
+            maxi = min(100, CHEMIN_MAX - len(base) - len(rep) - 7)   # 2 « / » + « (nn) »
+            for nom in fichiers(item, bucket):
+                chemin = f"{base}/{rep}/{_nom_fichier(nom, maxi)}"
+                stem, ext = os.path.splitext(chemin)
+                n = 2
+                while libre(chemin, noms) is None:      # deux noms devenus identiques
+                    chemin, n = f"{stem} ({n}){ext}", n + 1
+                noms.add(unicodedata.normalize("NFC", chemin).casefold())
+                sortie.append((chemin, item["id"], bucket, nom))
+    return sortie
+
+
+def zip_dossiers(items):
+    """Zip en flux (iterable d'octets) de `items` :
+    <DOSSIERS SALARIES|LEAVERS>/<groupe>/<etablissement>/<poste>/<NOM Prenom>/
+    {FICHE PERSONNELLE,CONTRAT}/<piece>. LEAVERS pour l'etat Parti. Un dossier
+    purge n'a plus rien a donner : ignore. Sans `_versions` (anciennes
+    versions : pas pour la RH). Un homonyme au meme poste prend les 4 derniers
+    caracteres de son identifiant. -> (uids dont au moins une piece sort, flux)."""
+    entrees = _entrees_zip(items)
+
+    def flux():
+        sortie = _Flux()
+        with zipfile.ZipFile(sortie, "w", zipfile.ZIP_DEFLATED) as z:
+            for chemin, uid, bucket, nom in entrees:
+                octets = ouvrir(uid, bucket, nom)
+                if octets is None:             # efface entre la liste et la lecture
+                    continue
+                z.writestr(chemin, octets)
+                yield sortie.prendre()
+        yield sortie.prendre()
+    return sorted({e[1] for e in entrees}), flux()
 
 
 def creer_soumission(champs, fichiers_recus):
     uid = nouvel_id()
-    d = config.DONNEES / "soumissions" / uid
-    d.mkdir(parents=True)
-    _carte[uid] = d              # les pieces partent avant soumission.json
     # Version du FORMULAIRE client au moment de la soumission (pas un schema de
     # stockage : rien ne le relit, c'est une trace pour comprendre un vieux
     # dossier si le formulaire a change depuis).
-    item = {"formulaire_version": config.formulaire()["version"], "id": uid,
-            "champs": champs, "link_epoch": 0,
-            "journal": [{"de": None, "vers": "Soumise", "le": maintenant(),
-                         "par": "formulaire"}]}
+    doc = {"_id": uid, "zone": "soumissions", "etat": "Soumise",
+           "formulaire_version": config.formulaire()["version"],
+           "champs": champs, "link_epoch": 0,
+           "journal": [{"de": None, "vers": "Soumise", "le": maintenant(),
+                        "par": "formulaire"}]}
     try:
         for c in config.pieces():
-            _deposer_champ(uid, c, fichiers_recus)
-    except ValueError:              # piece refusee : pas de dossier a moitie ne
-        shutil.rmtree(d, ignore_errors=True)
+            _deposer_champ(_vue(doc, None), c, fichiers_recus)
+        db().dossiers.insert_one(doc)
+    except BaseException:           # piece refusee : pas de dossier a moitie ne
+        _effacer_fichiers(uid)
         raise
-    _ecrire(d, item)
     return uid
 
 
@@ -552,171 +614,122 @@ def creer_soumission(champs, fichiers_recus):
 # (SharePoint) : rien a verifier, rien a classer. Son dossier nait directement
 # a RemisComptable (visible dans /salaries), fichiers sous leur nom d'origine,
 # et n'affiche jamais de piece manquante (cf. manquantes, signe_manquant).
-IMPORT = ".import"     # sous DONNEES, hors de _scan : chantier d'un import en cours
-
-
-def _nom_importe(dest_dir, nom, longueur_finale):
-    """Nom d'origine rendu sur pour Windows, raccourci pour que le chemin
-    FINAL tienne sous 240 car., numerote plutot qu'ecraser un homonyme."""
-    p = Path(_ILLEGAL.sub("-", nom).strip().rstrip(". ") or "fichier")
-    ext = p.suffix[:10]
-    stem = p.stem[:max(20, 240 - longueur_finale - len(ext) - 6)].rstrip(". ")
-    dest, n = dest_dir / f"{stem}{ext}", 2
-    while dest.exists():
-        dest, n = dest_dir / f"{stem} ({n}){ext}", n + 1
-    return dest
-
-
-def vider_imports():
-    """Chantiers laisses par un import interrompu (arret du serveur)."""
-    shutil.rmtree(config.DONNEES / IMPORT, ignore_errors=True)
-
 
 def importer(champs, cle, entree, fichiers, racine=None):
     """Cree le dossier d'un salarie deja en poste, a RemisComptable.
 
     `cle` l'identifie dans sa source : une cle deja importee ne fait rien
-    (rejouable, jamais d'ecrasement). `entree` complete l'entree de journal
-    (par, origine...) ; `racine` va a la racine du dossier, que la purge
-    garde (le journal purge n'en garde que le squelette). `fichiers` = [(bucket, nom, ouvrir)], ouvrir() -> octets.
-    Tout s'ecrit dans DONNEES/.import/<uid> puis est deplace d'un bloc : un
-    echec ne laisse aucun dossier a moitie ne. -> uid, ou None si deja importe."""
-    if any(i.get("import_cle") == cle for i in tout()):
+    (rejouable, jamais d'ecrasement ; l'index unique `import_cle` tranche une
+    course). `entree` complete l'entree de journal (par, origine...) ; `racine`
+    va a la racine du dossier, que la purge garde. `fichiers` = [(bucket, nom,
+    ouvrir)], ouvrir() -> octets. Fichiers d'abord, dossier ensuite : un echec
+    efface les fichiers deja ecrits. -> uid, ou None si deja importe."""
+    if db().dossiers.find_one({"import_cle": cle}, {"_id": 1}):
         return None
     uid = nouvel_id()
     # de == vers, comme noter() : etat() lit "vers", et ni le recap hebdo
     # (est_remise) ni la purge (_entree_etat_courant) n'y voient une remise.
-    item = {"formulaire_version": config.formulaire()["version"], "id": uid,
-            "champs": champs, "link_epoch": 0, "lien_comptable_epoch": 0,
-            "import_cle": cle, **(racine or {}),
-            "journal": [{"de": "RemisComptable", "vers": "RemisComptable",
-                         "le": maintenant(), "type": "import", **entree}]}
-    dst = _dossier_cible(item)
-    tmp = config.DONNEES / IMPORT / uid
+    doc = {"_id": uid, "zone": "documents", "etat": "RemisComptable",
+           "formulaire_version": config.formulaire()["version"],
+           "champs": champs, "link_epoch": 0, "lien_comptable_epoch": 0,
+           "import_cle": cle, **(racine or {}),
+           "journal": [{"de": "RemisComptable", "vers": "RemisComptable",
+                        "le": maintenant(), "type": "import", **entree}]}
+    pris = set()
     try:
-        tmp.mkdir(parents=True)
-        for bucket, nom, ouvrir in fichiers:
-            dest_dir = tmp / BUCKETS[bucket]
-            dest_dir.mkdir(exist_ok=True)
-            _nom_importe(dest_dir, nom, len(str(dst / BUCKETS[bucket]))).write_bytes(ouvrir())
-        _ecrire(tmp, item)
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(tmp), str(dst))
+        for bucket, nom, lire_octets in fichiers:
+            # nom d'origine : sans separateur (il finit dans une URL et un zip),
+            # numerote plutot qu'ecraser un homonyme venu d'un autre sous-dossier
+            nom = _ILLEGAL.sub("-", nom).strip().rstrip(". ") or "fichier"
+            stem, ext = os.path.splitext(nom)
+            n = 2
+            while (bucket, nom) in pris:
+                nom, n = f"{stem} ({n}){ext}", n + 1
+            pris.add((bucket, nom))
+            _inserer(uid, bucket, nom, lire_octets())
+        db().dossiers.insert_one(doc)
+    except DuplicateKeyError:
+        _effacer_fichiers(uid)
+        return None
     except BaseException:
-        shutil.rmtree(tmp, ignore_errors=True)
+        _effacer_fichiers(uid)
         raise
-    _carte[uid] = dst
     return uid
 
 
 def resoumettre(uid, champs, fichiers_recus):
     """Correction apres KO : la MEME soumission repasse a Soumise."""
-    with _verrou(uid):
-        item = lire(uid)
-        d = _rep(item)
-        item["champs"] = champs
-        for c in config.pieces():
-            _deposer_champ(uid, c, fichiers_recus)
-        item["journal"].append({"de": etat(item), "vers": "Soumise",
-                                "le": maintenant(), "par": "formulaire",
-                                "motif": "correction"})
-        _ecrire(d, item)
+    item = lire(uid)
+    for c in config.pieces():
+        _deposer_champ(item, c, fichiers_recus)
+    _journaliser(uid, lambda it: ({"de": etat(it), "vers": "Soumise",
+                                   "le": maintenant(), "par": "formulaire",
+                                   "motif": "correction"}, {"champs": champs}, None))
 
 
 def valider(uid, par):
     """OK de la RH : la soumission devient un dossier salarie (meme ULID)."""
-    with _verrou(uid):
-        item = lire(uid)
-        if item["_zone"] != "soumissions":
+    item = lire(uid)
+    if not item or item["zone"] != "soumissions":
+        raise ValueError("deja un dossier salarie")
+    # Le dossier valide porte des noms lisibles : les pieces du candidat (noms
+    # techniques) sont renommees, comme tout ce qui sera depose/produit ensuite.
+    # Idempotent (un nom deja lisible se re-rend identique).
+    pieces = fichiers(item, "pieces")
+    for nom in pieces:
+        voulu = nom_piece(item, _extraire_role(nom), os.path.splitext(nom)[1], _index_nom(nom))
+        if voulu != nom and voulu not in pieces:
+            db().fichiers.update_many({"uid": uid, "bucket": "pieces", "nom": nom},
+                                      {"$set": {"nom": voulu}})
+
+    def construire(it):
+        if it["zone"] != "soumissions":
             raise ValueError("deja un dossier salarie")
-        src = _rep(item)
-        dst = _dossier_cible(item)
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(src), str(dst))
-        _carte[uid] = dst
-        (dst / "soumission.json").unlink(missing_ok=True)
-        # Le dossier valide = l'arbo que la RH ouvre a la main : les pieces du
-        # candidat (noms techniques) passent en noms lisibles, comme tout ce qui
-        # sera depose/produit ensuite. Idempotent (un nom deja lisible se re-rend
-        # identique). Les vieux dossiers deja valides ne sont pas balayes.
-        pdir = dst / BUCKETS["pieces"]
-        for f in sorted(pdir.glob("*")) if pdir.is_dir() else []:
-            if f.is_file():
-                voulu = f.with_name(nom_piece(item, _extraire_role(f.name),
-                                              f.suffix, _index_nom(f.name)))
-                if voulu != f and not voulu.exists():
-                    f.rename(voulu)
-        item["lien_comptable_epoch"] = 0
-        item["journal"].append({"de": "Soumise", "vers": "ATraiter",
-                                "le": maintenant(), "par": par})
-        _ecrire(dst, item)
+        return ({"de": etat(it), "vers": "ATraiter", "le": maintenant(), "par": par},
+                {"zone": "documents", "lien_comptable_epoch": 0}, None)
+    _journaliser(uid, construire)
 
 
 def archiver(uid, par, date_sortie, motif=""):
-    """Depart du salarie : deplace le dossier de DOSSIERS SALARIES vers LEAVERS/,
-    meme sous-chemin (etablissement/poste/nom) -- la RH ouvre cette arborescence
-    a la main, un simple marquage logique ne lui donnerait pas le dossier
-    LEAVERS qu'elle demande."""
-    with _verrou(uid):
-        item = lire(uid)
-        if etat(item) != "RemisComptable":
-            raise ValueError("seul un dossier remis au comptable peut être archivé")
-        d = _rep(item)
-        if d.is_relative_to(config.DONNEES / LEAVERS):
-            # Rejouable : un echec d'ecriture apres un premier move laisse le
-            # dossier deja sous LEAVERS/ mais encore a RemisComptable -- un
-            # second clic ne redeplace rien, il rejoue juste l'ecriture.
-            dst = d
-        else:
-            try:
-                rel = d.relative_to(config.DONNEES / DOSSIERS)
-            except ValueError:
-                raise ValueError("dossier hors de DOSSIERS SALARIES (déplacé à la main)")
-            dst = config.DONNEES / LEAVERS / rel
-            if dst.exists():                 # homonyme, comme _dossier_cible
-                dst = dst.parent / f"{dst.name} ({uid[-4:]})"
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(d), str(dst))
-            _carte[uid] = dst
-        item["journal"].append({"de": "RemisComptable", "vers": "Parti",
-                                "le": maintenant(), "par": par,
-                                "date_sortie": date_sortie, "motif": motif})
-        _ecrire(dst, item)
+    """Depart du salarie : etat Parti (onglet « Anciens salariés », racine
+    LEAVERS/ de l'export)."""
+    item = lire(uid)
+    if not item or etat(item) != "RemisComptable":
+        raise ValueError("seul un dossier remis au comptable peut être archivé")
+    return transition(uid, "Parti", par, date_sortie=date_sortie, motif=motif)
 
 
 def rejeter(uid, motif, commentaire, par):
-    with _verrou(uid):
-        item = lire(uid)
-        d = _rep(item)
-        item["link_epoch"] = item.get("link_epoch", 0) + 1   # tue l'ancien lien
-        item["journal"].append({"de": etat(item), "vers": "Rejetee",
-                                "le": maintenant(), "par": par,
-                                "motif": motif, "commentaire": commentaire})
-        _ecrire(d, item)
+    _journaliser(uid, lambda it: ({"de": etat(it), "vers": "Rejetee",
+                                   "le": maintenant(), "par": par, "motif": motif,
+                                   "commentaire": commentaire},
+                                  {}, {"link_epoch": 1}))          # tue l'ancien lien
 
 
 def transition(uid, vers, par, **extra):
-    with _verrou(uid):
-        item = lire(uid)
+    def construire(item):
         de = etat(item)
         if vers not in TRANSITIONS.get(de, set()):
             raise ValueError(f"transition interdite : {de} -> {vers}")
-        d = _rep(item)
-        item["journal"].append(_datee({"de": de, "vers": vers,
-                                       "le": maintenant(), "par": par, **extra}))
-        _ecrire(d, item)
-        return item
+        return _datee({"de": de, "vers": vers, "le": maintenant(), "par": par, **extra}), {}, None
+    return _journaliser(uid, construire)
 
 
 def completer_champs(uid, nouveaux):
     """Fusionne des valeurs saisies apres la soumission (saisie RH a la
-    generation du contrat) dans item['champs']. Idempotent, ne journalise pas."""
-    with _verrou(uid):
-        item = lire(uid)
-        d = _rep(item)
-        item["champs"] = {**item["champs"], **{k: v for k, v in nouveaux.items() if v != ""}}
-        _ecrire(d, item)
+    generation du contrat) dans item['champs']. Idempotent, ne journalise pas ;
+    dernier ecrivain gagne, champ par champ."""
+    item = lire(uid)
+    if item is None:
+        raise ValueError("dossier inconnu")
+    pose = {f"champs.{k}": v for k, v in nouveaux.items() if v != ""}
+    if not pose:
         return item
+    doc = db().dossiers.find_one_and_update({"_id": uid}, {"$set": pose},
+                                            return_document=ReturnDocument.AFTER)
+    if doc is None:
+        raise ValueError("dossier inconnu")
+    return _vue(doc, item["_fichiers"])
 
 
 def completer(uid, nouveaux, par, type, vides_seulement=False, effacer=False):
@@ -725,51 +738,60 @@ def completer(uid, nouveaux, par, type, vides_seulement=False, effacer=False):
     l'appelant garde le verrou optimiste) ; `vides_seulement` ne remplit que
     les champs encore vides. Le journal porte les ids des champs, jamais leurs
     valeurs. -> [ids ecrits]."""
-    with _verrou(uid):
-        item = lire(uid)
+    faits = {}
+
+    def construire(item):
         # noter() recopie l'etat : sur un Parti, l'entree masquerait la date de sortie
-        if not item or not item.get("import_cle") or etat(item) != "RemisComptable":
+        if not item.get("import_cle") or etat(item) != "RemisComptable":
             raise ValueError("seul un dossier importé, en poste, se complète ici")
         ch = item["champs"]
-        faits = {k: v for k, v in nouveaux.items()
-                 if (v != "" or effacer) and v != ch.get(k, "")
-                 and not (vides_seulement and ch.get(k))}
-        if faits:
-            item["champs"] = {**ch, **faits}
-            item["journal"].append({"de": etat(item), "vers": etat(item), "le": maintenant(),
-                                    "par": par, "type": type, "champs": sorted(faits)})
-            _ecrire(_rep(item), item)
-        return sorted(faits)
+        faits.clear()
+        faits.update({k: v for k, v in nouveaux.items()
+                      if (v != "" or effacer) and v != ch.get(k, "")
+                      and not (vides_seulement and ch.get(k))})
+        if not faits:
+            return None
+        return ({"de": etat(item), "vers": etat(item), "le": maintenant(),
+                 "par": par, "type": type, "champs": sorted(faits)},
+                # champ par champ : le filtre de _journaliser ne porte que sur
+                # l'etat, un $set du dict entier ecraserait un ecrivain concurrent
+                {f"champs.{k}": v for k, v in faits.items()}, None)
+    _journaliser(uid, construire)
+    return sorted(faits)
 
 
 def noter(uid, **entree):
     """Entree de journal sans changement d'etat (acces au lot, mail parti...)."""
-    with _verrou(uid):
-        item = lire(uid)
-        d = _rep(item)
-        item["journal"].append(_datee({"de": etat(item), "vers": etat(item),
-                                       "le": maintenant(), **entree}))
-        _ecrire(d, item)
+    _journaliser(uid, lambda it: (_datee({"de": etat(it), "vers": etat(it),
+                                          "le": maintenant(), **entree}), {}, None))
 
 
 def bump_epoch(uid, cle):
-    with _verrou(uid):
-        item = lire(uid)
-        d = _rep(item)
-        item[cle] = item.get(cle, 0) + 1
-        _ecrire(d, item)
-        return item[cle]
+    doc = db().dossiers.find_one_and_update({"_id": uid}, {"$inc": {cle: 1}},
+                                            return_document=ReturnDocument.AFTER)
+    if doc is None:
+        raise ValueError("dossier inconnu")
+    return doc[cle]
 
 
 # --- conservation / purge ----------------------------------------------
 #
 # La purge EFFACE les pieces et garde une trace dans le journal. Elle vit dans
-# une requete de l'app (bouton RH), jamais dans un cron : un second process
-# ecrivain casserait l'invariant mono-process (cf. _verrou). purger.py ne fait
-# que LIRE et lister.
+# une requete de l'app (bouton RH) ; purger.py ne fait que LIRE et lister.
 
 _CHAMPS_GARDES = ("etablissement", "poste", "date_debut")   # roles que /suivi lit
 _JOURNAL_GARDE = ("le", "jour", "de", "vers", "par", "type")
+
+
+# Notes de journal qui ne font pas avancer le dossier.
+_TECHNIQUES = {"export", "acces_lot", "mail_echoue", "fiche_echouee"}
+
+
+def derniere_activite(item):
+    """Date de la derniere entree qui n'est pas une note technique : un export
+    ou un mail rate ne remet pas la « derniere activite » de /suivi a zero."""
+    return next((e["le"] for e in reversed(item["journal"])
+                 if e.get("type") not in _TECHNIQUES), item["journal"][0]["le"])
 
 
 def _entree_etat_courant(item):
@@ -813,7 +835,7 @@ def _eligibilite(item, conf):
 
 def eligibles(items=None):
     """[(item, jours_ecoules, duree)] des dossiers purgables. `items` :
-    collection deja scannee (/suivi la passe pour ne pas rescanner)."""
+    collection deja lue (/suivi la passe pour ne pas relire)."""
     conf = config.conservation()
     if not conf.get("apres"):
         return []
@@ -830,70 +852,37 @@ def _journal_nettoye(journal):
     return [{k: e[k] for k in _JOURNAL_GARDE if k in e} for e in journal]
 
 
-def _effacer_pieces(uid, item, d):
-    """Effacements idempotents : chacun encaisse son OSError sans arreter les
-    suivants. Le renommage du repertoire vient EN DERNIER -- c'est l'operation
-    la plus susceptible d'echouer (Explorateur ouvert, OneDrive en upload ->
-    WinError 32) ; un echec ne laisse alors que le nom, rejouable."""
-    sur_soumission = _soumission(d)
-    for nom in ("dossier.tmp", "soumission.tmp"):
-        try:
-            (d / nom).unlink()
-        except OSError:
-            pass
-    for bucket in ("pieces", "contrat", "_versions"):
-        cible = chemin(uid, bucket)            # traduction des libelles via le seam
-        if cible:
-            shutil.rmtree(cible, ignore_errors=True)
-    # Zone documents seulement : TOUTES les copies compta (un renommage de
-    # societe entre remettre et renvoyer en cree deux). compta/ n'est pas un
-    # bucket de dossier -- meme chemin construit en dur que copier_compta().
-    if not sur_soumission:
-        for copie in (config.DONNEES / COMPTA).glob(f"**/* - {uid}"):
-            shutil.rmtree(copie, ignore_errors=True)
-    # Zone soumissions : le repertoire est nomme par l'ULID (aucune PII) et
-    # _soumission() teste le parent -- ne rien renommer ni supprimer.
-    if sur_soumission or d.name == f"purge-{uid}":
-        return
-    # Le nom du repertoire EST une donnee personnelle (« NOM Prenom »).
-    try:
-        cible = d.parent / f"purge-{uid}"
-        d.rename(cible)
-        _carte[uid] = cible
-    except OSError:
-        pass
-
-
 def purger(uid):
     """Efface les pieces d'un dossier eligible, garde le journal. Rejouable :
     un second passage ne leve pas et ne change rien.
 
-    Marqueur `purge` ecrit AVANT tout effacement -- c'est le SEUL point de
-    reprise : s'il est deja la, on reprend directement aux effacements. Sinon
-    on REVÉRIFIE l'eligibilite (l'ecran de confirmation a pu vieillir) et on
-    sort sans rien toucher si le dossier n'y est plus."""
-    with _verrou(uid):
-        item = lire(uid)
-        if not item:
+    Le marqueur `purge` est pose AVANT l'effacement, sous condition que le
+    dossier n'ait pas bouge depuis la lecture (journal de meme longueur) : un
+    renvoi ou un abandon entre-temps a pu le rendre ineligible. Marqueur deja
+    la = reprise directe a l'effacement."""
+    item = lire(uid)
+    if not item:
+        return
+    if not item.get("purge"):
+        elig = _eligibilite(item, config.conservation())
+        if not elig:
             return
-        d = _rep(item)
-        if not item.get("purge"):
-            elig = _eligibilite(item, config.conservation())
-            if not elig:
-                return
-            courant = etat(item)
-            item["champs"] = {config.role(r): config.valeur(item["champs"], r)
-                              for r in _CHAMPS_GARDES
-                              if config.valeur(item["champs"], r)}
-            item["journal"] = _journal_nettoye(item["journal"]) + [
-                {"de": courant, "vers": courant, "le": maintenant(),
-                 "par": "systeme", "type": "purge"}]
-            # sinon un jeton de moins de 30 j reste valide sur un dossier vide.
-            item["link_epoch"] = item.get("link_epoch", 0) + 1
-            item["lien_comptable_epoch"] = item.get("lien_comptable_epoch", 0) + 1
-            item["purge"] = {"le": maintenant(), "jours": elig[1]}
-            _ecrire(d, item)
-        _effacer_pieces(uid, item, d)
+        courant = etat(item)
+        champs = {config.role(r): config.valeur(item["champs"], r)
+                  for r in _CHAMPS_GARDES if config.valeur(item["champs"], r)}
+        journal = _journal_nettoye(item["journal"]) + [
+            {"de": courant, "vers": courant, "le": maintenant(),
+             "par": "systeme", "type": "purge"}]
+        db().dossiers.update_one(
+            {"_id": uid, "purge": {"$exists": False},
+             "journal": {"$size": len(item["journal"])}},
+            # epochs : sinon un jeton de moins de 30 j reste valide sur un dossier vide
+            {"$set": {"champs": champs, "journal": journal, "etat": courant,
+                      "purge": {"le": maintenant(), "jours": elig[1]}},
+             "$inc": {"link_epoch": 1, "lien_comptable_epoch": 1}})
+        if not db().dossiers.find_one({"_id": uid, "purge": {"$exists": True}}, {"_id": 1}):
+            return          # le dossier a bouge : rien n'est efface, le prochain clic revérifie
+    _effacer_fichiers(uid)
 
 
 # --- liens signes (ticket 08/09) -----------------------------------------

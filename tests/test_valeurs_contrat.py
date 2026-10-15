@@ -37,6 +37,8 @@ TMP = Path(tempfile.mkdtemp(prefix="contratgen-valeurs-"))
 CLIENT = TMP / "config"
 (CLIENT / "contrats").mkdir(parents=True)
 (CLIENT / "mails").mkdir()
+for _m in ("nouvelle_soumission", "demande_validee", "rejet", "rappel_dpae", "recap_hebdo"):
+    (CLIENT / "mails" / f"{_m}.txt").write_text("Objet: x\n\nBonjour", encoding="utf-8")
 
 # --- la config fabriquee ---------------------------------------------------
 #
@@ -110,11 +112,9 @@ FORMULAIRE = {
 
 INSTANCE = {
     "client": "Boulangerie Mistral — RH",
-    "secret": "0" * 64,
     "url": "https://embauche.mistral.test",
     "mails": {"mode": "console", "expediteur": "rh@mistral.test",
               "rh": ["rh@mistral.test"], "comptable_defaut": "cabinet-a@example.test"},
-    "utilisateurs": {"rh": {"mdp_hash": "pbkdf2:sha256:1000$x$" + "0" * 64}},
     "motifs_ko": ["Pièce illisible"],
     # Ordre significatif : la premiere regle dont TOUS les « quand » collent gagne.
     # Les cles de « quand » sont des ID DE CHAMPS du formulaire du client (ici
@@ -167,17 +167,20 @@ MODELES = {
 
 (CLIENT / "instance.json").write_text(json.dumps(INSTANCE, ensure_ascii=False), encoding="utf-8")
 (CLIENT / "formulaire.json").write_text(json.dumps(FORMULAIRE, ensure_ascii=False), encoding="utf-8")
-(CLIENT / "societes.json").write_text(json.dumps(SOCIETES, ensure_ascii=False), encoding="utf-8")
+(CLIENT / "societes.amorce.json").write_text(json.dumps(SOCIETES, ensure_ascii=False), encoding="utf-8")
 (CLIENT / "grille.json").write_text(json.dumps(GRILLE, ensure_ascii=False), encoding="utf-8")
 for nom, corps in MODELES.items():
     (CLIENT / "contrats" / nom).write_text(corps, encoding="utf-8")
 
 # CONFIG_DIR AVANT l'import : config.py le lit au chargement du module.
 os.environ["CONFIG_DIR"] = str(CLIENT)
-os.environ["DONNEES"] = str(TMP / "data")
+from _outils import base_mongo  # noqa: E402
+base_mongo("valeurs_contrat")      # CONFIG_DIR posé : charge les SOCIETES ci-dessus
 
 import config    # noqa: E402
 import contrat   # noqa: E402
+from _outils import compte  # noqa: E402
+compte("rh", "fixture")
 
 
 def saisie(**over):

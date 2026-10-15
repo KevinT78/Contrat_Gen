@@ -2,32 +2,90 @@
 fichiers sous config/, jamais en code.
 
 Un client = une copie de ce dépôt. `python installer.py "<Client>"` remet
-config/ à blanc et génère les secrets ; on remplit ensuite societes.json,
-instance.json et on dépose les .docx.
+config/ à blanc et écrit les secrets dans un fichier d'environnement ; on
+remplit ensuite instance.json, les sociétés en base (configurer.py) et on
+dépose les .docx. Les secrets ne vivent jamais dans config/ (cf. SECRETS).
 """
 import json
 import os
 import re
-import threading
+import sys
 import time
-import urllib.error
-import urllib.request
 from pathlib import Path
-from urllib.parse import quote
+
+from pymongo.errors import DuplicateKeyError, PyMongoError
 
 from apparence import resoudre
 
 RACINE = Path(__file__).parent
+
+
+def _est_env(a):
+    return a == "--env" or a.startswith("--env=")
+
+
+def _charger_env(argv):
+    """`--env <fichier>` (ou `--env=<fichier>`) sur la ligne de n'importe quel
+    script (app, recap, configurer, doctor...) : charge le .env de l'instance
+    ecrit par installer.py. Ici parce que config est importe avant tout le reste
+    et que CONFIG_DIR doit etre connu avant CLIENT ; l'option est retiree d'argv,
+    chaque script lit ses propres arguments comme avant.
+
+    Une variable deja posee et non vide l'emporte sur le fichier (systemd,
+    PowerShell, surcharge ponctuelle). Une ligne = CLE=valeur coupee au premier
+    « = », espaces autour retires, une paire de guillemets englobante retiree,
+    rien d'autre : la meme lecture sous Linux et Windows. Une ligne illisible
+    arrete tout, sans jamais afficher son contenu (elle peut porter un secret)."""
+    i = next((i for i, a in enumerate(argv) if _est_env(a)), None)
+    if i is None:
+        return
+    if argv[i] == "--env":
+        if i + 1 >= len(argv):
+            raise SystemExit("--env attend le chemin du fichier .env de l'instance")
+        chemin = Path(argv[i + 1])
+        del argv[i:i + 2]
+    else:
+        chemin = Path(argv.pop(i).split("=", 1)[1])
+    if any(_est_env(a) for a in argv):
+        raise SystemExit("--env donné deux fois : un seul fichier par instance")
+    try:
+        # utf-8-sig : un .env retouche dans le Bloc-notes peut commencer par un BOM
+        lignes = chemin.read_text(encoding="utf-8-sig").splitlines()
+    except OSError as e:
+        raise SystemExit(f"--env : {chemin} illisible ({e.strerror})")
+    except UnicodeDecodeError:
+        raise SystemExit(f"--env : {chemin} n'est pas en UTF-8, réenregistrez-le en UTF-8")
+    for n, ligne in enumerate(lignes, 1):
+        if not ligne.strip() or ligne.lstrip().startswith("#"):
+            continue
+        cle, egal, valeur = (x.strip() for x in ligne.partition("="))
+        if not egal or not cle:
+            raise SystemExit(f"--env : {chemin}, ligne {n} : attendu CLE=valeur")
+        if len(valeur) >= 2 and valeur[0] == valeur[-1] and valeur[0] in "\"'":
+            valeur = valeur[1:-1]
+        if not os.environ.get(cle):
+            os.environ[cle] = valeur
+        elif os.environ[cle] != valeur:
+            # La base d'un autre client restee dans le shell recevrait la
+            # config de celui-ci. Le nom seul : la valeur peut etre un secret.
+            print(f"! --env : {cle} déjà posé dans l'environnement avec une autre "
+                  f"valeur que {chemin} — c'est celle de l'environnement qui sert",
+                  file=sys.stderr)
+
+
+_charger_env(sys.argv)
 CLIENT = Path(os.environ.get("CONFIG_DIR", RACINE / "config"))
 
-SECRET_A_INSTALLER = "REMPLACER-A-L-INSTALLATION"
+# Lus dans l'environnement, jamais dans config/ ni en base : config/ se copie,
+# se versionne et se montre au client ; un secret n'y a pas sa place.
+SECRETS = {"SECRET_KEY": "clé de session et de signature des liens",
+           "MONGO_URI": "adresse de la base", "MONGO_DB": "nom de la base de ce client"}
 MDP_PAR_DEFAUT = "demo"          # l'ancien mot de passe de démo — refusé au démarrage
 
 # Version du FORMAT de config/, pas du produit. Le code est un paquet versionne,
 # config/ vit chez le client : une config ecrite pour un format qu'on ne
 # comprend plus doit refuser de demarrer en disant quoi faire, pas se faire
-# reecrire dans le dos. Exception : avec un bloc `supabase`, societes.json est
-# la copie de secours, reecrite apres chaque lecture reussie.
+# reecrire dans le dos.
 CONFIG_VERSION = 1
 
 # Cache simple plutot que lru_cache : `recharger()` a besoin de reposer
@@ -50,317 +108,57 @@ def formulaire():
     return _lire("formulaire.json")
 
 
-# Supabase, quand instance.json a un bloc `supabase` : source des societes.
-# Relu au plus toutes les 2 minutes. Une panne ne retente pas a chaque page :
-# 30 s sur la copie locale. `_TRANSPORT_SUPABASE` est le seul point d'injection
-# des tests, sur le modele de signature._TRANSPORT.
-_SUPABASE_TTL = 120
-_SUPABASE_REPRISE = 30
-_SUPABASE_ESSAI = None          # None : jamais tente. Un monotonic() a 0
-_SUPABASE_OK = False            # sauterait la premiere lecture au demarrage.
-_verrou_societes = threading.Lock()
-_TRANSPORT_SUPABASE = None      # (methode, url, headers) -> (statut, bytes)
-
-
-def supabase_actif():
-    """True si instance.json designe un projet Supabase (url + cle)."""
-    return _bloc_supabase() is not None
-
-
-def _bloc_supabase():
-    try:
-        b = instance().get("supabase")
-    except (OSError, ValueError, KeyError, TypeError):
-        return None
-    if not isinstance(b, dict):
-        return None
-    url = b.get("url") if isinstance(b.get("url"), str) else ""
-    cle = b.get("cle") if isinstance(b.get("cle"), str) else ""
-    url, cle = url.strip().rstrip("/"), cle.strip()
-    if not url or not cle:
-        return None
-    return url, cle
-
-
-def _appel_supabase(url, cle, methode="GET", corps=None):
-    entetes = {"apikey": cle, "Authorization": f"Bearer {cle}",
-               "Accept": "application/json"}
-    data = None
-    if corps is not None:
-        entetes["Content-Type"] = "application/json"
-        entetes["Prefer"] = "return=representation"
-        data = json.dumps(corps, ensure_ascii=False).encode()
-    if _TRANSPORT_SUPABASE:
-        statut, brut = _TRANSPORT_SUPABASE(methode, url, entetes, data)
-    else:                                                    # pragma: no cover
-        req = urllib.request.Request(url, data=data, headers=entetes, method=methode)
-        try:
-            with urllib.request.urlopen(req, timeout=8) as r:
-                statut, brut = r.status, r.read()
-        except urllib.error.HTTPError as e:
-            statut, brut = e.code, e.read()
-    if statut == 409:
-        raise ValueError("Ce nom est déjà utilisé.")
-    if statut >= 300:
-        raise RuntimeError(f"HTTP {statut}")
-    return brut
-
-
-def _objet(v):
-    if isinstance(v, dict):
-        return v
-    if isinstance(v, str) and v.strip():
-        try:
-            o = json.loads(v)
-        except json.JSONDecodeError:
-            return {}
-        return o if isinstance(o, dict) else {}
-    return {}
-
-
-def _forme_etablissement(e):
-    etab = {"nom": e["nom"]}
-    if (e.get("groupe") or "").strip():
-        etab["groupe"] = e["groupe"].strip()
-    etab["siret"] = e.get("siret") or ""
-    etab["manager_email"] = e.get("manager_email") or ""
-    if (e.get("contrat") or "").strip() and e["contrat"].strip() != "genere":
-        etab["contrat"] = e["contrat"].strip()
-    etab["mentions"] = _objet(e.get("mentions"))
-    return etab
-
-
-def _forme_societes(lignes):
-    """Lignes PostgREST -> la meme liste que societes.json."""
-    lignes = sorted(lignes, key=lambda s: (s.get("ordre") or 0, s.get("nom") or ""))
-    out = []
-    for s in lignes:
-        etabs = sorted(s.get("etablissements") or [],
-                       key=lambda e: (e.get("ordre") or 0, e.get("nom") or ""))
-        out.append({"nom": s["nom"], "siren": s.get("siren") or "",
-                    "comptable_email": s.get("comptable_email") or "",
-                    "mentions": _objet(s.get("mentions")),
-                    "etablissements": [_forme_etablissement(e) for e in etabs]})
-    return out
-
-
-def _societes_utilisables(data):
-    """Une reponse vide ou tronquee ne doit pas ecraser la copie locale :
-    verifier() refuserait alors de demarrer, et le dernier bon fichier aurait
-    disparu."""
-    if not isinstance(data, list) or not data:
-        return False
-    for s in data:
-        if not isinstance(s, dict) or not (s.get("nom") or "").strip():
-            return False
-        etabs = s.get("etablissements")
-        if not isinstance(etabs, list):
-            return False
-        if any(not isinstance(e, dict) or not (e.get("nom") or "").strip() for e in etabs):
-            return False
-    return any(s["etablissements"] for s in data)
-
-
-def _ecrire_secours_societes(data):
-    dest = CLIENT / "societes.json"
-    texte = json.dumps(data, ensure_ascii=False, indent=2) + "\n"
-    if dest.exists() and dest.read_text(encoding="utf-8") == texte:
-        return False
-    tmp = dest.with_suffix(".json.tmp")
-    tmp.write_text(texte, encoding="utf-8")
-    os.replace(tmp, dest)
-    return True
-
-
-def _societes_distantes(url, cle):
-    select = ("nom,siren,comptable_email,mentions,ordre,"
-              "etablissements(nom,siret,groupe,manager_email,contrat,mentions,ordre)")
-    adresse = f"{url}/rest/v1/societes?select={quote(select, safe='(),')}&order=ordre.asc"
-    lignes = json.loads(_appel_supabase(adresse, cle))
-    if not isinstance(lignes, list):
-        raise RuntimeError("réponse inattendue")
-    return _forme_societes(lignes)
-
-
-def _rafraichir_societes(url, cle):
-    """Met a jour le cache et la copie locale. -> la liste servie, toujours."""
-    global _SUPABASE_ESSAI, _SUPABASE_OK
-    _SUPABASE_ESSAI = time.monotonic()
-    try:
-        distant = _societes_distantes(url, cle)
-    except Exception as e:                       # noqa: BLE001 — repli sur le fichier
-        _SUPABASE_OK = False
-        print(f"[supabase] lecture impossible ({type(e).__name__}: {e}), "
-              "copie locale conservée", flush=True)
-        return _lire("societes.json")
-    if not _societes_utilisables(distant):
-        _SUPABASE_OK = False
-        print("[supabase] réponse inutilisable, copie locale conservée", flush=True)
-        return _lire("societes.json")
-    _SUPABASE_OK = True
-    _CACHE["societes.json"] = distant
-    try:
-        if _ecrire_secours_societes(distant):
-            print("[supabase] copie locale des sociétés mise à jour", flush=True)
-    except OSError as e:
-        print(f"[supabase] copie locale non écrite ({e})", flush=True)
-    return distant
+_SOCIETES_TTL = 60
+_societes_lu = 0.0
 
 
 def societes():
-    """Societes et etablissements.
+    """Societes et etablissements : la collection `societes`, triee par `ordre`,
+    sans `_id` ni `ordre` : [{nom, siren, comptable_email, mentions,
+    etablissements: [{nom, siret, groupe?, manager_email, contrat?, mentions}]}].
 
-    Sans bloc `supabase` : societes.json. Avec un bloc : Supabase est la source,
-    societes.json la copie de secours (ecrasee apres une lecture reussie, gardee
-    si Supabase ne repond pas ou renvoie une liste vide)."""
-    bloc = _bloc_supabase()
-    if not bloc:
-        return _lire("societes.json")
-    with _verrou_societes:
-        maintenant = time.monotonic()
-        if (_SUPABASE_OK and "societes.json" in _CACHE and _SUPABASE_ESSAI is not None
-                and maintenant - _SUPABASE_ESSAI < _SUPABASE_TTL):
-            return _CACHE["societes.json"]
-        if (_SUPABASE_ESSAI is not None and not _SUPABASE_OK
-                and maintenant - _SUPABASE_ESSAI < _SUPABASE_REPRISE):
-            return _lire("societes.json")
-        return _rafraichir_societes(*bloc)
-
-
-def _oublier_societes():
-    """La prochaine lecture retente Supabase. A appeler apres une ecriture."""
-    global _SUPABASE_ESSAI, _SUPABASE_OK
-    with _verrou_societes:
-        _CACHE.pop("societes.json", None)
-        _SUPABASE_ESSAI, _SUPABASE_OK = None, False
+    Cache de _SOCIETES_TTL secondes, vide a chaque ecriture de l'app. Le delai
+    borne deux retards : une lecture lancee avant une ecriture qui repose
+    l'ancienne liste apres l'invalidation, et un import fait par un autre
+    process (configurer.py) pendant que l'app tourne."""
+    global _societes_lu
+    if "societes" not in _CACHE or time.monotonic() - _societes_lu > _SOCIETES_TTL:
+        import store      # store importe config : import local, cycle sinon
+        _CACHE["societes"] = [
+            {k: v for k, v in s.items() if k != "ordre"}
+            for s in store.db().societes.find({}, {"_id": 0}).sort("ordre", 1)]
+        _societes_lu = time.monotonic()
+    return _CACHE["societes"]
 
 
-def _filtre(colonne, valeur):
-    return f"{colonne}=eq.{quote(str(valeur), safe='')}"
-
-
-def _societe_distante(url, cle, nom):
-    """{'id', 'etablissements': [{'id','nom','ordre'}]} ou None."""
-    select = "id,etablissements(id,nom,ordre)"
-    adresse = (f"{url}/rest/v1/societes?select={quote(select, safe='(),')}"
-               f"&{_filtre('nom', nom)}")
-    lignes = json.loads(_appel_supabase(adresse, cle))
-    if not isinstance(lignes, list) or not lignes:
-        return None
-    return lignes[0]
-
-
-def _corps_etablissement(etab, societe_id, ordre):
-    return {"societe_id": societe_id, "nom": etab["nom"],
-            "siret": etab.get("siret") or "", "groupe": etab.get("groupe") or "",
-            "manager_email": etab.get("manager_email") or "",
-            "contrat": etab.get("contrat") or "",
-            "mentions": etab.get("mentions") or {}, "ordre": ordre}
-
-
-def _sauver_distant(origine, societe_nom, societe, etablissement):
-    url, cle = _bloc_supabase()
-    if origine is None:
-        ligne = _societe_distante(url, cle, societe_nom)
-        if ligne is None:
-            if not societe:
-                raise ValueError("Société inconnue.")
-            cree = json.loads(_appel_supabase(
-                f"{url}/rest/v1/societes", cle, "POST", {
-                    "nom": societe["nom"], "siren": societe.get("siren") or "",
-                    "comptable_email": societe.get("comptable_email") or "",
-                    "mentions": societe.get("mentions") or {},
-                    "ordre": len(societes()),
-                }))
-            if not cree:
-                raise RuntimeError("société non créée")
-            sid, ordre = cree[0]["id"], 0
-        elif societe:
-            raise ValueError("Cette société existe déjà : choisissez-la dans la liste.")
-        else:
-            if any(e.get("nom") == etablissement["nom"]
-                   for e in ligne.get("etablissements") or []):
-                raise ValueError("Cet établissement existe déjà.")
-            sid = ligne["id"]
-            ordre = len(ligne.get("etablissements") or [])
-        _appel_supabase(f"{url}/rest/v1/etablissements", cle, "POST",
-                        _corps_etablissement(etablissement, sid, ordre))
-        return
-    ancien_soc, ancien_etab = origine
-    ligne = _societe_distante(url, cle, ancien_soc)
-    if not ligne:
-        raise ValueError("Société introuvable.")
-    etabs = ligne.get("etablissements") or []
-    trouve = next((e for e in etabs if e.get("nom") == ancien_etab), None)
-    if not trouve:
-        raise ValueError("Établissement introuvable.")
-    if any(e.get("nom") == etablissement["nom"] and e.get("id") != trouve["id"]
-           for e in etabs):
-        raise ValueError("Cet établissement existe déjà.")
-    corps = _corps_etablissement(etablissement, ligne["id"], trouve.get("ordre") or 0)
-    corps.pop("societe_id")
-    _appel_supabase(f"{url}/rest/v1/etablissements?{_filtre('id', trouve['id'])}",
-                    cle, "PATCH", corps)
-    if societe:
-        _appel_supabase(f"{url}/rest/v1/societes?{_filtre('id', ligne['id'])}",
-                        cle, "PATCH", {
-                            "nom": societe["nom"], "siren": societe.get("siren") or "",
-                            "comptable_email": societe.get("comptable_email") or "",
-                            "mentions": societe.get("mentions") or {},
-                        })
-
-
-def _sauver_local(origine, societe_nom, societe, etablissement):
-    data = json.loads(json.dumps(societes()))
-    if origine is None:
-        cible = next((s for s in data if s["nom"] == societe_nom), None)
-        if cible is None:
-            if not societe:
-                raise ValueError("Société inconnue.")
-            cible = {"nom": societe["nom"], "siren": societe.get("siren") or "",
-                     "comptable_email": societe.get("comptable_email") or "",
-                     "mentions": societe.get("mentions") or {}, "etablissements": []}
-            data.append(cible)
-        elif societe:
-            raise ValueError("Cette société existe déjà : choisissez-la dans la liste.")
-        elif any(e["nom"] == etablissement["nom"] for e in cible["etablissements"]):
-            raise ValueError("Cet établissement existe déjà.")
-        cible["etablissements"].append(etablissement)
-    else:
-        ancien_soc, ancien_etab = origine
-        cible = next((s for s in data if s["nom"] == ancien_soc), None)
-        if cible is None:
-            raise ValueError("Société introuvable.")
-        idx = next((i for i, e in enumerate(cible["etablissements"])
-                    if e["nom"] == ancien_etab), None)
-        if idx is None:
-            raise ValueError("Établissement introuvable.")
-        if any(e["nom"] == etablissement["nom"] and i != idx
-               for i, e in enumerate(cible["etablissements"])):
-            raise ValueError("Cet établissement existe déjà.")
-        if societe:
-            cible["nom"] = societe["nom"]
-            cible["siren"] = societe.get("siren") or ""
-            cible["comptable_email"] = societe.get("comptable_email") or ""
-            cible["mentions"] = societe.get("mentions") or {}
-        cible["etablissements"][idx] = etablissement
-    if not _societes_utilisables(data):
-        raise ValueError("Il doit rester au moins un établissement.")
-    _CACHE["societes.json"] = data
-    _ecrire_secours_societes(data)
+def importer_societes(liste):
+    """Charge une liste de societes (la forme que rend societes()). Chaque societe
+    remplace celle de meme nom, les autres restent : rejouable, et rien n'est
+    efface de ce qui n'est pas dans le fichier. Une societe deja en base garde
+    sa place, une nouvelle se range a la suite. `_id` (export Mongo) est ignore."""
+    import store
+    col = store.db().societes
+    places = {d["nom"]: d.get("ordre", 0) for d in col.find({}, {"nom": 1, "ordre": 1})}
+    suivante = max(places.values(), default=-1) + 1
+    for s in liste:
+        if s["nom"] not in places:
+            places[s["nom"]], suivante = suivante, suivante + 1
+        doc = {k: v for k, v in s.items() if k != "_id"}
+        col.replace_one({"nom": s["nom"]}, {**doc, "ordre": places[s["nom"]]}, upsert=True)
+    _CACHE.pop("societes", None)
 
 
 def sauver_etablissement(origine, societe_nom, societe, etablissement):
-    """Cree ou modifie un etablissement.
+    """Cree ou modifie un etablissement, en base.
 
     `origine` vaut None a la creation, sinon (nom de societe, nom d'etablissement)
     avant modification. `societe` vaut None quand on rattache a une societe
     deja la sans toucher a sa fiche ; sinon c'est la fiche a ecrire
-    (nom, siren, comptable_email, mentions). Avec Supabase, la copie locale
-    est relue ensuite. ValueError : nom deja pris, societe ou etablissement
-    introuvable. Une panne reseau reste une RuntimeError : rien n'est ecrit
-    en local a la place, le fichier serait ecrase a la lecture suivante.
+    (nom, siren, comptable_email, mentions). ValueError : nom deja pris,
+    societe ou etablissement introuvable.
     """
+    import store
+    fiche = None
     if societe is not None:
         nom = (societe.get("nom") or "").strip()
         if not nom:
@@ -370,30 +168,63 @@ def sauver_etablissement(origine, societe_nom, societe, etablissement):
         if origine is not None and nom != origine[0] and any(
                 s["nom"] == nom for s in societes()):
             raise ValueError("Cette société existe déjà : choisissez un autre nom.")
-    if supabase_actif():
-        _sauver_distant(origine, societe_nom, societe, etablissement)
-        _oublier_societes()
-        societes()
-    else:
-        _sauver_local(origine, societe_nom, societe, etablissement)
+        fiche = {"nom": nom, "siren": societe.get("siren") or "",
+                 "comptable_email": societe.get("comptable_email") or "",
+                 "mentions": societe.get("mentions") or {}}
+    col = store.db().societes
+    try:
+        if origine is None:
+            _ajouter_etablissement(col, societe_nom, fiche, etablissement)
+        else:
+            _modifier_etablissement(col, origine, fiche, etablissement)
+    except DuplicateKeyError:       # course avec un autre ecrivain : index unique `nom`
+        raise ValueError("Cette société existe déjà : choisissez un autre nom.") from None
+    finally:
+        _CACHE.pop("societes", None)
+
+
+def _ajouter_etablissement(col, societe_nom, fiche, etablissement):
+    cible = col.find_one({"nom": societe_nom})
+    if cible is None:
+        if not fiche:
+            raise ValueError("Société inconnue.")
+        dernier = col.find_one(sort=[("ordre", -1)])
+        col.insert_one({**fiche, "ordre": (dernier or {}).get("ordre", -1) + 1,
+                        "etablissements": [etablissement]})
+    elif fiche:
+        raise ValueError("Cette société existe déjà : choisissez-la dans la liste.")
+    elif not col.update_one(
+            {"_id": cible["_id"], "etablissements.nom": {"$ne": etablissement["nom"]}},
+            {"$push": {"etablissements": etablissement}}).matched_count:
+        raise ValueError("Cet établissement existe déjà.")
+
+
+def _modifier_etablissement(col, origine, fiche, etablissement):
+    ancien_soc, ancien_etab = origine
+    cible = col.find_one({"nom": ancien_soc})
+    if cible is None:
+        raise ValueError("Société introuvable.")
+    etabs = cible.get("etablissements") or []
+    idx = next((i for i, e in enumerate(etabs) if e["nom"] == ancien_etab), None)
+    if idx is None:
+        raise ValueError("Établissement introuvable.")
+    if any(e["nom"] == etablissement["nom"] and i != idx for i, e in enumerate(etabs)):
+        raise ValueError("Cet établissement existe déjà.")
+    # Filtre sur le nom a cet indice : si la liste a bouge entre la lecture et
+    # l'ecriture, on ne remplace pas un autre etablissement.
+    if not col.update_one(
+            {"_id": cible["_id"], f"etablissements.{idx}.nom": ancien_etab},
+            {"$set": {f"etablissements.{idx}": etablissement, **(fiche or {})}}
+    ).matched_count:
+        raise ValueError("Établissement introuvable.")
 
 
 def comptes():
-    """Les comptes de connexion : le bloc `utilisateurs` de instance.json."""
-    return instance().get("utilisateurs", {})
-
-
-def stockage():
-    """Le bloc `stockage` d'instance.json : ou vivent les donnees.
-
-    Lecture GARDEE : config est importe par des outils qui tournent sans
-    instance complete (doctor, tests, installer d'a cote). Une instance
-    installee avant ce bloc n'en a pas -- absent vaut « local »."""
-    try:
-        s = instance().get("stockage")
-    except (OSError, ValueError, KeyError):
-        return {}
-    return s if isinstance(s, dict) else {}
+    """Les comptes de connexion : la collection `comptes`, rendue sous la forme
+    {identifiant: {"mdp_hash": ...}}. Jamais dans config/ : un hash de mot de
+    passe n'est pas du parametrage."""
+    import store          # store importe config : import local, cycle sinon
+    return {d["_id"]: {"mdp_hash": d.get("mdp_hash")} for d in store.db().comptes.find()}
 
 
 # --- la DA du client ------------------------------------------------------
@@ -411,7 +242,7 @@ def theme():
     """`theme.json` de l'instance. Absent = la DA d'origine, une instance
     installee avant ce fichier ne bouge pas.
 
-    Garde sur OSError SEULEMENT, pas sur le JSON casse comme stockage() : un
+    Garde sur OSError SEULEMENT, pas sur le JSON casse comme conservation() : un
     fichier illisible avale la DA en silence, et le client ouvre son app le
     premier jour, la voit verte, sans que personne sache pourquoi. C'est
     _verifier_theme() qui le dit au demarrage."""
@@ -430,8 +261,8 @@ def apparence():
 def conservation():
     """Le bloc `conservation` d'instance.json : au bout de combien de jours dans
     un etat terminal les pieces d'un dossier sont effacees (le journal, lui,
-    reste). Lecture GARDEE comme stockage(). Bloc absent = aucune purge,
-    retro-compatible."""
+    reste). Lecture GARDEE : config est importe par des outils qui tournent
+    sans instance complete (doctor, tests). Bloc absent = aucune purge."""
     try:
         c = instance().get("conservation")
     except (OSError, ValueError, KeyError):
@@ -450,40 +281,12 @@ def sharepoint():
     return c if isinstance(c, dict) else {}
 
 
-def _donnees():
-    """LE seul endroit qui decide ou vit data/. Priorite :
-
-      1. env DONNEES        -- la ligne de lancement l'emporte toujours (compat :
-                               les tests et les instances lancees a la main)
-      2. stockage.chemin    -- mode « dossier », replique par le client de sync
-      3. a cote de config/  -- l'instance porte ses donnees (CONFIG_DIR pose)
-      4. RACINE / data      -- le depot lui-meme (dev, demo)
-    """
-    if env := os.environ.get("DONNEES"):
-        return Path(env)
-    s = stockage()
-    if s.get("mode") == "dossier" and isinstance(s.get("chemin"), str) and s["chemin"].strip():
-        return Path(s["chemin"].strip())
-    if os.environ.get("CONFIG_DIR"):
-        return CLIENT.parent / "data"
-    return RACINE / "data"
-
-
-# Fige au demarrage : deplacer les donnees d'une instance qui tourne n'est pas
-# un rechargement a chaud, c'est un redemarrage (et un deplacement de fichiers).
-DONNEES = _donnees()
-# Etat du mail hebdo par cabinet : ecrit par recap.py seul, lu par l'ecran Salaries.
-RECAP_ETAT = DONNEES / "recap.json"
-
-
 def recharger():
     """Relit config/ a chaud, sans redemarrer. Renvoie {} si la nouvelle config
     est valide (elle est alors active), sinon les manques -- et l'ancienne
     config reste en place : une instance qui servait continue de servir."""
-    global _SUPABASE_ESSAI, _SUPABASE_OK
     ancien = dict(_CACHE)
     _CACHE.clear()
-    _SUPABASE_ESSAI, _SUPABASE_OK = None, False
     if manques := verifier():
         _CACHE.clear()
         _CACHE.update(ancien)
@@ -520,14 +323,14 @@ def comptable(cle):
 
 
 def groupe(cle):
-    """Tete de l'arborescence des dossiers salaries : societes.json ->
+    """Tete de l'arborescence des dossiers salaries : la societe ->
     etablissement.groupe, a defaut le nom de la societe."""
     s, e = etablissement(cle)
     return e.get("groupe") or s["nom"]
 
 
 def manager(cle):
-    """Adresse fixe du manager de l'etablissement (societes.json), ou "" --
+    """Adresse fixe du manager de l'etablissement (en base), ou "" --
     y compris quand l'etablissement a disparu de la config (meme regle que
     mode_contrat) : valider ou rejeter un vieux dossier ne doit pas 500."""
     try:
@@ -723,7 +526,12 @@ def pieces():
 
 
 def secret():
-    return instance()["secret"].encode()
+    """Cle de signature des liens (store.signer). Leve si SECRET_KEY manque :
+    recap.py ne passe pas par verifier(), et une cle vide y signerait des liens
+    morts sans que personne le voie."""
+    if not (cle := os.environ.get("SECRET_KEY", "")).strip():
+        raise RuntimeError("SECRET_KEY absent de l'environnement")
+    return cle.encode()
 
 
 # Modele generique verse au depot (hors config*) : sert a TOUTE instance qui
@@ -797,10 +605,10 @@ def placeholders_connus():
         src["SalaireLettres"] = "Grille de salaires, en toutes lettres"
     for s in societes():
         for p in s.get("mentions", {}):
-            src[p] = "Mention légale de la société (societes.json)"
+            src[p] = "Mention légale de la société (en base)"
         for e in s["etablissements"]:
             for p in e.get("mentions", {}):
-                src[p] = "Mention légale de l'établissement (societes.json)"
+                src[p] = "Mention légale de l'établissement (en base)"
     for p in ("Societe", "Siren", "Etablissement", "Siret"):
         src[p] = "Identité de la société / de l'établissement choisi"
     return src
@@ -827,47 +635,49 @@ def _verifier_version():
     return {}
 
 
-def _verifier_stockage():
-    """Ou vivent les donnees, verifie comme le reste de la config.
-
-    En mode « dossier », l'ECRITURE est testee pour de vrai : un dossier de
-    synchronisation pas encore replique, deplace, ou monte en lecture seule doit
-    etre refuse au demarrage -- pas decouvert a la premiere soumission d'un vrai
-    salarie, quand la piece d'identite est deja partie dans le vide.
-
-    Bloc absent = local : les instances installees avant ce bloc demarrent."""
-    s = instance().get("stockage")
-    if s is None:
-        return {}
-    if not isinstance(s, dict):
-        return {"stockage": ["attend un objet, ex. {\"mode\": \"local\"}"]}
-    mode = s.get("mode", "local")
-    if mode == "local":
-        return {}
-    if mode != "dossier":
-        return {"stockage": [f"mode « {mode} » inconnu — au choix : "
-                             "« local » (data/ dans l'instance) ou « dossier » "
-                             "(dossier répliqué par un client de synchronisation)"]}
-    chemin = s.get("chemin")
-    if not isinstance(chemin, str) or not chemin.strip():
-        return {"stockage": ["mode « dossier » sans « chemin » : indiquez la racine "
-                             "du dossier répliqué par le client de synchronisation"]}
-    racine = Path(chemin.strip())
-    if not racine.is_dir():
-        return {"stockage": [f"« {chemin} » n'est pas un dossier — le client de "
-                             "synchronisation est-il installé et le dossier répliqué ?"]}
-    sonde = racine / f".contratgen-ecriture-{os.getpid()}"
-    try:
-        sonde.write_bytes(b"")
-        sonde.unlink()
-    except OSError as e:
-        return {"stockage": [f"« {chemin} » n'est pas accessible en écriture : {e}"]}
+def _verifier_mongo():
+    """Les variables d'environnement, sans toucher au reseau : une base
+    injoignable se voit au `ping` de app.demarrer(). Jamais la valeur de
+    MONGO_URI dans le message, elle porte le mot de passe de la base."""
+    absents = [v for v in SECRETS if not os.environ.get(v)]
+    if absents:
+        return {"mongo / secrets": [f"{v} absent de l'environnement ({SECRETS[v]}) — "
+                                    "passez le .env de l'instance : --env <dossier>/.env"
+                                    for v in absents]}
+    raisons = []
+    if len(os.environ["SECRET_KEY"].strip()) < 32:
+        raisons.append("SECRET_KEY trop courte (moins de 32 caractères) : gardez celle "
+                       "générée par installer.py")
+    nom = os.environ["MONGO_DB"]
+    # Les regles de nommage de MongoDB : un nom invalide fait lever pymongo au
+    # premier acces, en pleine verification.
+    if re.search(r'[/\\. "$*<>:|?]', nom) or len(nom.encode()) >= 64:
+        raisons.append(f"MONGO_DB « {nom} » : nom de base invalide (ni espace ni "
+                       "/ \\ . \" $ * < > : | ?, moins de 64 caractères)")
+    if raisons:
+        return {"mongo / secrets": raisons}
+    uri = os.environ["MONGO_URI"]
+    if uri.startswith("mongomock://"):
+        # Base en memoire, videe a chaque redemarrage : la demo, serve et les
+        # tests la declarent (BASE_EN_MEMOIRE=1). Recopiee par erreur dans le
+        # .env d'un client, elle perdrait ses dossiers sans un mot.
+        if os.environ.get("BASE_EN_MEMOIRE") != "1":
+            return {"mongo / secrets": ["MONGO_URI=mongomock:// est une base en mémoire, "
+                                        "vidée à chaque redémarrage : réservée à la démo "
+                                        "et aux tests"]}
+    elif not uri.startswith(("mongodb://", "mongodb+srv://")):
+        return {"mongo / secrets": ["MONGO_URI doit commencer par mongodb:// ou "
+                                    "mongodb+srv://"]}
+    # Hote vide : pymongo leverait InvalidURI en pleine verification. Lu a la
+    # main, sans MongoClient qui resout le DNS d'une adresse mongodb+srv://.
+    elif not uri.split("://", 1)[1].split("/", 1)[0].rsplit("@", 1)[-1].strip(", "):
+        return {"mongo / secrets": ["MONGO_URI sans adresse de serveur après mongodb://"]}
     return {}
 
 
 def _verifier_conservation():
     """Conservation des donnees : au bout de combien de jours un dossier termine
-    voit ses pieces effacees. Patron de _verifier_stockage -- la FORME avant les
+    voit ses pieces effacees. La FORME avant les
     valeurs, sinon c'est le garde-fou qui plante sur une config malformee.
 
     Bloc absent = aucune purge : les instances installees avant ce bloc
@@ -932,6 +742,27 @@ def _verifier_sharepoint():
     return {"sharepoint": raisons} if raisons else {}
 
 
+# Les modeles que l'app envoie a chaque dossier (app.py : _mail). Un modele
+# absent ne casse rien au demarrage : le mail echoue plus tard, note au journal
+# du dossier, et personne n'est prevenu (config_wingstop sans demande_validee).
+# recap_hebdo n'en est pas : il part d'un cron (recap.py), son echec s'affiche
+# deja en bandeau sur /salaries ; configurer.avertissements() le signale.
+MODELES_MAIL = ("nouvelle_soumission", "demande_validee", "rejet", "rappel_dpae")
+
+
+def modele_mail_manquant(m):
+    """config/mails/<m>.txt -> "absent", "vide", ou None s'il est utilisable."""
+    p = CLIENT / "mails" / f"{m}.txt"
+    if not p.is_file():
+        return "absent"
+    return None if p.read_text(encoding="utf-8").strip() else "vide"
+
+
+def _verifier_mails():
+    manques = [f"mails/{m}.txt {q}" for m in MODELES_MAIL if (q := modele_mail_manquant(m))]
+    return {"modèles de mail": manques} if manques else {}
+
+
 def _verifier_theme():
     """La DA du client. Patron de _verifier_conservation : la FORME avant les
     valeurs, et un KO propre qui nomme le sujet.
@@ -952,23 +783,7 @@ def _verifier_theme():
 
 
 def _verifier_installation():
-    from werkzeug.security import check_password_hash
     manques = {}
-    if SECRET_A_INSTALLER in instance().get("secret", ""):
-        manques["secret"] = [f"encore « {SECRET_A_INSTALLER} » — lancez : "
-                             f"python installer.py \"<Client>\""]
-    # _verifier_comptes valide deja la FORME ; ici on garde quand meme les
-    # isinstance -- verifier() lance tous les checks, celui-ci tourne meme si
-    # le bloc utilisateurs est malforme, et ne doit pas planter dessus.
-    users = comptes()
-    if isinstance(users, dict) and any(
-            isinstance(u, dict) and isinstance(u.get("mdp_hash"), str)
-            and check_password_hash(u["mdp_hash"], MDP_PAR_DEFAUT)
-            for u in users.values()):
-        manques["compte RH"] = ["mot de passe par défaut — changez le hash dans "
-                                "config/instance.json (bloc utilisateurs)"]
-    if not etablissements():
-        manques["établissements"] = ["aucun établissement dans config/societes.json"]
     # Sans destinataire RH, chaque soumission part en `mail_echoue` dans le
     # journal et personne ne le voit : deux instances de test ont servi comme
     # ca, verifier() disant OK. Un mail sans expediteur est refuse par un
@@ -980,6 +795,12 @@ def _verifier_installation():
     if not (m.get("expediteur") or "").strip():
         manques.setdefault("mails", []).append(
             "« expediteur » vide : renseignez l'adresse d'envoi dans mails")
+    if (m.get("mode") == "smtp" and m.get("utilisateur")
+            and not os.environ.get("SMTP_MOT_DE_PASSE")):
+        manques["SMTP_MOT_DE_PASSE"] = ["absent de l'environnement (relais authentifié)"]
+    if ((instance().get("signature") or {}).get("mode") == "yousign"
+            and not os.environ.get("YOUSIGN_CLE_API")):
+        manques["signature"] = ["YOUSIGN_CLE_API absent de l'environnement"]
     # Le mail hebdo au cabinet est fabrique hors requete (cron) : sans base
     # d'URL il partirait avec des liens vides, et personne ne lit la sortie
     # d'un cron -- meme trou que mails.rh, refuse au meme endroit.
@@ -989,18 +810,79 @@ def _verifier_installation():
     return manques
 
 
+def _base_illisible(e):
+    """Manque commun quand la base leve en pleine verification : URI que
+    pymongo refuse (port non numerique, options mal placees...) ou serveur
+    qui ne repond pas. Le type seul : le message peut citer l'adresse."""
+    return {"mongo / secrets": [f"base mongo illisible ({type(e).__name__}) : "
+                                "vérifiez MONGO_URI et MONGO_DB, puis que la base répond"]}
+
+
+def _verifier_societes():
+    """Les societes en base : au moins un etablissement, chacun nomme (le
+    formulaire et _verifier_regles en dependent). Sans base configuree : un
+    manque, pas une trace -- comme _verifier_comptes."""
+    try:
+        data = societes()
+    except RuntimeError as e:
+        return {"établissements": [str(e)]}
+    except (PyMongoError, ValueError) as e:     # ValueError : port non numerique
+        return _base_illisible(e)
+    raisons = []
+    for i, s in enumerate(data, 1):
+        nom = s.get("nom")
+        etabs = s.get("etablissements")
+        if not isinstance(nom, str) or not nom.strip():
+            raisons.append(f"société n° {i} sans nom")
+        elif not isinstance(etabs, list) or any(
+                not isinstance(e, dict) or not isinstance(e.get("nom"), str)
+                or not e["nom"].strip() for e in etabs):
+            raisons.append(f"« {nom} » : un établissement sans nom ou mal formé")
+        else:
+            # config.mentions() fusionne ces dicts : un null ou une liste
+            # ferait planter la generation du contrat APRES la validation.
+            for quoi, x in [(nom, s)] + [(f"{nom} / {e['nom']}", e) for e in etabs]:
+                if "mentions" in x and not isinstance(x["mentions"], dict):
+                    raisons.append(f"« {quoi} » : mentions doit être un objet "
+                                   "{clé: valeur}")
+    if not raisons and not any(s["etablissements"] for s in data):
+        raisons.append("aucun établissement en base — lancez : python configurer.py "
+                       "--assister (ou importer-societes <fichier.json>)")
+    return {"établissements": raisons} if raisons else {}
+
+
 def _verifier_comptes():
-    """Forme de comptes() avant ses valeurs -- un bloc `utilisateurs` malforme
-    dans instance.json doit refuser de demarrer proprement, pas planter login()."""
-    d = comptes()
-    if not isinstance(d, dict) or not d:
-        return {"comptes": ["aucun compte de connexion — lancez : "
-                            "python installer.py \"<Client>\""]}
-    raisons = [f"« {ident} » : mdp_hash absent ou invalide"
-               for ident, u in d.items()
-               if not isinstance(u, dict) or not isinstance(u.get("mdp_hash"), str)
-               or not u["mdp_hash"]]
-    return {"comptes": raisons} if raisons else {}
+    """Aucun compte en base = refus au demarrage ; un compte sans hash valide
+    aussi, plutot qu'un login() qui plante. Sans base configuree : un manque,
+    pas une trace -- doctor et configurer doivent rendre leur bilan."""
+    from werkzeug.security import check_password_hash
+    try:
+        d = comptes()
+    except RuntimeError as e:
+        return {"comptes": [str(e)]}
+    except (PyMongoError, ValueError) as e:
+        return _base_illisible(e)
+    if not d:
+        return {"comptes": ["aucun compte de connexion en base — lancez : "
+                            "python configurer.py compte rh"]}
+    # Un hash werkzeug a la forme « methode$sel$empreinte » ; une autre forme,
+    # ou une methode inconnue (werkzeug leve ValueError), et personne ne peut
+    # plus se connecter, sans message.
+    raisons, par_defaut = [], False
+    for ident, u in d.items():
+        h = u.get("mdp_hash")
+        try:
+            if not isinstance(h, str) or h.count("$") < 2:
+                raise ValueError(h)
+            par_defaut = check_password_hash(h, MDP_PAR_DEFAUT) or par_defaut
+        except ValueError:
+            raisons.append(f"« {ident} » : mdp_hash absent ou invalide")
+    if raisons:
+        return {"comptes": raisons}
+    if par_defaut:
+        return {"compte RH": ["mot de passe par défaut — changez-le : "
+                              "python configurer.py compte <identifiant>"]}
+    return {}
 
 
 def _verifier_derives():
@@ -1031,6 +913,15 @@ def _verifier_derives():
         if raisons:
             manques[f"derives → {ph or '?'}"] = raisons
     return manques
+
+
+def _verifier_ids_champs():
+    """store ecrit `champs.<id>` : un id avec « . » creerait un sous-document, un
+    « $ » en tete serait lu comme un operateur Mongo."""
+    mauvais = [c["id"] for c in champs()
+               if not isinstance(c.get("id"), str) or "." in c["id"] or c["id"].startswith("$")]
+    return {"champs": [f"id « {i} » : ni « . » ni « $ » en tête dans un id de champ"
+                       for i in mauvais]} if mauvais else {}
 
 
 def _verifier_roles():
@@ -1153,7 +1044,7 @@ def _verifier_regles():
                                    f"« {par_nom_seul[n(val)]} »")
                 else:
                     raisons.append(f"« {cid} » : « {val} » n'est pas une clé "
-                                   "d'établissement connue (config/societes.json)")
+                                   "d'établissement connue (sociétés en base)")
             elif c.get("options"):
                 if not any(n(val) == n(o) for o in c["options"]):
                     raisons.append(f"« {cid} » : « {val} » ne correspond à aucune "
@@ -1281,11 +1172,24 @@ def _verifier_bareme(ligne, g):
 def verifier():
     """Garde-fou de demarrage. Renvoie {} si tout va bien, sinon un dict
     {sujet: [raisons]} et l'instance ne sert pas."""
-    manques = {}
-    for check in (_verifier_version, _verifier_comptes, _verifier_stockage,
+    manques = _verifier_mongo()
+    if not manques:
+        manques.update(_verifier_societes())
+    # Base absente ou illisible : comptes et societes rediraient le meme
+    # manque, et les checks qui lisent les societes leveraient.
+    sans_base = "mongo / secrets" in manques
+    lisent_societes = {_verifier_placeholders, _verifier_regles}
+    lisent_base = lisent_societes | {_verifier_comptes}
+    for check in (_verifier_version, _verifier_comptes,
                   _verifier_conservation, _verifier_sharepoint, _verifier_theme,
+                  _verifier_mails,
                   _verifier_installation,
-                  _verifier_derives, _verifier_roles, _verifier_placeholders,
+                  _verifier_derives, _verifier_ids_champs, _verifier_roles, _verifier_placeholders,
                   _verifier_regles, _verifier_postes, _verifier_grille):
+        # Societes absentes ou mal formees : ces checks leveraient, et le
+        # manque « établissements » dit deja quoi faire.
+        if (sans_base and check in lisent_base) or (
+                "établissements" in manques and check in lisent_societes):
+            continue
         manques.update(check())
     return manques

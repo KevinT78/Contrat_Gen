@@ -1,7 +1,7 @@
 # Contrat_Gen — produit RH auto-hébergé
 
 Parcours complet **formulaire → validation → dossier salarié → contrat →
-signature → DPAE → remise au cabinet comptable**, sans base de données et sans
+signature → DPAE → remise au cabinet comptable**, sur MongoDB et sans
 Office365. Implémente les décisions de `.scratch/produit-rh/` et le schéma
 Excalidraw (deux couloirs : Dark Kitchen / Restaurant).
 
@@ -9,19 +9,20 @@ Excalidraw (deux couloirs : Dark Kitchen / Restaurant).
 mutualisé entre clients.
 
 Le `config/` versionné ici est une **fixture de démonstration**, pas un
-déploiement : son secret et son mot de passe sont publics et le sont
+déploiement : il ne porte aucun secret (les secrets sont des variables
+d'environnement) et ses identifiants de test (`rh` / `fixture`) sont publics
 volontairement. Un déploiement réel se pose hors du dépôt avec `installer.py`
-(voir plus bas), qui génère son propre secret et son propre mot de passe RH.
+(voir plus bas), qui génère son propre `SECRET_KEY` et son propre mot de passe RH.
 
 ```bash
-pip install -r requirements.txt
+pip install -r requirements.txt -r requirements-dev.txt   # requirements-dev : mongomock, base en mémoire des tests
 pip install -r requirements-sharepoint.txt   # seulement si instance.json a un bloc « sharepoint »
 python tests/test_excel.py        # « Compléter les dossiers » importés depuis les Excel du logiciel RH et du planning
 python tests/test_parcours.py     # les deux couloirs, de bout en bout
 python tests/test_signature.py    # e-sign Yousign contre un transport factice
 python tests/test_clients.py      # 2 clients factices, chacun dans son instance
 python tests/test_produit.py      # garde-fou de balisage, fiche, config versionnée
-DEBUG=1 python app.py        # http://localhost:5000  (rh / fixture)
+python demo.py                    # http://localhost:5000  (rh / demo-rh), base en mémoire
 ```
 
 ## Installer chez un nouveau client
@@ -31,85 +32,70 @@ que ce qui appartient au client. `config.exemple/` est le squelette versionné :
 une instance ne se copie jamais depuis celle d'un autre.
 
 ```bash
+export MONGO_URI="mongodb+srv://…" MONGO_DB=acme      # la base NEUVE de ce client
 python installer.py "ACME Restauration" /srv/acme
-CONFIG_DIR=/srv/acme/config python app.py
 ```
 
-`installer.py` **copie** `config.exemple/` vers `/srv/acme/config/` et génère le
-secret HMAC et le mot de passe RH. Aucune valeur d'un autre client ne peut
-survivre par oubli — c'est structurel, pas une liste de champs à nettoyer. Une
-réinstallation par-dessus un `config/` existant est **refusée**.
+`installer.py` crée le compte `rh` **en base** (mot de passe affiché une seule
+fois), **copie** `config.exemple/` vers `/srv/acme/config/` et écrit
+`/srv/acme/.env` (lignes `CLE=valeur`, mode 600) : `SECRET_KEY` généré,
+`MONGO_URI`, `MONGO_DB`, `CONFIG_DIR`. Aucune valeur d'un autre client ne peut
+survivre par oubli — c'est structurel, pas une liste de champs à nettoyer. Il
+**refuse** si `config/` ou `.env` existe déjà, ou si la base a déjà un compte
+`rh` (c'est la base d'un autre client : `MONGO_DB` oublié dans le shell).
 
-### Où vivent les données : local ou dossier synchronisé
+### Où vivent les données : MongoDB
 
-L'installateur prend un **3e argument optionnel** : le chemin d'un dossier
-répliqué par le client de synchronisation d'un drive d'entreprise (OneDrive,
-SharePoint, Google Drive) **déjà installé sur ce serveur**.
+Dossiers, pièces, contrats, comptes, sociétés : tout est dans MongoDB, une base
+par client, rien sur le disque du serveur (collections détaillées plus bas,
+[docs/ADR-stockage.md](docs/ADR-stockage.md) pour le raisonnement). Le disque ne
+garde que `config/`, en lecture seule pour l'app.
 
-```bash
-python installer.py "ACME" /srv/acme                                   # data/ dans l'instance
-python installer.py "ACME" /srv/acme "C:/Users/rh/OneDrive - ACME/Embauches"   # sur le drive
+Les secrets ne sont jamais dans `config/` ni en base, seulement dans
+l'environnement :
+
+| Variable | Quand |
+|---|---|
+| `SECRET_KEY` | toujours : session et signature des liens |
+| `MONGO_URI`, `MONGO_DB` | toujours (pas de valeur par défaut : une base par client) |
+| `SMTP_MOT_DE_PASSE` | `mails.mode = smtp` avec un `utilisateur` |
+| `YOUSIGN_CLE_API` | `signature.mode = yousign` |
+
+Chaque commande prend le `.env` de l'instance avec l'option `--env`, sous Windows
+comme sur le VPS :
+
+```powershell
+python configurer.py --env "C:\srv\acme\.env"
+python app.py --env "C:\srv\acme\.env"
 ```
 
-Le choix est écrit dans `config/instance.json` (`"stockage": {"mode": "local"}`
-ou `{"mode": "dossier", "chemin": "…"}`) et **vérifié au démarrage** : mode
-connu, dossier existant, et écriture réellement testée — un dossier de sync pas
-encore répliqué ou monté en lecture seule est refusé tout de suite, pas découvert
-à la première soumission d'un vrai salarié. Un bloc absent vaut `local` : les
-instances installées avant ce bloc démarrent sans rien changer. Pour le poser ou
-le corriger après coup : `configurer.py --assister`. `DONNEES=` sur la ligne de
-lancement reste **prioritaire** sur le bloc. Changer `stockage` ne prend effet
-qu'au redémarrage, et les fichiers déjà écrits doivent être déplacés à la main.
-L'installateur **refuse** un dossier drive non vide,
-comme il refuse d'écraser un `config/` existant.
-
-En mode `dossier`, l'app écrit sur un système de fichiers local comme avant : elle
-ne fait **aucun appel réseau** et ne connaît aucun fournisseur — c'est le client
-de sync qui réplique. Quatre choses à savoir (détail et raisonnement dans
-[docs/ADR-stockage.md](docs/ADR-stockage.md)) :
-
-- **Une seule machine écrit.** `store._verrou` n'exclut qu'à l'intérieur d'un
-  process : deux serveurs pointés sur le même dossier drive perdraient des
-  entrées de journal. Ce n'est pas un stockage partagé, c'est un disque distant.
-- **Verrouillage pendant l'upload.** Le client de sync peut tenir un fichier le
-  temps de le téléverser ; sous Windows, `os.replace` / `shutil.move` peuvent
-  alors lever `PermissionError`. Non observé en conditions réelles à ce jour —
-  aucune parade n'est codée tant que ce n'est pas mesuré.
-- **Fichiers à la demande** (OneDrive) : un fichier non téléchargé se lit quand
-  même, mais lentement — à surveiller sur `/suivi`, qui rescanne tous les
-  `dossier.json`.
-- **La sauvegarde change de forme** : le drive porte l'historique de `data/`,
-  `tar` reste la sauvegarde de `config/` (qui, lui, ne quitte jamais le serveur).
-- **La purge locale ne descend pas dans le drive** : effacer les pièces d'un
-  dossier terminé (bloc `conservation`, ci-dessous) ne vide **ni la corbeille ni
-  l'historique de versions** du service de synchronisation — la version complète
-  de `dossier.json`, NIR et adresse compris, y reste récupérable. Après une
-  purge en mode `dossier`, vider la corbeille et l'historique de versions à la
-  main côté service. `python purger.py` le rappelle.
-
-Le mode « API cloud directe » (Graph, Google Drive API, OAuth) n'est **pas**
-codé : il exigerait de rejouer le seam d'I/O de `store.py` et surtout de décider
-où vit le journal `dossier.json`. Voir l'ADR.
+Chaque ligne `CLE=valeur` est coupée au premier `=` ; les espaces autour et une paire de
+guillemets englobants sont retirés. Une ligne illisible arrête la commande en donnant son numéro.
+Une variable déjà posée dans l'environnement l'emporte sur le fichier : la ligne
+`EnvironmentFile=` de systemd fonctionne donc toujours, mais n'est plus nécessaire.
 
 Il faut ensuite remplir `config/` puis démarrer. **Le démarrage refuse de servir**
-tant que l'installation est incomplète : secret encore par défaut, compte RH au
-mot de passe par défaut, aucun établissement déclaré, `mails.rh` /
-`mails.expediteur` vides, ou `url` (adresse publique, base des liens de tous
-les mails) vide (`config.verifier()`). Sans destinataire RH, chaque
+tant que l'installation est incomplète : variable d'environnement manquante (le
+message nomme la variable, jamais la valeur de `MONGO_URI`, qui porte le mot de
+passe de la base), compte RH au mot de passe par défaut, aucun établissement
+déclaré, `mails.rh` / `mails.expediteur` vides, ou `url` (adresse publique,
+base des liens de tous les mails) vide (`config.verifier()`). Une base
+injoignable (`ping`) est refusée de la même façon. Sans destinataire RH, chaque
 demande partirait en `mail_echoue` dans le journal sans que personne ne le voie.
 
 `configurer.py` rend ce garde-fou lisible **avant** de lancer le serveur, et
 enchaîne `placeholders` puis `doctor` dès que la config passe :
 
 ```bash
-CONFIG_DIR=/srv/acme/config python configurer.py             # bilan : chaque manque, et le fichier à ouvrir
-CONFIG_DIR=/srv/acme/config python configurer.py --assister  # pose les questions (mails, comptes, société), boucle jusqu'à OK
-CONFIG_DIR=/srv/acme/config python configurer.py compte marc # ajoute ou remplace un compte
-CONFIG_DIR=/srv/acme/config python configurer.py mail vous@acme.fr  # envoi de test en SMTP, même en mode console
+python configurer.py             # bilan : chaque manque, et le fichier à ouvrir
+python configurer.py --assister  # pose les questions (mails, comptes, société), boucle jusqu'à OK
+python configurer.py compte marc # ajoute ou remplace un compte (en base)
+python configurer.py importer-societes societes.json  # charge des sociétés et établissements en base
+python configurer.py mail vous@acme.fr  # envoi de test en SMTP, même en mode console
 ```
 
-L'assistant n'écrit que ce qui se dicte : adresses, comptes, société et
-établissements, secret. Rôles, balisage des modèles et grille restent à éditer
+L'assistant n'écrit que ce qui se dicte : adresses, comptes (en base), société et
+établissements (en base). Rôles, balisage des modèles et grille restent à éditer
 à la main ; il montre où, puis revérifie.
 
 Quand la config passe, le bilan signale en `⚠`, **sans bloquer**, ce qui est
@@ -123,11 +109,11 @@ auraient un contrat sans salaire (`doctor` n'essaie que la première durée).
 
 Un compte par personne qui valide : `installer.py` ne crée que `rh`, les autres
 s'ajoutent avec `python configurer.py compte <ident>` (mot de passe demandé, hash
-écrit dans le bloc `utilisateurs` de `instance.json`).
+écrit dans la collection `comptes`).
 
 Tous les comptes ont les mêmes droits ; le journal de chaque dossier porte qui a
 fait quoi.
-Un secret par défaut rend les liens du lot comptable forgeables, un mot de passe
+Un `SECRET_KEY` faible rend les liens du lot comptable forgeables, un mot de passe
 par défaut ouvre des pièces d'identité — c'est une frontière de confiance.
 
 `config_version` dans `instance.json` fixe le format de la config. Le code
@@ -152,7 +138,7 @@ tourner contourne entièrement les deux plafonds.
 | `2` | un CDN ajouté devant Caddy |
 
 ```bash
-PROXIES=1 CONFIG_DIR=/srv/acme/config DONNEES=/srv/acme/data python app.py
+PROXIES=1 python app.py          # avec le .env de l'instance chargé
 ```
 
 Trop haut : l'effet dépend du proxy. nginx avec `$proxy_add_x_forwarded_for`
@@ -179,10 +165,10 @@ même règle : **le code est le produit, l'instance est ailleurs.**
 
 **Lancer.** `python app.py` démarre *waitress*, un serveur WSGI de production —
 pas le serveur de développement. Waitress est mono-process multi-thread par
-construction, et c'est voulu : `store._verrou` n'exclut qu'à l'intérieur d'un
-process, donc deux process écriraient le même `dossier.json` en concurrence et
-perdraient des entrées de journal. Ne pas servir cette app depuis un serveur
-multi-process sans avoir d'abord posé un verrou fichier (voir `store._verrou`).
+construction, et c'est voulu : les plafonds de rate-limit sont en mémoire et
+restent exacts avec un seul process. Plusieurs process ne perdent plus de
+données (le journal s'écrit par compare-and-swap en base), mais chaque plafond
+est alors multiplié par le nombre de process.
 
 `DEBUG=1 python app.py` bascule sur le serveur Werkzeug + son debugger : local
 uniquement, l'app sert des pièces d'identité.
@@ -199,7 +185,7 @@ ne vit dans le dépôt :
 |---|---|---|
 | le code (`*.py`, `templates/`) | le produit | **remplacé** |
 | `$CONFIG_DIR` (défaut `config/`) | le client | **jamais touché** — l'app n'écrit jamais sa config |
-| `$DONNEES` (`data/`, ou le dossier drive) | le client | **jamais touché** |
+| la base MongoDB (`MONGO_DB`) | le client | **jamais touchée** |
 
 Donc : remplacer le code, relancer. Au démarrage, `config.verifier()` refuse de
 servir si la nouvelle version réclame quelque chose que la config n'a pas — un
@@ -208,18 +194,18 @@ corriger, plutôt que de démarrer à moitié. Si le **format** de config a chan
 version majeure, `config_version` fait refuser le démarrage avec la marche à
 suivre : l'app ne réécrit jamais la config du client dans son dos.
 
-**Sauvegarder.** (En mode `dossier`, c'est le drive qui porte l'historique de
-`$DONNEES` ; ce qui suit ne concerne alors plus que `config/`.)
-`$DONNEES` **est** la base : soumissions, dossiers, pièces
-d'identité, RIB, contrats générés et signés. `$CONFIG_DIR` contient le secret et
-le compte RH. Les deux, rien d'autre :
+**Sauvegarder.** La base **est** les données : dossiers, pièces d'identité,
+RIB, contrats générés et signés, comptes, sociétés. `config/` contient le
+paramétrage, `.env` les secrets. Trois choses à sauvegarder, rien d'autre :
 
 ```bash
-tar czf sauvegarde-$(date +%F).tar.gz /srv/acme/config /srv/acme/data
+mongodump --uri="$MONGO_URI" --db="$MONGO_DB" --archive=sauvegarde-$(date +%F).gz --gzip
+tar czf config-$(date +%F).tar.gz /srv/acme/config /srv/acme/.env
 ```
 
-Restaurer = détarrer et relancer. Pas de dump, pas d'ordre de restauration : il
-n'y a pas de base de données, et c'est précisément ce que ça achète.
+(ou la sauvegarde gérée de l'hébergeur de la base). Restaurer = `mongorestore`
+puis relancer. Les sauvegardes gardent les données jusqu'à leur propre
+expiration, y compris celles qu'une purge a effacées de la base vive.
 
 ### Les modèles de contrat, c'est le client qui les balise
 
@@ -284,12 +270,17 @@ l'embauche.
 
 ### Un changement plus tard
 
-Nouvel établissement, salaire revalorisé, clause modifiée : éditer les `.json`,
-puis redémarrer l'application — `config/` est relu au démarrage. Une config
+Salaire revalorisé, clause modifiée : éditer les `.json` de `config/`, puis
+redémarrer l'application — `config/` est relu au démarrage. Une config
 invalide empêche le démarrage : l'application dit ce qui cloche, et
 `python doctor.py` permet de la vérifier avant.
 
-`config/societes.json` (forme attendue) :
+Les **sociétés et établissements** ne sont pas dans `config/` : ils vivent en
+base. Un nouvel établissement s'ajoute à l'écran « Établissements » (RH), ou par
+`python configurer.py --assister`, ou en rechargeant un fichier (rejouable : une
+société du fichier remplace celle de même nom, les autres restent) :
+`python configurer.py importer-societes societes.json`. Forme du fichier
+(`config/societes.amorce.json` en est un exemple) :
 
 ```json
 [
@@ -322,14 +313,14 @@ Expéditeur unique : `mails.expediteur`.
 | Cron hebdomadaire (`recap.py`) | `recap_hebdo` | le cabinet de chaque société, `mails.rh` en copie |
 
 Le **multi-société** *à l'intérieur* d'un client reste possible :
-la fixture `config/societes.json` contient « ACME Restauration » et « ACME Sud »,
+la fixture `config/societes.amorce.json` contient « ACME Restauration » et « ACME Sud »,
 deux SIREN du même client, chacun avec ses établissements et son cabinet. Le
 multi-tenant (une copie servant plusieurs entreprises) est hors périmètre —
 pièces d'identité et RIB, une fuite inter-client serait un incident RGPD.
 
 ## Les deux couloirs
 
-Chaque établissement porte `"contrat"` dans `config/societes.json` :
+Chaque établissement porte `"contrat"` (en base, avec sa société) :
 
 | Valeur | Couloir | À l'état `ATraiter` |
 |---|---|---|
@@ -348,7 +339,7 @@ Les deux voies mènent à `ContratPret`, d'où la DPAE se déclare directement.
   (vue « Salariés ») où son bloc reste en haut tant qu'il manque ; noté au journal
   (`contrat_signe`) sans changer d'état ; pas en `Parti` ni après une purge. Tant
   qu'il manque, un badge **« signé manquant »** le rappelle dans « Salariés ». Il
-  reste côté RH : ni la copie `COMPTA/` ni le lot du cabinet ne le contiennent
+  reste côté RH : le lot du cabinet ne le contient pas
   (`store.fichiers_compta`).
 - L'ancienne clé `signature.avant_dpae` (et l'état `ContratSigne`) n'existe plus :
   `doctor` la signale comme obsolète sans bloquer. Les dossiers déjà écrits à
@@ -356,13 +347,16 @@ Les deux voies mènent à `ContratPret`, d'où la DPAE se déclare directement.
 
 ## La démo en 5 minutes
 
-`python demo.py` remet `data_demo/` à zéro, amorce quatre dossiers à des étapes
+`python demo.py` crée une base **en mémoire** (mongomock, vide à chaque
+lancement), amorce quatre dossiers à des étapes
 différentes (demande reçue, demande validée en contrat déposé, contrat prêt,
 remis au cabinet) sur la config de démo fictive versionnée (`config.demo/`,
 « Basilic Café ») et sert sur `:5000` — identifiants `rh` / `demo-rh`.
-`python demo.py --vide` démarre sur un suivi vide pour tout jouer à la main. Mail
-hebdo de la démo : `CONFIG_DIR=config.demo DONNEES=data_demo python recap.py`.
-Le déroulé ci-dessous vaut aussi pour la fixture `config/` (`rh` / `fixture`).
+`python demo.py --vide` démarre sur un suivi vide pour tout jouer à la main. La
+base de la démo vit dans le process : `recap.py` lancé à part ne la voit pas ;
+pour rejouer le mail hebdo, poser un `MONGO_URI` réel avant `demo.py`.
+Le déroulé ci-dessous vaut aussi pour la fixture `config/` (les tests y créent
+le compte `rh` / `fixture`).
 
 1. `http://localhost:5000` — le formulaire, **rendu depuis `config/formulaire.json`**.
    Remplir, joindre 3 fichiers PDF/JPG.
@@ -381,16 +375,16 @@ Le déroulé ci-dessous vaut aussi pour la fixture `config/` (`rh` / `fixture`).
    après un échec). Établissement en contrat « depose » : **Déposer le contrat**.
 5. **DPAE** : dépôt de l'accusé (refusé sans pièce), dès le contrat prêt. Le
    **contrat signé** se dépose plus tard, depuis la fiche salarié, sans changer d'état.
-6. **Remettre au comptable** → le dossier est **dupliqué** dans
-   `data/COMPTA/<GROUPE>/<ETABLISSEMENT>/<POSTE>/<NOM PRENOM - id>/`
-   (`FICHE PERSONNELLE/` + `CONTRAT/`, segments en capitales sans accents,
-   fichiers renommés lisiblement), miroitable sur un Drive. Aucun mail à ce moment : le cabinet
+6. **Remettre au comptable** → le dossier passe à `RemisComptable`. Aucune copie
+   n'est faite : le lot du cabinet (`/lot/<jeton>`) sert les pièces en direct
+   depuis la base, avec des noms de fichiers lisibles, et un re-dépôt après
+   remise apparaît dans le lot. Aucun mail à ce moment : le cabinet
    **de la société concernée** reçoit le lien signé dans le mail hebdomadaire
    (`recap.py`) ; la page sans login offre « Tout télécharger (.zip) ».
-   **Refaire la copie et le lien** → l'ancien lien renvoie 410, le dossier repart
+   **Refaire le lien** → l'ancien lien renvoie 410, le dossier repart
    dans le prochain mail hebdo.
 
-Les mails ne partent pas : `"mode": "console"` les écrit dans `data/mails/*.eml`.
+Les mails ne partent pas : `"mode": "console"` les écrit dans la collection `mails` de la base.
 Passer à `"smtp"` pour de vrais envois ; la variable d'env `MAILS_MODE` surclasse
 le fichier. Dès qu'un `mails.utilisateur` est renseigné, STARTTLS vérifié + login
 sont imposés ; sans identifiant, l'envoi part en clair (catcher local type MailHog).
@@ -413,7 +407,7 @@ dossiers remis au comptable depuis le dernier envoi réussi à ce cabinet (journ
 `vers == RemisComptable`, ou un renvoi), chacun avec son **lien de lot signé**
 (30 jours). Un envoi raté ne fait rien avancer : ses dossiers repartent au
 passage suivant, et l'écran « Salariés » l'affiche en rouge
-(`DONNEES/recap.json`, écrit par `recap.py` seul). Un cabinet ne voit
+(collection `recap`, écrite par `recap.py` seul). Un cabinet ne voit
 jamais les dossiers d'une autre société ; aucun mail à un cabinet sans dossier.
 Les liens sont fabriqués hors requête : `instance.json → url` (adresse publique
 de l'app) est obligatoire, le démarrage le refuse vide. Aucun scheduler dans
@@ -425,13 +419,13 @@ l'app — à mettre en cron / Tâche planifiée côté client, par ex. :
 
 ## Ce qui varie par client — en donnée, jamais en code
 
-Tout vit dans `config/` — aucun `.py` n'y entre jamais :
+Le paramétrage vit dans `config/` — aucun `.py` n'y entre jamais. (Les sociétés
+et établissements sont en base : SIREN, mentions, cabinet, SIRET, couloir `contrat`.)
 
 | Fichier | Ce qu'il porte |
 |---|---|
-| `instance.json` | `config_version`, nom, secret HMAC, signature, fiche salarié, SMTP, destinataires, motifs de KO, comptes, poste → template |
+| `instance.json` | `config_version`, nom, signature, fiche salarié, SMTP (sans mot de passe), destinataires, motifs de KO, poste → template. Ni secrets ni comptes : les secrets sont des variables d'environnement, les comptes sont en base |
 | `formulaire.json` | les champs du formulaire, leur type, le placeholder `.docx` de chacun, et la table `roles` |
-| `societes.json` | sociétés (SIREN, mentions, cabinet) et établissements (SIRET, couloir `contrat`) |
 | `grille.json` | grille de rémunération (facultative : sans elle, le salaire est saisi au formulaire) |
 | `contrats/*.docx` | modèles de contrat +, si le client en dépose un, `fiche_salarie.docx` — à placeholders `{{Nom}}` |
 | `mails/*.txt` | objet + corps de chaque mail |
@@ -482,20 +476,25 @@ rôle requis absent — refuse le **démarrage** en disant lequel.
 Sans déclaration, chaque rôle retombe sur son id historique (`etablissement`,
 `poste`, `nom_naissance`…) : une instance existante n'a rien à changer.
 
-## Le disque est la base
+## MongoDB est la base
 
-```
-data/
-  soumissions/<ULID>/   soumission.json  + pieces/            # avant validation
-  documents/<ULID>/     dossier.json     + pieces/ + contrat/ + _versions/
-  mails/                                                       # mode console
-```
+Toutes les données du client sont dans une base MongoDB (une base par client,
+`MONGO_DB`), rien sur le disque du serveur :
 
-Où vit `data/` se décide à l'installation (`stockage` dans `instance.json`,
-voir plus haut) ; `DONNEES` reste surchargeable par variable d'environnement et
-l'emporte sur le bloc (c'est ce dont les tests se servent). `dossier.json` porte un **journal append-only** qui fait foi
-sur l'état ; un fichier présent est une preuve corroborante, jamais décisive.
-Écritures temp-puis-rename avec verrou par id. 8 états :
+| Collection | Contenu |
+|---|---|
+| `dossiers` | un document par soumission ou dossier salarié, **journal compris** |
+| `fichiers` | pièces et contrats, octets inline (15 Mo maximum par fichier), versions comprises |
+| `recap` | état du mail hebdomadaire par cabinet |
+| `mails` | mode console seulement : le `.eml` en base |
+| `comptes` | identifiant + hash du mot de passe |
+| `societes` | sociétés, établissements imbriqués |
+| `etat` | jeton SharePoint |
+
+Le disque ne garde que `config/` (paramétrage, lecture seule pour l'app). Un
+document `dossiers` porte un **journal append-only** qui fait foi sur l'état ;
+il s'écrit par compare-and-swap, donc deux écritures simultanées ne se perdent
+pas. 8 états :
 `Soumise → Rejetee / ATraiter → ContratPret →
 DpaeFaite → RemisComptable → Parti`, plus `Abandonnee` (`ContratSigne` ne subsiste
 que dans `TRANSITIONS`, pour les dossiers écrits avant la suppression de l'étape). Le rappel DPAE n'est pas un
@@ -503,20 +502,14 @@ que dans `TRANSITIONS`, pour les dossiers écrits avant la suppression de l'éta
 échoue (`mail_echoue`). Les transitions permises sont
 dans `store.TRANSITIONS` — un `POST` hors séquence est refusé côté serveur, pas
 seulement caché dans le template. `Parti` est terminal (aucune transition
-sortante) : le départ d'un salarié (bouton « Archiver dans LEAVERS », onglet
-« Anciens salariés » de `/salaries`) déplace réellement son dossier de
-`DOSSIERS SALARIES/` vers `LEAVERS/`, même sous-chemin établissement / poste /
-nom — c'est l'arborescence que la RH ouvre à la main, un marquage logique seul
-ne lui donnerait pas le dossier LEAVERS qu'elle demande.
+sortante) : le départ d'un salarié (bouton « Archiver dans les anciens salariés », onglet
+« Anciens salariés » de `/salaries`) ne déplace rien : le dossier reste où il
+est et prend l'état `Parti`, avec la date de sortie au journal.
 
-**Refus de démarrer à deux.** En production (waitress), `demarrer()` pose
-`<data>/.serveur-actif.json` (`{hote, pid, le}`, rafraîchi toutes les 60 s par
-un thread démon) et refuse le démarrage si un autre serveur le tient —
-`store._verrou` est intra-process, deux serveurs sur le même stockage perdent
-des entrées de journal en silence. Un verrou dont le process est mort **sur la
-même machine** est repris aussitôt (sonde de vivacité) ; venu d'une autre
-machine, il expire au bout de 5 minutes. Pour forcer, supprimer le fichier. Le
-mode `DEBUG` (dev local) ne pose pas de verrou.
+**Plusieurs process.** Plus de perte de données : le journal s'écrit en base par
+compare-and-swap. Il reste que les plafonds de rate-limit (formulaire public,
+`/login`) sont en mémoire, donc multipliés par le nombre de process ; waitress
+mono-process reste le lancement recommandé.
 
 **Conservation et purge.** Bloc optionnel `conservation` d'`instance.json` :
 
@@ -530,15 +523,16 @@ archivage (le décompte part du clic d'archivage, pas de la date de sortie
 saisie) ; non activé par défaut. Un dossier dont l'état courant est dans `apres` depuis plus de `jours` (ou
 `jours_candidature` si l'état est `Soumise`) devient éligible à la purge :
 `/suivi` l'affiche, le bouton *Purger les dossiers terminés* (RH) efface les
-pièces (CNI, RIB, contrats, copies comptables), réduit `dossier.json` à
-établissement / poste / date de début, nettoie le journal (commentaires libres,
-IP, procédures Yousign jetés), garde une entrée `purge` et renomme le répertoire
-`purge-<id>`. **Aucun octet supprimé sans trace : le journal reste.** Bloc
+pièces en base (CNI, RIB, contrats, versions comprises), réduit les champs du
+dossier à établissement / poste / date de début, nettoie le journal (commentaires libres,
+IP, procédures Yousign jetés) et y garde une entrée `purge`.
+**Aucun octet supprimé sans trace : le journal reste.** Bloc
 absent = aucune purge (rétro-compatible). La purge s'exécute dans une requête,
-jamais dans un cron (invariant mono-process). `python purger.py` est le pendant
-**lecture seule** : liste les éligibles (code de sortie non nul s'il en reste),
-les `dossier.json` orphelins hors profondeur de `store._scan()`, et
-l'avertissement drive.
+jamais dans un cron. `python purger.py` est le pendant
+**lecture seule** : liste les éligibles (code de sortie non nul s'il en reste)
+et rappelle que la collection `mails` (mode console) n'est pas purgée par dossier.
+Les **sauvegardes de la base** gardent les données jusqu'à leur propre
+expiration : à régler côté hébergeur.
 
 **Direction artistique du client.** Fichier optionnel `config/theme.json`, plus
 un dossier `config/marque/` pour le logo et le favicon — servi par Flask sur
@@ -588,26 +582,26 @@ de frappe, c'est le logo que personne n'a copié dans l'instance.
 | | |
 |---|---|
 | `app.py` | routes et parcours ; aucune action au `GET` |
-| `store.py` | disque, journal, états + `TRANSITIONS`, liens signés HMAC |
+| `store.py` | accès à MongoDB (dossiers, pièces), journal, états + `TRANSITIONS`, liens signés HMAC |
 | `contrat.py` | remplissage des `.docx` (`paragraphes`/`remplacer` repris du générateur historique, hors dépôt) |
 | `config.py` | lecture de `config/` + garde-fou de démarrage |
 | `apparence.py` | `theme.json` traduit en tokens CSS : palette, dérivées, contraste, logo ; ne connaît pas `config` |
 | `mails.py` | rendu des templates + SMTP ou console |
 | `signature.py` | e-sign Yousign, optionnel, désactivé par défaut |
-| `installer.py` | crée l'instance d'un nouveau client depuis `config.exemple/` |
+| `installer.py` | crée l'instance d'un nouveau client : compte `rh` en base, `config/` depuis `config.exemple/`, `.env` des secrets |
 | `placeholders.py` | fiche des `{{Jetons}}` à remettre au client, dérivée de sa config |
 | `recap.py` | mail hebdomadaire au cabinet : dossiers remis + liens de lot (CLI, à mettre en cron) |
 | `sharepoint.py` | bouton « Récupérer les dossiers » : import des salariés déjà en poste depuis un SharePoint (Microsoft Graph, connexion par code) ; actif seulement avec un bloc `sharepoint` dans `instance.json` — `requirements-sharepoint.txt` |
 | `excel.py` | bouton « Compléter les dossiers » : lecture des exports `.xlsx` de la RH (stdlib), valeurs proposées puis enregistrées par la RH |
-| `purger.py` | pendant lecture seule de la purge : éligibles, orphelins, avertissement drive (CLI) |
+| `purger.py` | pendant lecture seule de la purge : éligibles, orphelins, rappel sur la collection `mails` (CLI) |
 | `doctor.py` | couverture de la config, vérifiée en produisant les contrats |
-| `configurer.py` | bilan de config lisible (avec avertissements de mise en production), assistant interactif, ajout de comptes, envoi de test SMTP |
+| `configurer.py` | bilan de config lisible (avec avertissements de mise en production), assistant interactif, ajout de comptes, import de sociétés, envoi de test SMTP |
 | `tests/test_parcours.py` | les deux couloirs, signature, fiche, récap, refus attendus |
 | `tests/test_valeurs_contrat.py` | les VALEURS imprimées : grille (forfait et barème), mensualisation, blocs conditionnels, deux entités sans fuite — sur une config fabriquée en temp |
 | `tests/test_signature.py` | `signature.py` contre un transport factice |
 | `tests/test_clients.py` | plusieurs clients factices, une instance chacun, étanches |
 | `tests/test_produit.py` | balisage client refusé si mal écrit, fiche dérivée, config versionnée, `conservation` malformée refusée, refus de démarrer à deux, règle `templates` dont un `quand` ne peut jamais correspondre refusée |
-| `tests/test_import.py` | import SharePoint contre un transport Graph factice : fichiers retenus, doublons, reprise, disque, dossier lié |
+| `tests/test_import.py` | import SharePoint contre un transport Graph factice : fichiers retenus, doublons, reprise, base, dossier lié |
 | `tests/test_excel.py` | lecture `.xlsx`, conversion vers les champs, rapprochement par nom, écran « Compléter » |
 | `tests/test_purge.py` | parcours complet → purge → nom/NIR/adresse absents partout, rejouable, jeton de lot révoqué |
 | `tests/test_mails.py` | mode console, override `MAILS_MODE`, STARTTLS+login imposés dès qu'un identifiant SMTP est présent |
@@ -621,17 +615,18 @@ de frappe, c'est le logo que personne n'a copié dans l'instance.
   pas de verrou anti-brute-force.
 - **Relance automatique** à J+3 sur la validation.
 - **Anti-robot du formulaire public** (Altcha, honeypot, rate-limit).
-- **Purge côté service de synchronisation** : la purge locale ne vide ni la
-  corbeille ni l'historique de versions du drive (à faire à la main).
-- **Verrou fichier multi-process réel** (`portalocker`) : `.serveur-actif.json`
-  prévient l'erreur de déploiement, il n'arbitre pas une course.
+- **Export zip** d'un dossier en arborescence `DOSSIERS SALARIES/<Groupe>/<Établissement>/<Poste>/NOM Prénom/`
+  depuis l'app : pas encore fait. En attendant, la RH retrouve un dossier par
+  l'écran « Salariés » et sa fiche.
+- **Guide d'hébergement MongoDB Atlas** détaillé : pas encore écrit.
 - **Échéance légale de remise d'un CDD** (2 jours ouvrables) : le type de contrat
   est de la pure config (une règle `templates` peut porter sur n'importe quel
   champ du formulaire), mais aucun délai n'est suivi — seule la date de début
   passe en rouge.
-- **Pas d'écran d'administration** : c'est l'éditeur qui édite les `.json` du
-  client, ce qui suppose un accès au serveur pour redémarrer après coup.
-- **`config/` est encore versionné**, secret et hash du compte RH compris, alors
+- **Pas d'écran d'administration** de `config/` : c'est l'éditeur qui édite les
+  `.json` du client, ce qui suppose un accès au serveur pour redémarrer après
+  coup. (Les sociétés, établissements et comptes, eux, sont en base.)
+- **`config/` est encore versionné** (fixture sans secret), alors
   que ce dossier est une instance et pas du produit. Le sortir du dépôt suppose
   d'abord de rendre `test_parcours`, `test_ecrans` et `test_signature`
   indépendants de `config/` — ils s'en servent comme jeu de démo. À traiter par

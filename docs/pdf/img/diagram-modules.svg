@@ -23,7 +23,7 @@
   <g font-size="12.5" text-anchor="middle">
     <rect x="24" y="206" width="188" height="58" rx="6" fill="#1e293b"/>
     <text x="118" y="229" fill="#fff" font-weight="600" font-family="Consolas, monospace">store.py</text>
-    <text x="118" y="250" fill="#a7c4ba">data/ : journal, fichiers</text>
+    <text x="118" y="250" fill="#a7c4ba">MongoDB : dossiers, fichiers</text>
     <rect x="226" y="206" width="188" height="58" rx="6" fill="#1e293b"/>
     <text x="320" y="229" fill="#fff" font-weight="600" font-family="Consolas, monospace">contrat.py</text>
     <text x="320" y="250" fill="#a7c4ba">jetons → contrat .docx</text>
@@ -42,11 +42,11 @@
     <text x="522" y="324" fill="#e2e8f0">lecture des .xlsx</text>
   </g>
   <line x1="320" y1="352" x2="320" y2="380" stroke="#475569" stroke-width="2" marker-end="url(#a)"/>
-  <text x="330" y="371" font-size="12.5" fill="#475569">tous lisent la configuration par</text>
+  <text x="330" y="371" font-size="12.5" fill="#475569">tous lisent la configuration</text>
 
   <rect x="120" y="384" width="400" height="58" rx="8" fill="#b45309"/>
   <text x="320" y="408" text-anchor="middle" fill="#fff" font-size="15" font-weight="600" font-family="Consolas, monospace">config.py</text>
-  <text x="320" y="429" text-anchor="middle" fill="#fde68a" font-size="12.5">lit config/, cache, garde-fou verifier()</text>
+  <text x="320" y="429" text-anchor="middle" fill="#fde68a" font-size="12.5">lit config/, sociétés et comptes en base, verifier()</text>
 
   <text x="320" y="468" text-anchor="middle" font-size="12" fill="#64748b" font-style="italic">Les scripts (installer, configurer, doctor, recap, purger…) appellent les mêmes modules, sans app.py.</text>
 </svg>

@@ -7,7 +7,7 @@ Le piege de ce fichier : poster N+1 mauvais mots de passe et constater qu'on
 n'est pas connecte PASSE MEME SANS LIMITEUR, puisque tout est refuse de toute
 facon. La seule assertion qui distingue « le limiteur mord » de « le mot de
 passe est faux » est de poster le BON mot de passe une fois le budget epuise.
-Ecrit dans un dossier temporaire, ne touche jamais data/.
+Ecrit dans une base vide (mongomock), rien sur le disque.
 """
 import os
 import subprocess
@@ -18,16 +18,17 @@ from pathlib import Path
 sys.stdout.reconfigure(encoding="utf-8")
 sys.stderr.reconfigure(encoding="utf-8")
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-os.environ["DONNEES"] = tempfile.mkdtemp(prefix="contratgen-login-")
+from _outils import base_mongo  # noqa: E402
+base_mongo("login")
 os.environ["PROXIES"] = "1"        # ce fichier teste la config « derriere Caddy »
 
 import config          # noqa: E402
 import app as module   # noqa: E402
 from app import app    # noqa: E402
+from _outils import compte  # noqa: E402
+compte("rh", "fixture")
 
 app.config["PROPAGATE_EXCEPTIONS"] = True
-for zone in ("soumissions",):
-    (config.DONNEES / zone).mkdir(parents=True, exist_ok=True)
 
 MDP = "fixture"
 
@@ -111,12 +112,11 @@ def proxyfix_actif_sous_waitress():
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
         port = s.getsockname()[1]
-    donnees = Path(tempfile.mkdtemp(prefix="contratgen-waitress-"))
-    env = {**os.environ, "PORT": str(port), "PYTHONIOENCODING": "utf-8",
-           "DONNEES": str(donnees)}
+    journaux = Path(tempfile.mkdtemp(prefix="contratgen-waitress-"))
+    env = {**os.environ, "PORT": str(port), "PYTHONIOENCODING": "utf-8"}
     env.pop("DEBUG", None)
     # sortie dans un fichier, pas un PIPE jamais relu : un pipe plein bloquerait le serveur
-    journal = open(donnees / "app.log", "w", encoding="utf-8")
+    journal = open(journaux / "app.log", "w", encoding="utf-8")
     p = subprocess.Popen([sys.executable, "app.py"], env=env, stdout=journal,
                          stderr=subprocess.STDOUT,
                          cwd=str(Path(__file__).resolve().parent.parent))
@@ -138,7 +138,7 @@ def proxyfix_actif_sous_waitress():
         fin = time.time() + 60
         while True:
             assert p.poll() is None, \
-                "app.py s'est arrete :\n" + (donnees / "app.log").read_text(encoding="utf-8")
+                "app.py s'est arrete :\n" + (journaux / "app.log").read_text(encoding="utf-8")
             assert time.time() < fin, "app.py n'ecoute toujours pas apres 60 s"
             try:
                 socket.create_connection(("127.0.0.1", port), timeout=1).close()

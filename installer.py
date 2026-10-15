@@ -1,104 +1,103 @@
 """Crée l'instance d'un nouveau client, hors du dépôt.
 
     python installer.py "ACME Restauration" /srv/acme
-    python installer.py "ACME Restauration" /srv/acme "C:/Users/rh/OneDrive - ACME/Embauches"
 
-Le code est le produit ; l'instance est un dossier à part, qui ne contient que
-ce qui appartient au client :
+À lancer avec MONGO_URI et MONGO_DB dans l'environnement : la base neuve de ce
+client, qui reçoit le premier compte. L'instance est un dossier à part, qui ne
+contient que ce qui appartient au client :
 
     /srv/acme/
-      config/     <- copie de config.exemple/, secrets générés, à compléter
-      data/       <- soumissions, dossiers, pièces (la sauvegarde, c'est ça)
+      config/     <- copie de config.exemple/, à compléter
+      .env        <- secrets (SECRET_KEY généré, MONGO_URI, MONGO_DB, CONFIG_DIR)
 
-Le 3e argument, optionnel, met `data/` ailleurs : un dossier répliqué par le
-client de synchronisation d'un drive (OneDrive, SharePoint, Google Drive) déjà
-installé sur cette machine. L'app y écrit comme sur un disque local, le choix
-est écrit dans instance.json (bloc `stockage`) et vérifié au démarrage. Sans
-3e argument : `data/` dans l'instance, comme avant.
+Les données (dossiers, pièces, comptes, sociétés) vivent en base, jamais sur le
+disque. Les secrets vivent dans .env, jamais dans config/ : config/ se copie et
+se montre au client.
 
 L'installateur **copie** le squelette au lieu de nettoyer une config existante :
 aucune valeur d'un autre client ne peut survivre par oubli. Il refuse d'écrire
-sur un config/ déjà présent — une réinstallation par-dessus une instance qui
-tourne effacerait ses secrets et ses comptes.
+sur un config/ ou un .env déjà présent — une réinstallation par-dessus une
+instance qui tourne effacerait ses secrets.
 """
 import json
+import os
 import secrets
 import shutil
 import sys
 from pathlib import Path
 
-from werkzeug.security import generate_password_hash
 
 sys.stdout.reconfigure(encoding="utf-8")
 sys.stderr.reconfigure(encoding="utf-8")   # le refus d'écraser part sur stderr
 SQUELETTE = Path(__file__).parent / "config.exemple"
 
 
-def main(nom, cible, drive=None):
-    cible = Path(cible)
-    config = cible / "config"
-    if config.exists():
-        sys.exit(f"{config} existe déjà — refus d'écraser une instance installée.")
+def main(nom, cible):
+    cible = Path(cible).resolve()        # systemd (EnvironmentFile) exige un chemin absolu
+    config, env = cible / "config", cible / ".env"
+    for f in (config, env):
+        if f.exists():
+            sys.exit(f"{f} existe déjà — refus d'écraser une instance installée.")
 
-    if drive:
-        drive = Path(drive)
-        # Creer la racine du drive elle-meme serait creer un dossier NON
-        # synchronise qui ressemble a un dossier synchronise : on cree le
-        # sous-dossier, jamais son parent.
-        if not drive.parent.is_dir():
-            sys.exit(f"{drive.parent} n'existe pas — donnez un chemin situé dans le "
-                     f"dossier répliqué par le client de synchronisation.")
-        drive.mkdir(exist_ok=True)
-        # Meme refus que sur config/ : deux instances sur le meme dossier drive
-        # fusionneraient leurs dossiers salaries, et `store._verrou` ne protege
-        # qu'a l'interieur d'un process -- entrees de journal perdues.
-        if any(drive.iterdir()):
-            sys.exit(f"{drive} n'est pas vide — donnez un dossier neuf : "
-                     f"deux instances sur le même dossier perdraient des données.")
+    # Le compte d'abord : sans base joignable (MONGO_URI/MONGO_DB), rien n'est
+    # cree et l'installateur dit quoi poser, au lieu d'une instance sans compte.
+    import store              # apres les refus ci-dessus : importe config
+    mdp = secrets.token_urlsafe(9)
+    try:
+        # Une base = une instance : un compte rh deja la, c'est la base d'un autre
+        # client (MONGO_DB oublie dans le shell), dont on ecraserait le mot de passe.
+        if store.db().comptes.find_one({"_id": "rh"}):
+            sys.exit(f"la base « {os.environ['MONGO_DB']} » a déjà un compte rh : elle "
+                     "sert une autre instance. Donnez une base neuve (MONGO_DB).")
+        store.poser_compte("rh", mdp)
+    except RuntimeError as e:
+        sys.exit(str(e))
 
     shutil.copytree(SQUELETTE, config)
-    if not drive:
-        (cible / "data").mkdir(parents=True, exist_ok=True)
-
-    mdp = secrets.token_urlsafe(9)
     conf = json.loads((config / "instance.json").read_text(encoding="utf-8"))
     conf["client"] = nom
-    conf["stockage"] = ({"mode": "dossier", "chemin": str(drive)} if drive
-                        else {"mode": "local"})
-    conf["secret"] = secrets.token_hex(32)
-    conf["utilisateurs"] = {"rh": {"mdp_hash": generate_password_hash(mdp)}}
     (config / "instance.json").write_text(
         json.dumps(conf, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    ou = f"{drive} (dossier synchronisé)" if drive else f"{cible / 'data'}"
+    # Une ligne CLE=valeur, sans commentaire ni guillemets : lu tel quel par
+    # systemd (EnvironmentFile) comme par la ligne PowerShell affichee plus bas.
+    valeurs = {"SECRET_KEY": secrets.token_hex(32), "MONGO_URI": os.environ["MONGO_URI"],
+               "MONGO_DB": os.environ["MONGO_DB"], "CONFIG_DIR": str(config)}
+    env.write_text("".join(f"{k}={v}\n" for k, v in valeurs.items()), encoding="utf-8")
+    env.chmod(0o600)          # sans effet sous Windows : le profil utilisateur protege deja
+
+    e = f'--env "{env}"'
     print(f"""
 Instance « {nom} » créée dans {cible}
 
   Compte RH : rh / {mdp}      <- noté une seule fois, ici
+  Secrets   : {env}           <- SECRET_KEY, MONGO_URI, MONGO_DB, CONFIG_DIR
+
+Chaque commande ci-dessous prend ce fichier avec  {e}
+  VPS : ExecStart=…/python app.py {e} dans l'unité systemd, fichier lisible
+        par le compte du service seulement (chmod 600)
+Relais SMTP authentifié : ajoutez SMTP_MOT_DE_PASSE=… au fichier ; Yousign : YOUSIGN_CLE_API=…
 
 À compléter avant de servir (le démarrage refuse tant que ce n'est pas fait) :
-  1. {config}/societes.json  — sociétés, SIRET, mentions légales, cabinet comptable ;
-     "contrat": "genere" (contrat produit par l'app) ou "depose" (fait à la main)
-  2. {config}/instance.json  — bloc "mails" (SMTP + destinataires), puis "mode": "smtp"
-  3. {config}/formulaire.json — les champs propres au client, et leur placeholder
-  4. python placeholders.py  — génère la fiche des {{{{Jetons}}}} à envoyer au client,
+  1. sociétés et établissements (SIRET, mentions légales, cabinet comptable), en base :
+     python configurer.py --assister {e}
+     ou, depuis un fichier : python configurer.py importer-societes <fichier.json> {e}
+  2. {config / "instance.json"}  — bloc "mails" (SMTP + destinataires), puis "mode": "smtp"
+  3. {config / "formulaire.json"} — les champs propres au client, et leur placeholder
+  4. python placeholders.py {e}  — génère la fiche des {{{{Jetons}}}} à envoyer au client,
      qui balise lui-même ses .docx et les renvoie
-  5. déposer les .docx reçus dans {config}/contrats/, puis les déclarer
+  5. déposer les .docx reçus dans {config / "contrats"}, puis les déclarer
      dans "templates" (poste -> fichier)
 
 À tout moment :
-  CONFIG_DIR={config} python configurer.py             <- bilan : ce qui manque, et où
-  CONFIG_DIR={config} python configurer.py --assister  <- guidé, question par question
+  python configurer.py {e}             <- bilan : ce qui manque, et où
+  python configurer.py --assister {e}  <- guidé, question par question
 
-Puis :
-  CONFIG_DIR={config} python app.py
-
-Les données vont dans {ou} — l'instance le sait : plus besoin de DONNEES= sur la
-ligne de lancement (qui reste prioritaire si vous la posez quand même).
+Puis : python app.py {e}
 """)
 
 
 if __name__ == "__main__":
-    if not 3 <= len(sys.argv) <= 4:
+    if len(sys.argv) != 3:
         sys.exit(__doc__)
     main(*sys.argv[1:])

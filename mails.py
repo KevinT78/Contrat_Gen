@@ -3,8 +3,8 @@
 Le texte de chaque mail est un template `config/mails/<nom>.txt` : premiere
 ligne `Objet: ...`, le reste est le corps. Pas d'ecran d'edition.
 
-Mode `console` (defaut de la demo) : rien ne part, chaque mail est ecrit dans
-data/mails/ et affiche. Passer `"mode": "smtp"` dans instance.json pour
+Mode `console` (defaut de la demo) : rien ne part, chaque mail est range dans
+la collection `mails` et son en-tete affiche. Passer `"mode": "smtp"` dans instance.json pour
 envoyer reellement ; la variable d'env `MAILS_MODE` surclasse le fichier
 (le .bat MailHog s'en sert pour ne pas modifier instance.json).
 
@@ -12,7 +12,6 @@ Sans `utilisateur` configure, l'envoi SMTP part en clair sans login : c'est
 le cas d'un catcher local (MailHog). Des qu'un identifiant est present, TLS
 verifie + login sont imposes.
 """
-import itertools
 import os
 import smtplib
 import ssl
@@ -20,8 +19,6 @@ from email.message import EmailMessage
 
 import config
 import store
-
-_SERIE = itertools.count()
 
 
 class _Tolerant(dict):
@@ -70,15 +67,12 @@ def envoyer(modele, a, cc=(), html=None, **vals):
             msg.add_alternative(html, subtype="html")
 
         if mode_envoi == "console":
-            d = config.DONNEES / "mails"
-            d.mkdir(parents=True, exist_ok=True)
-            # Le compteur separe deux mails de la meme seconde (un par cabinet
-            # dans recap.py) : le second ecrasait le premier.
-            nom = f"{store.maintenant().replace(':', '-')}-{next(_SERIE):03d}-{modele}.eml"
-            (d / nom).write_bytes(bytes(msg))
-            print(f"\n[MAIL {modele}] -> {msg['To']}"
-                  + (f" (cc {msg['Cc']})" if copie else "")
-                  + f"\nObjet: {objet}\n{corps}\n", flush=True)
+            # Rien sur le disque : le .eml va en base (le corps porte le nom
+            # du salarie, il n'a rien a faire dans une sortie de console).
+            store.db().mails.insert_one({"le": store.maintenant(), "modele": modele,
+                                         "eml": bytes(msg)})
+            print(f"[MAIL {modele}] -> {msg['To']}"
+                  + (f" (cc {msg['Cc']})" if copie else ""), flush=True)
             return True, None
 
         with smtplib.SMTP(conf["hote"], conf["port"], timeout=20) as s:
@@ -88,7 +82,7 @@ def envoyer(modele, a, cc=(), html=None, **vals):
                 # simplification volontaire : un relais prod sans auth (IP allowlist)
                 # partirait aussi en clair, a revoir si ce cas se presente.
                 s.starttls(context=ssl.create_default_context())
-                s.login(conf["utilisateur"], conf["mot_de_passe"])
+                s.login(conf["utilisateur"], os.environ.get("SMTP_MOT_DE_PASSE", ""))
             s.send_message(msg)
         return True, None
     except Exception as e:                       # noqa: BLE001

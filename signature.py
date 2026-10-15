@@ -1,10 +1,10 @@
 """E-signature par un prestataire (Yousign API v3). Optionnel, désactivé par
 défaut : sans bloc "signature" en mode "yousign" dans config/instance.json, le
 parcours reste en signature manuelle (la RH dépose le PDF signé elle-même).
+La clé d'API est un secret : variable d'environnement YOUSIGN_CLE_API.
 
     "signature": {
       "mode": "yousign",
-      "cle_api": "...",
       "url": "https://api.yousign.com/v3"      # optionnel, défaut ci-dessous
     }
 
@@ -16,6 +16,7 @@ Un seul prestataire, pas d'abstraction à une implémentation. `_TRANSPORT` est
 le seul point d'injection : les tests y branchent un transport factice.
 """
 import json
+import os
 import urllib.request
 import uuid
 
@@ -29,7 +30,7 @@ def _conf():
     s = config.instance().get("signature", {})
     if s.get("mode") != "yousign":
         raise RuntimeError("signature e-sign non activée (mode != 'yousign')")
-    return s.get("url") or URL_DEFAUT, s["cle_api"]
+    return s.get("url") or URL_DEFAUT, os.environ.get("YOUSIGN_CLE_API", "")
 
 
 def _appel(methode, chemin, cle, corps=b"", type_contenu="application/json"):

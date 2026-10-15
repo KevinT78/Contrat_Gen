@@ -3,9 +3,7 @@
 {% block corps %}
 <p class="retour"><a href="{{ url_for('etablissements_page') }}">← Établissements</a></p>
 <h1>{{ 'Nouvel établissement' if creation else 'Modifier ' ~ valeurs.nom }}</h1>
-<p class="sous">{% if creation %}Le nouvel établissement est enregistré{% else %}La modification est enregistrée{% endif %}
-  dans {% if supabase %}Supabase{% else %}la configuration{% endif %}.
-  Le mail de l'établissement reçoit la validation et le rejet.</p>
+<p class="sous">Le mail de l'établissement reçoit la validation et le rejet.</p>
 
 {% for e in erreurs %}<p class="msg erreur">{{ e }}</p>{% endfor %}
 

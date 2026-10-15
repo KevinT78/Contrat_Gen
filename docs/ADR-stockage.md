@@ -1,6 +1,24 @@
 # ADR — où vivent les données : local ou dossier synchronisé
 
-**Statut :** accepté, 2026-09-10.
+**Statut :** accepté, 2026-09-10. **Remplacée le 2026-10-14 par la bascule MongoDB** (voir ci-dessous). Le texte qui suit est conservé comme historique de la décision de septembre.
+
+## Décision du 2026-10-14 : toutes les données dans MongoDB
+
+Le bloc `stockage`, ses modes `local` et `dossier`, la variable `DONNEES`, le dossier `data/` et le verrou multi-machine `.serveur-actif.json` n'existent plus. Les données vivent dans une base MongoDB (une base par client, `MONGO_DB`) :
+
+- `dossiers` : un document par soumission ou dossier, journal compris ;
+- `fichiers` : pièces et contrats, octets inline, 15 Mo maximum par fichier ;
+- `recap` (état du mail hebdomadaire par cabinet), `mails` (mode console seulement), `comptes`, `societes`, `etat` (jeton SharePoint).
+
+Le disque ne garde que `config/`, en lecture seule pour l'app. Les secrets (`SECRET_KEY`, `MONGO_URI`, `MONGO_DB`, et selon le cas `SMTP_MOT_DE_PASSE`, `YOUSIGN_CLE_API`) sont des variables d'environnement, écrites par `installer.py` dans un `.env` hors de `config/`.
+
+Ce que cela change par rapport à l'ADR de septembre :
+
+- Le « point dur » de la phase 2 est tranché : le journal s'écrit par compare-and-swap en base. Plusieurs process ne font plus perdre d'entrées de journal ; il reste seulement que les plafonds de rate-limit sont multipliés par le nombre de process. waitress mono-process reste le lancement recommandé.
+- Les conséquences propres au dossier synchronisé (verrouillage pendant l'upload, fichiers à la demande, corbeille du drive qui garde les pièces après purge) disparaissent avec lui.
+- La purge efface les pièces en base, versions comprises ; le journal reste. La collection `mails` (mode console) n'est pas purgée par dossier. Les sauvegardes de la base gardent les données jusqu'à leur propre expiration.
+- Le seam d'I/O de `store.py` décrit plus bas existe encore sauf `chemin()` (plus de chemin disque) ; ses fonctions lisent et écrivent la base. Il n'y a toujours pas de classe `Stockage` ni de registre de backends.
+- L'export d'un dossier en arborescence `DOSSIERS SALARIES/<Groupe>/<Établissement>/<Poste>/NOM Prénom/` (zip) n'est pas encore fait : la RH retrouve les dossiers par l'écran « Salariés » et la fiche dossier.
 
 ## Contexte
 

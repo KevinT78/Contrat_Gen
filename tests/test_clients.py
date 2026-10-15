@@ -6,9 +6,10 @@ Modèle de déploiement : un client = une copie du repo. Ce test le prouve pour
 de vrai — pour chaque client factice il fait une copie du code + config/, lance
 `installer.py "<nom>"`, écrit une config propre au client (sociétés,
 établissements, couloirs), puis joue le parcours complet dans un interpréteur
-neuf (tests/_client_parcours.py). Il vérifie enfin que les copies sont
-étanches : secrets distincts, dossiers de données distincts, aucune trace du
-client précédent.
+neuf (tests/_client_parcours.py), avec le .env écrit par l'installateur
+chargé comme systemd le ferait. Il vérifie enfin que les copies sont
+étanches : secrets distincts, bases distinctes, rien d'écrit sur le disque de
+l'instance, aucune trace du client précédent.
 """
 import json
 import os
@@ -21,11 +22,17 @@ from pathlib import Path
 
 from docx import Document
 
+# Les enfants (installer.py, _client_parcours.py) heritent de l'env : chacun a sa
+# base mongomock, le compte rh est cree par celui qui en a besoin.
+os.environ.setdefault("MONGO_URI", "mongomock://")
+os.environ["MONGO_DB"] = "test-clients"
+os.environ.setdefault("BASE_EN_MEMOIRE", "1")
+
 sys.stdout.reconfigure(encoding="utf-8")
 RACINE = Path(__file__).resolve().parent.parent
 CODE = ["app.py", "config.py", "apparence.py", "contrat.py", "mails.py",
         "signature.py", "configurer.py", "store.py", "installer.py", "recap.py",
-        "purger.py", "placeholders.py", "doctor.py", "demo.py", "sharepoint.py",
+        "purger.py", "placeholders.py", "doctor.py", "demo.py", "demo_import.py", "sharepoint.py",
         "excel.py"]
 
 MENTIONS = ["RaisonSociale", "FormeCapital", "RCS", "SiegeSocial", "ConventionCollective"]
@@ -117,10 +124,6 @@ CLIENTS = [
         # « poste » etaient lus en dur -> KeyError en pleine action RH.
         "slug": "btp",
         "nom": "Toitures du Nord",
-        # Le client installe sur un DRIVE : `installer.py` recoit un 3e argument,
-        # instance.json porte stockage.mode = dossier, et son parcours tourne SANS
-        # DONNEES= dans l'environnement -- sinon le test ne prouverait rien.
-        "drive": True,
         "formulaire": FORMULAIRE_RENOMME,
         "postes": ["Couvreur", "Chef d'équipe"],
         # Poste a APOSTROPHE, joue expres : Jinja l'echappe en « d&#39; », et
@@ -166,24 +169,30 @@ def poser_code(copie):
     shutil.copytree(RACINE / "config.exemple", copie / "config.exemple")
 
 
+def base_neuve(nom):
+    """Env d'un enfant sur la base `nom`, vide. mongomock l'est d'office (une
+    base par process) ; un mongod réel garde la base d'un lancement à l'autre."""
+    if not os.environ["MONGO_URI"].startswith("mongomock://"):
+        import pymongo
+        pymongo.MongoClient(os.environ["MONGO_URI"]).drop_database(nom)
+    return {**os.environ, "MONGO_DB": nom}
+
+
 def installer_copie(base, client):
     copie = base / client["slug"]
     poser_code(copie)
 
-    args = [client["nom"], "."]
-    if client.get("drive"):
-        (base / "drives").mkdir(exist_ok=True)
-        client["drive_chemin"] = base / "drives" / client["slug"]
-        args.append(str(client["drive_chemin"]))
-    out = subprocess.run([sys.executable, "installer.py", *args],
-                         cwd=copie, capture_output=True, text=True, encoding="utf-8")
+    out = subprocess.run([sys.executable, "installer.py", client["nom"], "."],
+                         cwd=copie, capture_output=True, text=True, encoding="utf-8",
+                         env=base_neuve(f"test-{client['slug']}"))
     assert out.returncode == 0, out.stderr
     mdp = re.search(r"rh / (\S+)", out.stdout)
     assert mdp, out.stdout
     client["password"] = mdp.group(1)
 
     # config propre au client
-    (copie / "config" / "societes.json").write_text(
+    # lu par base_mongo() dans _client_parcours.py : la base de l'enfant part vide
+    (copie / "config" / "societes.amorce.json").write_text(
         json.dumps(client["societes"], ensure_ascii=False, indent=2), encoding="utf-8")
     if formulaire := client.get("formulaire"):
         (copie / "config" / "formulaire.json").write_text(
@@ -196,11 +205,12 @@ def installer_copie(base, client):
     inst["url"] = "http://localhost"
     inst["mails"].update(expediteur=f"rh@{client['slug']}.example",
                          rh=[f"rh@{client['slug']}.example"])
-    attendu = ({"mode": "dossier", "chemin": str(client["drive_chemin"])}
-               if client.get("drive") else {"mode": "local"})
-    assert inst["stockage"] == attendu, f"installer.py : {inst.get('stockage')}"
-    assert (copie / "data").is_dir() != bool(client.get("drive")), \
-        "en mode dossier, l'instance ne doit pas porter de data/"
+    assert "secret" not in inst and "stockage" not in inst, f"installer.py : {inst}"
+    env = dict(l.split("=", 1) for l in (copie / ".env").read_text(encoding="utf-8").splitlines())
+    assert set(env) == {"SECRET_KEY", "MONGO_URI", "MONGO_DB", "CONFIG_DIR"}, env
+    assert env["MONGO_DB"] == f"test-{client['slug']}", env
+    assert Path(env["CONFIG_DIR"]) == (copie / "config").resolve(), env
+    client["env"] = env
     (copie / "config" / "instance.json").write_text(
         json.dumps(inst, ensure_ascii=False, indent=2), encoding="utf-8")
     modele_docx(copie / "config" / "contrats" / "contrat.docx", [
@@ -220,19 +230,38 @@ def installer_copie(base, client):
     return copie
 
 
+def refus_base_deja_servie(base):
+    """MONGO_DB resté sur la base d'un autre client : son compte rh existe, le
+    réinstaller écraserait son mot de passe. Refus, et rien n'est créé. La base
+    mongomock de l'enfant est amorcée avec ce compte (MONGOMOCK_AMORCE)."""
+    copie = base / "base-deja-servie"
+    poser_code(copie)
+    amorce = base / "amorce-deja-servie.json"
+    amorce.write_text(json.dumps({"comptes": [{"_id": "rh", "mdp_hash": "x"}]}),
+                      encoding="utf-8")
+    r = subprocess.run([sys.executable, "installer.py", "Autre", "."], cwd=copie,
+                       capture_output=True, text=True, encoding="utf-8",
+                       env={**os.environ, "MONGO_URI": "mongomock://",
+                            "MONGOMOCK_AMORCE": str(amorce)})
+    assert r.returncode != 0 and "déjà un compte rh" in r.stderr, r.stderr
+    assert not (copie / "config").exists(), "refus après avoir créé config/"
+
+
 def refus_avant_config(base, client):
-    """Juste après installer.py, sans societes.json rempli : refus de servir."""
+    """Juste après installer.py, sans société en base : refus de servir."""
     copie = base / (client["slug"] + "-nu")
     poser_code(copie)
+    env = base_neuve(f"test-{client['slug']}-nu")
     subprocess.run([sys.executable, "installer.py", client["nom"], "."],
-                   cwd=copie, capture_output=True, text=True, encoding="utf-8", check=True)
+                   cwd=copie, capture_output=True, text=True, encoding="utf-8", check=True,
+                   env=env)
     assert subprocess.run([sys.executable, "installer.py", client["nom"], "."],
                           cwd=copie, capture_output=True, text=True,
-                          encoding="utf-8").returncode != 0, \
+                          encoding="utf-8", env=env).returncode != 0, \
         "réinstaller par-dessus une instance existante doit être refusé"
     r = subprocess.run(
         [sys.executable, "-c", "import config,sys; sys.exit(0 if config.verifier() else 1)"],
-        cwd=copie, capture_output=True, text=True, encoding="utf-8")
+        cwd=copie, capture_output=True, text=True, encoding="utf-8", env=env)
     assert r.returncode == 0, "une copie fraîchement installée devrait refuser de servir"
     assert not list((copie / "config").rglob("*.docx")), "des .docx ont survécu à l'installation"
     for j in (copie / "config").rglob("*.json"):
@@ -249,6 +278,7 @@ def main():
     driver = str(Path(__file__).resolve().parent / "_client_parcours.py")
     vus = []
     try:
+        refus_base_deja_servie(base)
         for client in CLIENTS:
             refus_avant_config(base, client)
             copie = installer_copie(base, client)
@@ -262,44 +292,33 @@ def main():
                 "etab_depose": client["etab_depose"],
             }, ensure_ascii=False), encoding="utf-8")
 
-            # Le client « drive » tourne SANS DONNEES= : c'est instance.json qui
-            # doit envoyer ses ecritures sur le dossier synchronise.
-            env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
-            if client.get("drive"):
-                env.pop("DONNEES", None)
-            else:
-                env["DONNEES"] = str(copie / "data")
+            # Le .env de l'instance, charge comme systemd (EnvironmentFile) :
+            # c'est lui qui porte la cle de session et la base du client.
+            env = {**os.environ, **client["env"], "PYTHONIOENCODING": "utf-8"}
             r = subprocess.run([sys.executable, driver, str(copie), str(spec)],
                                capture_output=True, text=True, encoding="utf-8", env=env)
             assert r.returncode == 0, f"[{client['nom']}]\n{r.stdout}\n{r.stderr}"
             ok = [l for l in r.stdout.splitlines() if l.startswith("PARCOURS OK")]
             assert ok, r.stdout
-            _, nom, secret8, donnees = ok[0].split("\t")
-            if drive := client.get("drive_chemin"):
-                assert Path(donnees) == drive, f"écrit dans {donnees}, pas {drive}"
-                assert (drive / "soumissions").is_dir(), "rien écrit sur le drive"
-                assert not (copie / "data").exists(), \
-                    f"{copie}/data existe : le parcours a écrit dans l'instance"
-                # Même refus que sur config/ : deux instances sur le même dossier
-                # drive fusionneraient leurs dossiers salariés, et store._verrou
-                # ne protège qu'à l'intérieur d'un process.
-                seconde = base / (client["slug"] + "-bis")
-                poser_code(seconde)
-                r2 = subprocess.run(
-                    [sys.executable, "installer.py", client["nom"], ".", str(drive)],
-                    cwd=seconde, capture_output=True, text=True, encoding="utf-8")
-                assert r2.returncode != 0, \
-                    "installer une 2e instance sur un dossier drive occupé doit être refusé"
-            print(f"  ✓ {nom:22} secret {secret8}…  {donnees}")
-            vus.append((nom, secret8, donnees))
+            _, nom, secret8, base_client = ok[0].split("\t")
+            assert secret8 == client["env"]["SECRET_KEY"][:8], "la clé du .env n'a pas servi"
+            assert base_client == client["env"]["MONGO_DB"], "la base du .env n'a pas servi"
+            ecrits = sorted(str(f.relative_to(copie)) for f in copie.rglob("*")
+                            if f.is_file() and "__pycache__" not in f.parts
+                            and f.relative_to(copie).parts[0] not in ("config", "config.exemple",
+                                                                      "templates", "modeles")
+                            and f.name not in CODE and f.name != ".env")
+            assert not ecrits, f"le parcours a écrit sur le disque de l'instance : {ecrits}"
+            print(f"  ✓ {nom:22} secret {secret8}…  base {base_client}")
+            vus.append((nom, secret8, base_client))
 
         noms = {n for n, _, _ in vus}
         secrets = {s for _, s, _ in vus}
-        dossiers = {d for _, _, d in vus}
-        assert len(noms) == len(secrets) == len(dossiers) == len(CLIENTS), \
-            f"deux clients partagent un secret ou un dossier de données : {vus}"
+        bases = {b for _, _, b in vus}
+        assert len(noms) == len(secrets) == len(bases) == len(CLIENTS), \
+            f"deux clients partagent un secret ou une base : {vus}"
         print(f"\n{len(CLIENTS)} clients factices — copies étanches, "
-              f"secrets et données distincts.\n{base}")
+              f"secrets et bases distincts.\n{base}")
     finally:
         shutil.rmtree(base, ignore_errors=True)
 

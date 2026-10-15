@@ -4,8 +4,9 @@
     python demo.py --vide     # suivi vide : c'est toi qui fais tout, du formulaire
                               # public à la remise au cabinet (pièces imprimées)
 
-Données dans data_demo/ (jamais data/), effacées à chaque lancement. Mails en
-mode console : data_demo/mails/*.eml. Identifiants RH : rh / demo-rh.
+Données dans la base de démo (mongomock, en mémoire, vide à chaque lancement),
+rien sur le disque. Mails en mode console : collection `mails`, en-tête
+affiché ici. Identifiants RH : rh / demo-rh (compte créé au lancement).
 
 Quatre dossiers amorcés pour que le suivi ne soit pas vide au moment de
 présenter, chacun arrêté à une étape différente :
@@ -17,36 +18,49 @@ présenter, chacun arrêté à une étape différente :
 """
 import contextlib
 import io
+import json
 import os
-import shutil
 import sys
 from io import BytesIO
 from pathlib import Path
 
 RACINE = Path(__file__).resolve().parent
+# Valeurs posees AVANT import config : un `--env` passe a la demo ne les
+# remplace pas (l'environnement deja pose l'emporte). La demo tourne toujours
+# sur sa base en memoire, sauf MONGO_URI pose dans le shell.
 os.environ.setdefault("CONFIG_DIR", str(RACINE / "config.demo"))
-os.environ.setdefault("DONNEES", str(RACINE / "data_demo"))
 os.environ.setdefault("PORT", "5000")
+# base en memoire (requirements-dev.txt), videe a chaque lancement ; un MONGO_URI deja pose gagne
+os.environ.setdefault("MONGO_URI", "mongomock://")
+os.environ.setdefault("MONGO_DB", "contratgen-demo")
+os.environ.setdefault("BASE_EN_MEMOIRE", "1")
+os.environ.setdefault("SECRET_KEY", "demo-cle-publique-ne-jamais-deployer")
 sys.stdout.reconfigure(encoding="utf-8")
 # stderr AUSSI : le refus ci-dessous part par sys.exit(), donc sur stderr, et
 # sortirait en cp1252 illisible des que la sortie n'est pas un vrai terminal.
 sys.stderr.reconfigure(encoding="utf-8")
 
-# AVANT le rmtree : la demo tourne sur la config du client, qui ne vit pas dans
-# le depot. Sur un clone frais elle est absente -- le dire, plutot que d'effacer
-# data_demo/ puis d'exploser sur un FileNotFoundError d'instance.json.
+# La demo tourne sur la config du client, qui ne vit pas dans le depot. Sur un
+# clone frais elle est absente -- le dire, plutot qu'un FileNotFoundError.
 if not (Path(os.environ["CONFIG_DIR"]) / "instance.json").exists():
     sys.exit(f"Config introuvable : {os.environ['CONFIG_DIR']}\n"
              "La démo nécessite une config complète (formulaire riche, "
              "modèles de contrats, grille de salaires), pas une instance vide.")
 
-shutil.rmtree(os.environ["DONNEES"], ignore_errors=True)
-for zone in ("soumissions", "mails"):
-    (Path(os.environ["DONNEES"]) / zone).mkdir(parents=True)
-
 import config  # noqa: E402
 import store   # noqa: E402
 import app as serveur  # noqa: E402
+
+# Les comptes vivent en base : sur mongomock (propre au process) la démo crée le
+# sien ici, avant demarrer() qui refuse de servir sans compte.
+store.poser_compte("rh", "demo-rh")
+# Les societes aussi : celles de la config (societes.amorce.json ; une config
+# client d'avant la bascule a encore son societes.json).
+_CONF = Path(os.environ["CONFIG_DIR"])
+for _nom in ("societes.amorce.json", "societes.json"):
+    if (_CONF / _nom).exists():
+        config.importer_societes(json.loads((_CONF / _nom).read_text(encoding="utf-8")))
+        break
 
 PDF = b"%PDF-1.4\n1 0 obj<</Type/Catalog>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF"
 
@@ -58,7 +72,7 @@ GENERE = [c for c, _ in config.etablissements() if config.mode_contrat(c) == "ge
 DEPOSE = next((c for c, _ in config.etablissements()
                if config.mode_contrat(c) == "depose"), None)
 if not GENERE:
-    sys.exit("aucun établissement en contrat « genere » dans societes.json")
+    sys.exit("aucun établissement en contrat « genere » dans les sociétés de la config")
 
 
 def piece():
@@ -127,7 +141,7 @@ def amorcer():
     uid = soumettre(c, saisie())
     assert store.etat(store.lire(uid)) == "Soumise"
 
-    # 4. couloir « contrat déposé » : l etablissement est en « depose » (societes.json), le
+    # 4. couloir « contrat déposé » : l etablissement est en « depose » (sa societe), le
     #    contrat est fait à la main hors app. Validé, en attente du dépôt — à
     #    jouer en live : l'écran propose « Déposer le contrat », pas « Générer ».
     uid = soumettre(c, saisie(
@@ -144,10 +158,10 @@ Suivi vide : à toi de jouer, du formulaire public à la remise au cabinet.
        (CNI : sélectionne les DEUX fichiers cni_recto.pdf + cni_verso.pdf)
   2. /login (rh / demo-rh) -> « Demandes d'embauche » -> clic sur BENALI Sarah
   3. « Accepter — ouvrir le dossier »
-        -> mail « rappel DPAE » dans data_demo/mails/
+        -> mail « rappel DPAE » (en-tête affiché dans ce terminal)
   4. « Générer le contrat » -> aucun champ à saisir -> ouvre contrat.docx
   5. « DPAE créée et stockée » -> dépose l'accusé (un des PDF)  <- la DPAE dans le dossier
-  6. « Remettre au cabinet comptable » -> copie data_demo/compta/ + lien de lot
+  6. « Remettre au cabinet comptable » -> lien de lot (le cabinet l'ouvre sans compte)
   7. Salariés -> fiche du salarié -> « Déposer le contrat signé » (en haut) -> un des PDF
 
 Fiche candidat (parcours « contrat généré ») :
@@ -172,8 +186,8 @@ Variante « contrat déposé » : même fiche, Établissement = {etab_depose}
 if __name__ == "__main__":
     fiche = ""
     if "--vide" in sys.argv:
-        pieces = config.DONNEES / "pieces_demo"
-        pieces.mkdir(exist_ok=True)
+        pieces = RACINE / ".scratch" / "pieces_demo"     # factices, a deposer a la main
+        pieces.mkdir(parents=True, exist_ok=True)
         for nom in ("carte_vitale", "rib", "cni_recto", "cni_verso", "justif_domicile"):
             (pieces / f"{nom}.pdf").write_bytes(PDF)
         fiche = "\n" + FICHE.format(dossier=pieces, etab=GENERE[0],
@@ -186,8 +200,7 @@ if __name__ == "__main__":
 Démo Contrat_Gen — {config.instance()['client']}
   Formulaire (public) : http://localhost:{os.environ['PORT']}/
   Espace RH           : http://localhost:{os.environ['PORT']}/login   (rh / demo-rh)
-  Mails « envoyés »   : {config.DONNEES / 'mails'}
-  Mail hebdo cabinet  : CONFIG_DIR=config.demo DONNEES=data_demo python recap.py
+  Mails « envoyés »   : collection mails de la base de démo (en-têtes dans ce terminal)
 {fiche}""", flush=True)
     sys.argv = [sys.argv[0]]
     serveur.demarrer()

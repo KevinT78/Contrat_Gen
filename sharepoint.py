@@ -3,7 +3,7 @@ les dossiers d'un SharePoint (Microsoft Graph), un établissement à la fois.
 
 Connexion : compte Microsoft de la RH, code à saisir sur le site de Microsoft
 (device flow MSAL, client public Office : ni app Azure ni consentement admin).
-Jeton en cache dans DONNEES/sharepoint-jeton.json, effacé par deconnecter().
+Jeton en cache dans la collection `etat` (doc `sharepoint-jeton`), effacé par deconnecter().
 
 Actif seulement si instance.json porte un bloc `sharepoint` ; tout le vocabulaire
 du client y vit (aucun nom propre à un client ici) :
@@ -17,7 +17,6 @@ Rien d'autre (dossiers médicaux, disciplinaires...).
 """
 import json
 import re
-import shutil
 import threading
 import time
 import unicodedata
@@ -29,10 +28,9 @@ import store
 GRAPH = "https://graph.microsoft.com/v1.0"
 SCOPES = ["https://graph.microsoft.com/.default"]
 CLIENT_OFFICE = "d3590ed6-52b3-4102-aeff-aad2292ab01c"   # client public Office
-TAILLE_MAX = 50 * 1024 * 1024    # au-delà : fichier laissé à la RH (vidéo, scan géant)
-# Disque plein = plus aucune écriture (soumissions, journaux) : l'app tombe pour tous.
-# simplification volontaire : marge fixe, à rendre configurable si un client a un disque très petit
-MARGE_DISQUE = 1024 ** 3
+# Au-delà : fichier laissé à la RH (vidéo, scan géant). Plafonné par la taille
+# d'un document de la base (16 Mo), comme store.TAILLE_MAX.
+TAILLE_MAX = store.TAILLE_MAX
 
 _TRANSPORT = None   # tests : fn(url, entetes) -> (statut, octets, entetes)
 _session = None
@@ -44,10 +42,6 @@ class ErreurSharePoint(RuntimeError):
 
 class NonConnecte(RuntimeError):
     """Aucun compte Microsoft en cache : passer par connecter()."""
-
-
-class EspaceInsuffisant(ErreurSharePoint):
-    """L'import s'arrête avant de remplir le disque du serveur."""
 
 
 # --- partie pure : noms, postes, fichiers retenus ---------------------------
@@ -308,8 +302,13 @@ _conn_lock = threading.Lock()
 _conn_code_pret = threading.Event()
 
 
-def _cache_fichier():
-    return config.DONNEES / "sharepoint-jeton.json"
+def _etat():
+    return store.db().etat
+
+
+def _cache_lu():
+    d = _etat().find_one({"_id": "sharepoint-jeton"})
+    return d["cache"] if d else None
 
 
 def _app():
@@ -323,10 +322,10 @@ def _app():
         conf = config.sharepoint()
         cache = msal.SerializableTokenCache()
         try:
-            if _cache_fichier().exists():
-                cache.deserialize(_cache_fichier().read_text(encoding="utf-8"))
+            if (texte := _cache_lu()) is not None:
+                cache.deserialize(texte)
         except ValueError:                  # jeton corrompu : reconnexion
-            _cache_fichier().unlink(missing_ok=True)
+            _etat().delete_one({"_id": "sharepoint-jeton"})
         # organizations : le tenant du compte, quel que soit le domaine du site
         _msal = (msal.PublicClientApplication(
             conf.get("client_id") or CLIENT_OFFICE,
@@ -336,12 +335,13 @@ def _app():
 
 def _sauver(cache):
     if cache.has_state_changed:
-        _cache_fichier().write_text(cache.serialize(), encoding="utf-8")
+        _etat().replace_one({"_id": "sharepoint-jeton"}, {"cache": cache.serialize()},
+                            upsert=True)
         cache.has_state_changed = False
 
 
 def jeton():
-    if not _cache_fichier().exists():
+    if _cache_lu() is None:
         raise NonConnecte("Connectez-vous à SharePoint.")
     app, cache = _app()
     comptes = app.get_accounts()
@@ -354,7 +354,7 @@ def jeton():
 
 def compte():
     """Adresse du compte connecté, ou None. Sans réseau."""
-    if not _cache_fichier().exists():
+    if _cache_lu() is None:
         return None
     comptes = _app()[0].get_accounts()
     return comptes[0]["username"] if comptes else None
@@ -411,7 +411,7 @@ def _flux():
 
 def deconnecter():
     global _msal
-    _cache_fichier().unlink(missing_ok=True)
+    _etat().delete_one({"_id": "sharepoint-jeton"})
     _msal = None
     with _conn_lock:
         _conn.clear()
@@ -452,7 +452,7 @@ def lancer_import(cle_etab, sp_etab, ids, par):
 
 def _travail(cle_etab, sp_etab, ids, par):
     try:
-        store.vider_imports()
+        store.vider_orphelins()
         enfants = _enfants(_drive(jeton()))
         # recoupé côté serveur : seuls des ids vraiment présents sont importés
         retenus = [s for s in salaries(enfants, sp_etab["id"]) if s["id"] in ids]
@@ -461,9 +461,6 @@ def _travail(cle_etab, sp_etab, ids, par):
         deja = deja_importes()                              # un seul scan par import
         for s in retenus:
             _un_salarie(cle_etab, sp_etab, s, enfants, par, deja)
-    except EspaceInsuffisant as e:                          # arrête tout l'import
-        with _import_lock:
-            _import["erreurs"].append(str(e))
     except Exception as e:                                  # noqa: BLE001 — affiché à la RH
         with _import_lock:
             _import["erreurs"].append(f"{type(e).__name__} : {e}")
@@ -479,10 +476,6 @@ def _un_salarie(cle_etab, sp_etab, s, enfants, par, deja):
             fichiers = [(b, it["name"], lambda it=it: ouvrir(it))
                         for b, it in pris if it.get("size", 0) <= TAILLE_MAX]
             gros = [it for _, it in pris if it.get("size", 0) > TAILLE_MAX]
-            besoin = sum(it.get("size", 0) for _, it in pris if it.get("size", 0) <= TAILLE_MAX)
-            if shutil.disk_usage(config.DONNEES).free - besoin < MARGE_DISQUE:
-                raise EspaceInsuffisant("Espace disque insuffisant sur le serveur : import arrêté. "
-                                        "Libérez de la place ou contactez l'installateur.")
             entree = {"par": par, "origine": "sharepoint", "sp_dossier": s["dossier"]}
             if store.importer(champs_de(cle_etab, s), cle(s["id"]), entree, fichiers,
                               racine={"sp_etab": sp_etab}):
@@ -491,8 +484,6 @@ def _un_salarie(cle_etab, sp_etab, s, enfants, par, deja):
                     _import["erreurs"] += [
                         f"{s['nom']} : {it['name']} ({round(it['size'] / 2**20)} Mo) "
                         "non importé, à récupérer à la main" for it in gros]
-    except EspaceInsuffisant:
-        raise
     except Exception as e:                                  # noqa: BLE001 — on passe au suivant
         with _import_lock:
             _import["erreurs"].append(f"{s['nom']} : {type(e).__name__} : {e}")

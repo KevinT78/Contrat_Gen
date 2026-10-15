@@ -10,8 +10,6 @@ import json
 import re
 import mimetypes
 import os
-import socket
-import threading
 import time
 import unicodedata
 import zipfile
@@ -20,8 +18,9 @@ from datetime import date, datetime, timedelta
 from functools import wraps
 from pathlib import Path
 
-from flask import (Flask, abort, flash, redirect, render_template, request,
-                   send_file, session, url_for)
+from flask import (Flask, Request, Response, abort, flash, redirect, render_template,
+                   request, send_file, session, url_for)
+from pymongo.errors import PyMongoError
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.security import check_password_hash
 
@@ -52,20 +51,16 @@ def _jours_ouvrables_entre(de, a):
 CONTRAT_EXT = {".pdf", ".docx"}          # contrat venu du logiciel RH / PDF signé
 
 # --- rate-limit par IP ----------------------------------------------------
-# Deux pots : le formulaire public (seul endpoint non authentifie qui ecrit sur
-# disque) et /login. Pas de captcha (le vrai destinataire du formulaire est un
+# Deux pots : le formulaire public (seul endpoint non authentifie qui ecrit en
+# base) et /login. Pas de captcha (le vrai destinataire du formulaire est un
 # manager, pas un spammeur), mais un minimum de garde-fou contre bots et flood.
 #
-# MONO-PROCESS IMPOSE : ces pots -- comme store._verrou -- vivent en memoire.
-# Sous plusieurs process les plafonds seraient divises d'autant, et pire,
-# store._verrou cesserait d'exclure quoi que ce soit (perte d'entrees de
-# journal). C'est pourquoi `python app.py` demarre waitress, mono-process par
-# construction (voir le bas de ce fichier). Attention : `app` reste un objet
-# WSGI importable, donc `gunicorn app:app` ou `waitress-serve --processes=N`
-# cassent l'invariant SANS RIEN SIGNALER -- il est tenu par la facon de
-# lancer, pas par le code. Passer a plusieurs process exige d'abord un verrou
-# fichier dans store et un compteur partage ici.
-# Voir le meme avertissement a store._verrou.
+# Ces pots vivent en memoire, comme l'etat d'import/connexion SharePoint et
+# le cache de config. `python app.py` demarre waitress, mono-process. Sous
+# plusieurs process (`gunicorn app:app`...), aucune donnee ne se perd (le
+# journal s'ecrit par compare-and-swap en base, cf. store._journaliser) : les
+# plafonds sont seulement multiplies par le nombre de process, et la
+# progression d'un import SharePoint n'est visible que du process qui le mene.
 _POT_PAR_IP = defaultdict(list)          # formulaire public : {ip: [timestamps]}
 _FENETRE = 300                           # 5 minutes
 _PLAFOND = 10                            # max soumissions / fenetre
@@ -93,12 +88,23 @@ def _pot_rempli():
     """Honeypot : champ invisible que les bots remplissent mais pas les humains."""
     return bool(request.form.get("website"))
 
+
+class _RequeteEnMemoire(Request):
+    """Les pieces deposees portent des CNI et des NIR : werkzeug les spoole
+    sur disque (fichier temporaire) au-dela de 500 Ko, ce que l'installation
+    s'interdit. Chaque fichier va donc en memoire ; le plafond est
+    MAX_CONTENT_LENGTH. waitress a son propre spool : voir WAITRESS."""
+    def _get_file_stream(self, *args, **kwargs):
+        return io.BytesIO()
+
+
 # La marque du client (logo, favicon) vit dans SON instance, pas dans
 # le code partage : c'est Flask lui-meme qui la sert, pas une route maison --
 # mimetypes, en-tetes de cache et protection de chemin sont deja faits, et un
 # dossier absent 404 proprement (verifie). Le /static d'origine ne servait
 # rien : il pointait vers le dossier du code, commun a toutes les instances.
 app = Flask(__name__, static_folder=config.MARQUE, static_url_path="/marque")
+app.request_class = _RequeteEnMemoire
 # X-Forwarded-For n'est digne de confiance QUE s'il est pose par un proxy a
 # nous. Sans proxy devant, c'est un en-tete fourni par le client : le faire
 # tourner contournerait entierement les deux rate-limits ci-dessus (verifie).
@@ -116,8 +122,21 @@ except ValueError:
                      + repr(os.environ["PROXIES"]))
 if _PROXIES:
     app.wsgi_app = ProxyFix(app.wsgi_app, x_for=_PROXIES, x_proto=_PROXIES)
-app.secret_key = config.instance()["secret"]
+app.secret_key = os.environ.get("SECRET_KEY")   # absent : verifier() refuse de demarrer
 app.config["MAX_CONTENT_LENGTH"] = 40 * 1024 * 1024
+# waitress spoole sur disque tout corps de requete > 512 Ko (inbuf_overflow) et
+# toute reponse en attente > 1 Mo (outbuf_overflow) : les deux tampons passent
+# donc au-dessus du plus gros envoi. Son plafond de corps (1 Go par defaut) est
+# lu AVANT Flask : MAX_CONTENT_LENGTH + 1 Mo, pour que Flask garde son message.
+# Jusqu'a 64 Mo en RAM par connexion ouverte, et les 4 threads ne bornent pas
+# les connexions : connection_limit le fait (au-dela, la suivante attend dans
+# la file du noyau). waitress y compte ses 2 sockets internes : 18 clients au
+# plus, soit ~1,2 Go de tampons au pire. simplification volontaire : a revoir si
+# des visiteurs attendent alors que la RAM du VPS le permettrait.
+_TAMPON = 64 * 1024 * 1024
+WAITRESS = {"threads": 4, "connection_limit": 20,
+            "inbuf_overflow": _TAMPON, "outbuf_overflow": _TAMPON,
+            "max_request_body_size": app.config["MAX_CONTENT_LENGTH"] + 2**20}
 app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
     # SameSite=Lax n'est PAS cosmetique : c'est la seule protection CSRF de
@@ -159,7 +178,7 @@ def _email_demandeur(champs):
 
 
 def _destinataire_manager(champs):
-    """Adresse FIXE du manager de l'etablissement (societes.json), sinon la RH
+    """Adresse FIXE du manager de l'etablissement (en base), sinon la RH
     (mails.rh), qui transmet. Jamais l'email saisi dans le formulaire : c'est
     celui du candidat, et le lien de correction ouvre tout son dossier."""
     return (config.manager(config.valeur(champs, "etablissement"))
@@ -244,6 +263,7 @@ def _aides():
             # qui renomme ses champs, la colonne sortait VIDE au lieu de crier.
             "valeur": config.valeur,
             "depuis": _depuis,
+            "derniere_activite": store.derniere_activite,
             "date_fr": _date_fr,
             "horodatage": _horodatage,
             "libelle_etat": lambda e: LIBELLES_ETAT.get(e, e),
@@ -315,18 +335,6 @@ def recharger():
             flash(f"{sujet} : {', '.join(quoi)}", "erreur")
         flash("Configuration NON rechargée — la précédente reste active.", "erreur")
         return redirect(url_for("suivi"))
-    # Le secret sert AUSSI a signer les cookies de session, et celui-la est fige
-    # a l'import : sans cette ligne, un secret change laisserait store.signer sur
-    # le nouveau et les cookies sur l'ancien -- liens du lot casses en silence.
-    # Un secret reellement change deconnecte tout le monde, c'est voulu.
-    app.secret_key = config.instance()["secret"]
-    # Meme piege que le secret, autre issue : config.DONNEES est fige a l'import
-    # et deplacer les donnees n'est pas un rechargement (il faut aussi deplacer
-    # les fichiers). On refuse de faire semblant : on le dit.
-    if config._donnees() != config.DONNEES:
-        flash(f"Le stockage a changé ({config._donnees()}), mais les données "
-              f"continuent d'aller dans {config.DONNEES} : redémarrez l'app "
-              f"après avoir déplacé les fichiers.", "erreur")
     flash("Configuration rechargée.", "ok")
     return redirect(url_for("suivi"))
 
@@ -507,12 +515,10 @@ def suivi():
                            aujourdhui=date.today().isoformat())
 
 
-@app.get("/salaries")
-@rh
-def salaries():
-    """Les salaries dont la procedure est allee au bout (RemisComptable), ou
-    ceux partis (Parti), groupes par etablissement. Complement de /suivi
-    (demandes en cours)."""
+def _salaries_visibles():
+    """(anciens, tous, visibles, etab, q) d'apres la query string : l'onglet
+    (en poste / anciens), puis les filtres. Commun a /salaries et a son export,
+    qui doit livrer exactement ce que l'ecran montre."""
     anciens = request.args.get("anciens")
     cible = "Parti" if anciens else "RemisComptable"
     tous = [i for i in store.tout() if store.etat(i) == cible]
@@ -521,6 +527,30 @@ def salaries():
     visibles = [i for i in tous
                 if (not etab or config.valeur(i["champs"], "etablissement") == etab)
                 and (not q or _correspond(i, q))]
+    return anciens, tous, visibles, etab, q
+
+
+def _zip(items, nom):
+    """Reponse en flux. Nom de fichier sans donnee personnelle ; no-store :
+    l'archive contient les pieces d'identite. Chaque dossier exporte garde une
+    trace au journal (qui, quand, d'ou) : ce sont des pieces d'identite qui
+    sortent en masse. Notee AVANT l'envoi : pas d'export sans trace, quitte a
+    tracer un envoi interrompu. Seulement les dossiers dont une piece sort."""
+    uids, flux = store.zip_dossiers(items)  # chemins calcules ici : erreur = 500 propre
+    for uid in uids:
+        store.noter(uid, type="export", par=session["utilisateur"], ip=request.remote_addr)
+    return Response(flux, mimetype="application/zip",
+                    headers={"Content-Disposition": f'attachment; filename="{nom}"',
+                             "Cache-Control": "no-store"})
+
+
+@app.get("/salaries")
+@rh
+def salaries():
+    """Les salaries dont la procedure est allee au bout (RemisComptable), ou
+    ceux partis (Parti), groupes par etablissement. Complement de /suivi
+    (demandes en cours)."""
+    anciens, tous, visibles, etab, q = _salaries_visibles()
     groupes = {}
     for i in visibles:
         groupes.setdefault(config.valeur(i["champs"], "etablissement") or "—", []).append(i)
@@ -537,6 +567,15 @@ def salaries():
                            date_sortie=store.date_sortie,
                            cabinet=cabinet, signe_manquant=store.signe_manquant,
                            aujourdhui=date.today().isoformat())
+
+
+@app.get("/salaries/export")
+@rh
+def salaries_export():
+    """Zip des salaries affiches par /salaries (memes onglet et filtres)."""
+    anciens, _tous, visibles, _etab, _q = _salaries_visibles()
+    return _zip(visibles, f"{'anciens-salaries' if anciens else 'salaries'}-"
+                          f"{date.today().isoformat()}.zip")
 
 
 # Mentions legales saisies avec un etablissement. L'ordre est celui du formulaire.
@@ -682,7 +721,6 @@ def etablissements_page():
                 "siret": e.get("siret") or "",
             })
     return render_template("etablissements.html", lignes=lignes,
-                           supabase=config.supabase_actif(),
                            sharepoint=bool(config.sharepoint()))
 
 
@@ -887,6 +925,26 @@ def completer():
     return _ecran_completer(_cle_etab_ou_404(request.args.get("cle", "")))
 
 
+@app.errorhandler(PyMongoError)
+def _base_indisponible(e):
+    """Base qui lache au milieu d'une requete : une page lisible plutot qu'un
+    500, sur toutes les routes. Les routes qui savent mieux faire (purge,
+    effets de validation) rattrapent elles-memes et flashent."""
+    app.logger.error("base mongo : %s", type(e).__name__, exc_info=e)
+    # Formulaire public envoye en fetch : il attend du JSON, et garde alors les
+    # pieces deja choisies au lieu d'afficher « connexion ? ». Le candidat n'a
+    # pas de dossier a verifier : son texte a lui.
+    if request.headers.get("X-Requested-With") == "contratgen-fetch":
+        return {"ok": False, "erreurs": [
+            "Le service est momentanément indisponible. Vos pièces sont conservées : "
+            "réessayez dans quelques minutes."]}, 503
+    texte = ("La base de données n'a pas pu traiter la demande. Réessayez dans un "
+             "instant ; si une action était en cours, vérifiez le dossier avant de "
+             "la refaire. Si cela persiste, prévenez l'administrateur.")
+    return render_template(
+        "message.html", titre="Base de données indisponible", texte=texte), 503
+
+
 @app.errorhandler(413)
 def _trop_lourd(e):
     """Envoi au-delà de MAX_CONTENT_LENGTH : un message dans l'écran de
@@ -1064,8 +1122,8 @@ def _etablissement_form(creation):
                 _enregistrer_etablissement(valeurs, creation)
             except ValueError as e:
                 erreurs = [str(e)]
-            except Exception as e:               # noqa: BLE001 — panne supabase, rien d'écrit
-                print(f"[etablissements] enregistrement impossible ({type(e).__name__}: {e})",
+            except PyMongoError as e:            # base injoignable : rien d'écrit
+                print(f"[etablissements] enregistrement impossible ({type(e).__name__})",
                       flush=True)
                 erreurs = ["L'enregistrement n'a pas abouti. Réessayez dans un moment."]
         if erreurs:
@@ -1073,8 +1131,7 @@ def _etablissement_form(creation):
                 "etablissement.html", creation=creation, valeurs=valeurs,
                 erreurs=erreurs, mentions=_MENTIONS_SOCIETE,
                 societes=[s["nom"] for s in config.societes()],
-                groupes=_groupes_proposes(valeurs.get("groupe") or ""),
-                supabase=config.supabase_actif()), 422
+                groupes=_groupes_proposes(valeurs.get("groupe") or "")), 422
         flash("Établissement enregistré.", "ok")
         return redirect(url_for("etablissements_page"))
     if creation:
@@ -1092,20 +1149,16 @@ def _etablissement_form(creation):
     return render_template(
         "etablissement.html", creation=creation, valeurs=valeurs, erreurs=[],
         mentions=_MENTIONS_SOCIETE, societes=[s["nom"] for s in config.societes()],
-        groupes=_groupes_proposes(valeurs.get("groupe") or ""),
-        supabase=config.supabase_actif())
+        groupes=_groupes_proposes(valeurs.get("groupe") or ""))
 
 
 def _echecs_recap():
     """{cabinet: echec} des derniers mails hebdo rates. LU seulement :
-    config.RECAP_ETAT est ecrit par recap.py, qui tourne en tache planifiee
-    dans un autre process -- sans ce bandeau, un recap rate ne se voyait que
-    dans une sortie que personne ne lit."""
-    try:
-        etat = json.loads(config.RECAP_ETAT.read_text(encoding="utf-8"))
-    except (FileNotFoundError, ValueError):
-        return {}
-    return {cab: e["echec"] for cab, e in etat.items() if "echec" in e}
+    la collection `recap` est ecrite par recap.py, qui tourne en tache
+    planifiee dans un autre process -- sans ce bandeau, un recap rate ne se
+    voyait que dans une sortie que personne ne lit."""
+    return {d["_id"]: d["echec"]
+            for d in store.db().recap.find({"echec": {"$exists": True}})}
 
 
 @app.get("/dossier/<uid>")
@@ -1115,7 +1168,7 @@ def detail(uid):
     # La fiche salarié est stockée dans le bucket "pieces" (FICHE PERSONNELLE,
     # cf. _fiche_salarie), mais c'est un document PRODUIT par l'app : elle
     # s'affiche donc avec le contrat, pas avec les pièces jointes par le
-    # candidat -- affichage seul, le stockage disque ne bouge pas.
+    # candidat -- affichage seul, le bucket ne change pas.
     fiche = store.fichiers_role(item, "pieces", "fiche-salarie")
     etat = store.etat(item)
     signe_le = next((e["le"] for e in reversed(item["journal"])
@@ -1244,7 +1297,7 @@ def _fiche_salarie(item):
         return False
 
     # KeyError attrape SEUL config.mentions(), et rien d'autre : l'etablissement
-    # du dossier peut avoir ete retire de societes.json depuis la soumission, et
+    # du dossier peut avoir ete retire des societes depuis la soumission, et
     # la fiche est desormais produite pour TOUS les clients (avant, ceux sans
     # modele sortaient plus haut). Hors try, ce KeyError faisait un 500 sur
     # /valider APRES l'ecriture de la transition : dossier valide, mais ni fiche,
@@ -1253,7 +1306,7 @@ def _fiche_salarie(item):
     try:
         mentions = config.mentions(config.valeur(item["champs"], "etablissement"))
     except KeyError as e:
-        return echec(f"établissement {e} absent de config/societes.json")
+        return echec(f"établissement {e} absent des sociétés en base")
     try:
         vals = contrat.valeurs(item["champs"], mentions,
                                extra=_pieces_du_dossier(item))
@@ -1263,7 +1316,11 @@ def _fiche_salarie(item):
                            contrat.generer(modele, vals, elaguer_lignes=generique))
         store.noter(item["id"], type="fiche_salarie", par="systeme")
         return True
-    except (ValueError, OSError) as e:
+    # OSError : le modele .docx est lu sur le disque. RuntimeError : le CAS de
+    # store._journaliser a epuise ses essais.
+    except PyMongoError as e:
+        return echec(f"base de données indisponible ({type(e).__name__})")
+    except (ValueError, OSError, RuntimeError) as e:
         return echec(str(e))
 
 
@@ -1317,7 +1374,7 @@ def _avis_manager_validee(item):
 
 def _rappel_dpae(item):
     """Effet de la validation, pas un etat : le rappel part dans la meme requete
-    (pas de cron = pas de second process ecrivain, cf. store._verrou), avec les
+    (pas de cron a deployer), avec les
     donnees que la DPAE reclame et qui sont deja dans le dossier."""
     conf = config.instance()["mails"]
     champs = item["champs"]
@@ -1421,20 +1478,22 @@ def _produire_contrat(uid, extra=None):
     # {{PiecesFournies}} sort « non genere » alors que doctor l'a validé.
     extra = {**extra, **_pieces_du_dossier(item)}
     # KeyError attrape SEUL config.mentions() : l'etablissement du dossier peut
-    # avoir ete retire de societes.json depuis la soumission, et le 500 tombait
+    # avoir ete retire des societes depuis la soumission, et le 500 tombait
     # APRES l'ecriture de la transition. Envelopper tout le bloc ferait passer un
     # KeyError venu d'ailleurs pour un etablissement manquant.
     try:
         mentions = config.mentions(config.valeur(item["champs"], "etablissement"))
     except KeyError as e:
-        return False, f"établissement {e} absent de config/societes.json"
-    # OSError compris : la génération est un EFFET de la validation (comme
-    # _fiche_salarie, qui garde le même couple) -- un disque plein ne doit pas
-    # renvoyer un 500 alors que le dossier est déjà ouvert.
+        return False, f"établissement {e} absent des sociétés en base"
+    # La génération est un EFFET de la validation (comme _fiche_salarie) : un
+    # modele illisible (OSError) ou une base qui lache ne doit pas renvoyer un
+    # 500 alors que le dossier est déjà ouvert.
     try:
         vals = contrat.valeurs(item["champs"], mentions, extra=extra)
         octets = contrat.generer(config.CLIENT / "contrats" / modele, vals)
         store.poser_octets(uid, "contrat", store.nom_piece(item, "contrat", ".docx"), octets)
+    except PyMongoError as e:
+        return False, f"base de données indisponible ({type(e).__name__})"
     except (ValueError, OSError) as e:
         return False, str(e)
     _transition(uid, "ContratPret", modele=modele)
@@ -1532,7 +1591,20 @@ def signature_envoyer(uid):
     except (RuntimeError, KeyError, OSError) as e:
         flash(f"Envoi à la signature échoué : {e}", "erreur")
         return redirect(url_for("detail", uid=uid))
-    store.noter(uid, type="signature_envoyee", par=session["utilisateur"], procedure=pid)
+    try:
+        store.noter(uid, type="signature_envoyee", par=session["utilisateur"], procedure=pid)
+    except PyMongoError as e:
+        # Le salarie a deja recu sa demande : la page generale (« verifiez le
+        # dossier avant de refaire ») menerait a un second envoi, le dossier
+        # n'ayant rien garde. L'identifiant est le seul moyen de la retrouver.
+        app.logger.error("signature : procedure %s activee, non notee au dossier %s",
+                         pid, uid, exc_info=e)
+        return render_template(
+            "message.html", titre="Signature envoyée, non enregistrée",
+            texte=(f"Le contrat est parti à la signature (procédure {pid}), mais la "
+                   "base de données n'a pas pu l'enregistrer au dossier : ne le "
+                   "renvoyez pas, le salarié a déjà reçu sa demande. Notez cet "
+                   "identifiant et transmettez-le à l'administrateur.")), 503
     flash("Contrat envoyé à la signature.", "ok")
     return redirect(url_for("detail", uid=uid))
 
@@ -1589,15 +1661,12 @@ def dpae_faite(uid):
 @app.post("/dossier/<uid>/remettre")
 @rh
 def remettre(uid):
-    # Plus de mail par dossier : la remise DUPLIQUE le dossier dans data/compta/
-    # et le cabinet recoit un seul mail hebdomadaire (recap.py) avec un lien
-    # de lot par dossier remis dans la semaine.
-    item = _transition(uid, "RemisComptable")
-    if not item:
+    # Plus de mail par dossier : le cabinet recoit un seul mail hebdomadaire
+    # (recap.py) avec un lien de lot par dossier remis dans la semaine. Le lot
+    # se construit a la demande depuis les pieces du dossier.
+    if not _transition(uid, "RemisComptable"):
         return redirect(url_for("detail", uid=uid))
-    dest = store.copier_compta(item)
-    flash(f"Dossier remis au cabinet comptable — copie dans "
-          f"{dest.relative_to(config.DONNEES)}.", "popup")
+    flash("Dossier remis au cabinet comptable.", "popup")
     flash("Le cabinet recevra le lien dans le mail hebdomadaire ; le salarié est "
           "désormais dans « Salariés ».", "popup")
     return redirect(url_for("suivi"))               # pop-up par-dessus le Suivi d'embauche
@@ -1611,19 +1680,27 @@ def renvoyer(uid):
         flash("Dossier importé : il ne part pas au cabinet comptable.", "erreur")
         return redirect(url_for("detail", uid=uid))
     store.bump_epoch(uid, "lien_comptable_epoch")             # tue l'ancien lien
-    # noter AVANT la copie : nom_export lit la date du dernier renvoi dans le journal.
+    # nom_export date les fichiers du lot par ce renvoi (dernier du journal)
     store.noter(uid, type="renvoi_comptable", par=session["utilisateur"])
-    store.copier_compta(store.lire(uid))
-    flash("Copie refaite, l'ancien lien est révoqué ; le dossier repartira dans "
+    flash("Nouveau lien prêt, l'ancien est révoqué ; le dossier repartira dans "
           "le prochain mail hebdomadaire.", "ok")
     return redirect(url_for("detail", uid=uid))
+
+
+@app.get("/dossier/<uid>/export")
+@rh
+def export_dossier(uid):
+    item = store.lire(uid) or abort(404)
+    if item.get("purge"):            # plus rien a livrer
+        abort(404)
+    return _zip([item], f"dossier-{uid}.zip")
 
 
 @app.post("/dossier/<uid>/archiver")
 @rh
 def archiver(uid):
-    """Depart du salarie : deplace le dossier vers LEAVERS/ (onglet « Anciens
-    salariés »). Terminal, comme abandonner()."""
+    """Depart du salarie : etat Parti (onglet « Anciens salariés »).
+    Terminal, comme abandonner()."""
     date_sortie = _date_iso((request.form.get("date_sortie") or "").strip())
     if not date_sortie:
         flash("La date de sortie est obligatoire, au format jj/mm/aaaa.", "erreur")
@@ -1634,7 +1711,7 @@ def archiver(uid):
     except ValueError as e:
         flash(str(e), "erreur")
         return redirect(url_for("detail", uid=uid))
-    flash("Départ enregistré, dossier archivé dans LEAVERS.", "ok")
+    flash("Départ enregistré, dossier archivé dans les anciens salariés.", "ok")
     return redirect(url_for("detail", uid=uid))
 
 
@@ -1655,9 +1732,9 @@ def _apercu_purge():
     """Ce qui partirait : une ligne lisible par dossier eligible."""
     lignes = []
     for item, ecoule, duree in store.eligibles():
-        prenom, nom = config.identite(item["champs"])
         lignes.append({"id": item["id"],
-                       "nom": " ".join(p for p in (prenom, nom.upper()) if p) or item["id"],
+                       "nom": store.nom_complet(item["champs"], prenom_devant=True)
+                              or item["id"],
                        "etablissement": config.valeur(item["champs"], "etablissement"),
                        "etat": LIBELLES_ETAT.get(store.etat(item), store.etat(item)),
                        "ecoule": ecoule, "duree": duree})
@@ -1680,8 +1757,9 @@ def purger():
         try:
             store.purger(item["id"])          # revérifie l'éligibilité lui-même
             faits += 1
-        except OSError as e:
-            flash(f"{item['id']} : purge incomplète — {e}", "erreur")
+        except PyMongoError as e:             # la boucle reste rejouable
+            flash(f"{item['id']} : purge incomplète, base de données "
+                  f"indisponible ({type(e).__name__})", "erreur")
     flash(f"{faits} dossier(s) purgé(s) : pièces effacées, journal conservé."
           if faits else "Aucun dossier à purger.", "ok" if faits else "erreur")
     return redirect(url_for("suivi"))
@@ -1707,8 +1785,7 @@ def lot(jeton):
 def lot_zip(jeton):
     item = store.verifier_lien(jeton, "lot_comptable") or abort(410)
     store.noter(item["id"], type="acces_lot", par=None, ip=request.remote_addr)
-    # Le zip entier est assemble en RAM (tampon) avant l'envoi -- c'etait deja
-    # le cas quand on streamait depuis le disque. z.writestr ajoute au pic, le
+    # Le zip entier est assemble en RAM (tampon) avant l'envoi. z.writestr ajoute au pic, le
     # temps d'une iteration, un fichier decompresse (<= store.TAILLE_MAX, 15 Mo).
     # simplification volontaire : suffisant a 1-2 utilisateurs et lien par
     # dossier ; passer a un flux (store + z.open) si le lot grossit.
@@ -1716,7 +1793,7 @@ def lot_zip(jeton):
     with zipfile.ZipFile(tampon, "w", zipfile.ZIP_DEFLATED) as z:
         for bucket in ("pieces", "contrat"):        # jamais _versions
             for nom in store.fichiers_compta(item, bucket):
-                z.writestr(f"{store.BUCKETS_COMPTA[bucket]}/{store.nom_export(item, bucket, nom)}",
+                z.writestr(f"{store.BUCKETS[bucket]}/{store.nom_export(item, bucket, nom)}",
                            store.ouvrir(item["id"], bucket, nom))
     tampon.seek(0)
     return send_file(tampon, mimetype="application/zip", as_attachment=True,
@@ -1732,85 +1809,6 @@ def lot_fichier(jeton, bucket, nom):
                    store.nom_export(item, bucket, nom), bucket)
 
 
-# --- verrou multi-machine ----------------------------------------------
-# store._verrou n'exclut qu'a l'interieur d'un process : deux serveurs pointes
-# sur le meme stockage (trivial avec un dossier synchronise) perdent des
-# entrees de journal EN SILENCE. Trois champs et un horodatage previennent
-# l'erreur de deploiement -- pas portalocker : on ne cherche pas a arbitrer une
-# course, juste a refuser un second demarrage.
-_VERROU_TTL = 300          # s : verrou d'une AUTRE machine, non sondable -> perime
-                           # au-dela. Sur la meme machine, la mort du pid tranche.
-
-
-def _fichier_verrou():
-    return config.DONNEES / ".serveur-actif.json"
-
-
-def _ecrire_verrou(moi):
-    f = _fichier_verrou()
-    tmp = f.with_suffix(".tmp")
-    tmp.write_text(json.dumps({"hote": moi[0], "pid": moi[1], "le": time.time()}),
-                   encoding="utf-8")
-    os.replace(tmp, f)
-
-
-def _pid_vivant(pid):
-    """True si le process tourne encore. os.kill(pid, 0) TUE le process sous
-    Windows (TerminateProcess) -- y passer par OpenProcess."""
-    if not isinstance(pid, int):
-        return False
-    if os.name == "nt":
-        import ctypes
-        h = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)  # QUERY_LIMITED_INFO
-        if h:
-            ctypes.windll.kernel32.CloseHandle(h)
-            return True
-        return False
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True          # existe, mais pas a nous
-    return True
-
-
-def _verrou_serveur(moi=None):
-    """Refuse de demarrer si un AUTRE serveur tient le verrou. « Autre » =
-    couple (hote, pid) different ET (meme machine : pid encore vivant ; autre
-    machine : verrou de moins de _VERROU_TTL). Un crash sur la meme machine est
-    donc repris aussitot ; depuis une autre machine, au bout de 5 min. Puis
-    rafraichit le fichier toutes les 60 s (thread demon)."""
-    moi = moi or (socket.gethostname(), os.getpid())
-    f = _fichier_verrou()
-    if f.exists():
-        try:
-            tenu = json.loads(f.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            tenu = {}
-        autre = (tenu.get("hote"), tenu.get("pid")) != tuple(moi)
-        age = time.time() - tenu.get("le", 0)
-        meme_machine = tenu.get("hote") == moi[0]
-        tient_encore = (_pid_vivant(tenu.get("pid")) if meme_machine
-                        else age < _VERROU_TTL)
-        if autre and tient_encore:
-            raise SystemExit(
-                f"Un serveur sert déjà ce stockage : {tenu.get('hote')} "
-                f"(pid {tenu.get('pid')}), verrou rafraîchi il y a {int(age)} s. "
-                f"Deux serveurs sur le même dossier perdent des entrées de journal "
-                f"en silence. Si l'autre a planté, supprimez {f}.")
-    _ecrire_verrou(moi)
-
-    def _boucle():
-        while True:
-            time.sleep(60)
-            try:
-                _ecrire_verrou(moi)
-            except OSError:
-                pass
-    threading.Thread(target=_boucle, daemon=True).start()
-
-
 def demarrer():
     """Verifie la config puis sert (waitress, ou Werkzeug si DEBUG)."""
     # Refus dur : installation incomplete (secret/mdp par defaut, aucun
@@ -1821,37 +1819,25 @@ def demarrer():
             print(f"!! {sujet} : {', '.join(quoi)}")
         raise SystemExit("Configuration incomplète — le serveur ne sert pas. "
                          "Voir ci-dessus ; au besoin : python installer.py \"<Client>\"")
-    # « dossier synchronise » seulement si c'est vraiment ce qui sert : DONNEES=
-    # sur la ligne de lancement l'emporte sur le bloc stockage, et une ligne de
-    # demarrage qui annonce un drive alors qu'on ecrit ailleurs serait pire que
-    # pas de mention du tout.
-    depuis_config = (config.stockage().get("mode") == "dossier"
-                     and config.DONNEES == Path(config.stockage()["chemin"].strip()))
-    ou = " (dossier synchronisé)" if depuis_config else ""
-    print(f"{config.instance()['client']} — données : {config.DONNEES}{ou}", flush=True)
-    # APRES verifier(), jamais avant : `parents=True` creerait lui-meme le chemin
-    # du drive, et _verifier_stockage trouverait alors un dossier bien present --
-    # l'app servirait en ecrivant des pieces d'identite dans un dossier local qui
-    # ressemble a un dossier synchronise. Le garde-fou constate, il ne repare pas.
-    for zone in ("soumissions", store.DOSSIERS):
-        (config.DONNEES / zone).mkdir(parents=True, exist_ok=True)
+    # Jamais l'URI dans le message : elle porte le mot de passe de la base.
+    try:
+        store.db().command("ping")
+        store.vider_orphelins()
+    except PyMongoError as e:
+        raise SystemExit(f"Base mongo « {os.environ['MONGO_DB']} » injoignable "
+                         f"({type(e).__name__}) — le serveur ne sert pas.")
+    print(f"{config.instance()['client']} — base mongo : {os.environ['MONGO_DB']}",
+          flush=True)
     port = int(os.environ.get("PORT", 5000))
     if os.environ.get("DEBUG"):
         # Developpement local seulement : serveur Werkzeug + debugger interactif.
-        # OFF par defaut, l'app sert des pieces d'identite. Pas de verrou serveur
-        # ici : le reloader Werkzeug refork `python app.py`, l'enfant rejouerait
-        # demarrer() et buterait sur le verrou du parent -- et un dev local n'a
-        # de toute facon pas de stockage partage a proteger.
+        # OFF par defaut, l'app sert des pieces d'identite.
         app.run(debug=True, port=port)
     else:
-        # Apres la creation des zones (memes raisons d'ordre) : refuse un second
-        # serveur sur le meme stockage, rafraichit ensuite le verrou en fond.
-        _verrou_serveur()
         # Production : waitress. Choisi plutot que gunicorn parce qu'il tourne
         # aussi sous Windows (gunicorn depend de fcntl, absent la) et surtout
-        # parce qu'il est MONO-PROCESS multi-thread par construction : la
-        # contrainte de store._verrou est alors garantie par le serveur, pas
-        # par un drapeau qu'un fichier de service peut ecraser.
+        # parce qu'il est MONO-PROCESS multi-thread par construction : les
+        # plafonds de rate-limit en memoire restent exacts (cf. _POT_PAR_IP).
         from waitress import serve
         # 127.0.0.1 par defaut, comme app.run() avant lui : l'app se sert
         # DERRIERE un reverse proxy qui porte le TLS, elle ne s'expose pas
@@ -1865,8 +1851,8 @@ def demarrer():
         # drapeau, ProxyFix ne voit rien et PROXIES est sans effet (tous les
         # visiteurs = 127.0.0.1, liens en http://). Garde a 0 : sans proxy
         # declare, l'en-tete reste efface -- il serait fourni par le client.
-        serve(app, host=hote, port=port, threads=4,
-              clear_untrusted_proxy_headers=not _PROXIES)
+        serve(app, host=hote, port=port,
+              clear_untrusted_proxy_headers=not _PROXIES, **WAITRESS)
 
 
 if __name__ == "__main__":

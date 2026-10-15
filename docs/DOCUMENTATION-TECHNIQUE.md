@@ -20,13 +20,13 @@
 
 Contrat_Gen reçoit les demandes d'embauche des managers, aide la RH à produire le contrat et la DPAE, puis transmet le dossier au cabinet comptable.
 
-![Les modules et ce qu'ils font](pdf/img/diagram-modules.svg)
+![Les modules et leurs dépendances](pdf/img/diagram-modules.svg)
 
 Cinq règles expliquent presque tout le code :
 
-- **Un client = une copie du dépôt.** Chaque client a sa propre configuration (`config/`) et ses propres données (`data/`). Rien n'est partagé.
-- **Pas de base de données.** Les dossiers sont des répertoires et des fichiers JSON sur le disque.
-- **Un seul process.** Les verrous sont en mémoire : deux serveurs sur les mêmes données perdraient des écritures. Ne jamais lancer plusieurs workers.
+- **Un client = une copie du dépôt.** Chaque client a sa propre configuration (`config/`) et sa propre base MongoDB (`MONGO_DB`). Rien n'est partagé.
+- **Toutes les données sont dans MongoDB.** Dossiers, pièces, contrats, comptes, sociétés : rien sur le disque du serveur, qui ne garde que `config/` en lecture seule.
+- **Un seul process, de préférence.** Le journal s'écrit par compare-and-swap en base : plusieurs process ne perdent plus de données. Mais les plafonds de rate-limit sont en mémoire, donc multipliés par le nombre de process. waitress mono-process reste le lancement recommandé.
 - **La configuration ne contient pas de code.** Tout ce qui change d'un client à l'autre est dans `config/`, en JSON et en modèles de documents.
 - **L'application refuse de démarrer** si la configuration est incomplète, et dit pourquoi.
 
@@ -34,13 +34,13 @@ Cinq règles expliquent presque tout le code :
 
 ## 2. Le parcours d'un dossier
 
-![Du formulaire public au cabinet comptable](pdf/img/diagram-flux.svg)
-
 Un dossier passe par des **états** : demande reçue, à traiter, contrat prêt, DPAE faite, remis au comptable. Il peut aussi être rejeté (le manager corrige et renvoie) ou abandonné, jusqu'à la DPAE. Quand le salarié quitte l'entreprise, son dossier passe à « parti ».
 
 ![Les états d'un dossier](pdf/img/diagram-etats.svg)
 
-Chaque dossier a un fichier `dossier.json` avec un **journal** : une ligne par action. Aucune ligne n'est jamais supprimée ; la purge retire seulement les commentaires et les adresses IP. L'état du dossier, c'est simplement la dernière ligne du journal.
+![Où vit un dossier, de la soumission au mail du cabinet](pdf/img/diagram-flux.svg)
+
+Chaque dossier (un document de la collection `dossiers`) porte un **journal** : une ligne par action. Aucune ligne n'est jamais supprimée ; la purge retire seulement les commentaires et les adresses IP. L'état du dossier, c'est simplement la dernière ligne du journal.
 
 ```json
 {"de": "ContratPret", "vers": "DpaeFaite", "le": "2026-09-16T12:35:24+00:00", "par": "rh"}
@@ -50,29 +50,30 @@ Ce qu'il faut savoir pour modifier ce code :
 
 - Les changements d'état passent par `store.transition()`, qui refuse un passage non prévu. Quatre fonctions font exception, car elles créent ou déplacent le dossier : `valider()`, `rejeter()`, `resoumettre()` et `importer()`.
 - Certaines lignes ne changent pas l'état : elles notent un événement (mail raté, fiche générée…). On les écrit avec `store.noter()`.
-- Le reste du stockage est dans `data/` : `.serveur-actif.json` empêche deux serveurs de tourner sur les mêmes données, `recap.json` retient le dernier mail hebdomadaire envoyé, `mails/` reçoit les mails en mode test.
+- Les collections MongoDB : `dossiers` (journal compris), `fichiers` (pièces et contrats, octets inline, 15 Mo maximum par fichier), `recap` (dernier mail hebdomadaire envoyé, par cabinet), `mails` (mode console seulement : le `.eml` en base), `comptes` (identifiant et hash du mot de passe), `societes` (sociétés, établissements imbriqués), `etat` (jeton SharePoint).
+- Rien n'est copié ni déplacé hors de la base : le lot du cabinet (`/lot/<jeton>`) sert les pièces en direct, et un départ est simplement l'état « parti ». L'export (`/dossier/<uid>/export`, `/salaries/export`, zip en flux) recalcule l'arborescence `DOSSIERS SALARIES|LEAVERS/<groupe>/<établissement>/<poste>/<NOM Prénom>/{FICHE PERSONNELLE,CONTRAT}` depuis la config courante ; dossiers purgés et anciennes versions absents. Chaque dossier dont au moins une pièce sort reçoit une ligne `export` au journal (qui, adresse IP), écrite avant l'envoi. Chemins de 240 caractères au plus dans le zip (segments de 40, nom de pièce raccourci au besoin) : à extraire dans un dossier de 20 caractères au plus pour rester sous la limite Windows.
 
 ---
 
 ## 3. La configuration
 
-![Les fichiers de config/ et la vérification au démarrage](pdf/img/diagram-config.svg)
-
 `config.py` lit ces fichiers une fois, puis les garde en mémoire. Pour appliquer une modification, il faut **redémarrer**.
 
-Les trois fichiers principaux :
+Les deux fichiers principaux :
 
-- `instance.json` : le client, ses adresses mail, ses comptes RH, et **quel modèle de contrat utiliser pour quel poste** (`templates` : la première règle qui correspond gagne).
+- `instance.json` : le client, ses adresses mail, et **quel modèle de contrat utiliser pour quel poste** (`templates` : la première règle qui correspond gagne).
 - `formulaire.json` : les champs du formulaire. Un champ peut alimenter un `{{Jeton}}` des contrats. Chaque pièce jointe doit avoir un `role`, qui sert à nommer le fichier.
-- `societes.json` : les sociétés et leurs établissements, avec les mentions légales du contrat.
-
 Un exemple complet de chaque fichier se trouve dans `config.demo/`.
 
-### Sociétés et établissements dans Supabase
+![Ce que contient config/ et le garde-fou verifier()](pdf/img/diagram-config.svg)
 
-C'est facultatif. Si `instance.json` contient un bloc `supabase`, les sociétés sont lues dans la base, et `societes.json` devient une simple copie de secours. Si la base ne répond pas, l'application utilise cette copie.
+### Sociétés, établissements, comptes et secrets : pas dans `config/`
 
-La clé du bloc donne un accès complet à la base : elle ne doit jamais aller dans Git. Les tables à créer sont dans `docs/supabase-schema.sql`.
+- Les **sociétés et leurs établissements** (mentions légales du contrat, cabinet comptable, couloir de contrat) sont dans la collection `societes`. On les saisit avec `python configurer.py --assister`, on les charge avec `python configurer.py importer-societes <fichier.json>` (`config.demo/societes.amorce.json` en est un exemple), ou on les modifie à l'écran « Établissements ». L'application ne lit plus de fichier de sociétés dans `config/`, et Supabase n'est plus utilisé.
+- Les **comptes** sont dans la collection `comptes` : `python configurer.py compte <identifiant>`.
+- Les **secrets** sont des variables d'environnement, jamais dans `config/` ni en base : `SECRET_KEY` (session et signature des liens), `MONGO_URI` et `MONGO_DB` (obligatoires, une base par client), `SMTP_MOT_DE_PASSE` (si `mails.mode` vaut `smtp` avec un `utilisateur`), `YOUSIGN_CLE_API` (si la signature est `yousign`). `installer.py` écrit les trois premières, avec `CONFIG_DIR`, dans un fichier d'environnement hors de `config/`.
+
+Au démarrage, `config.verifier()` refuse de servir s'il manque une variable ; le message nomme la variable, jamais la valeur de `MONGO_URI` (elle porte le mot de passe de la base). Puis un `ping` de la base : base injoignable, refus.
 
 ---
 
@@ -92,7 +93,7 @@ Trois outils évitent les mauvaises surprises :
 
 ## 5. Mails et sécurité
 
-Les mails sont des fichiers texte dans `config/mails/`. Un mail qui ne part pas n'arrête jamais l'action en cours : l'échec est noté dans le journal du dossier et affiché à l'écran. Le mail de rejet va à l'établissement, ou à la RH si l'établissement n'a pas d'adresse.
+Les mails sont des fichiers texte dans `config/mails/`. Le démarrage refuse de servir si l'un des quatre modèles envoyés pour un dossier (`nouvelle_soumission`, `demande_validee`, `rejet`, `rappel_dpae`) est absent ou vide ; `recap_hebdo` (mail hebdomadaire, cron) n'est qu'un avertissement de `configurer.py`. Un mail qui ne part pas n'arrête jamais l'action en cours : l'échec est noté dans le journal du dossier et affiché à l'écran. Le mail de rejet va à l'établissement, ou à la RH si l'établissement n'a pas d'adresse.
 
 Le manager et le cabinet comptable n'ont pas de compte. Ils reçoivent un **lien signé**, valable 30 jours :
 
@@ -100,7 +101,7 @@ Le manager et le cabinet comptable n'ont pas de compte. Ils reçoivent un **lien
 
 Les autres protections :
 
-- Les comptes RH sont dans `instance.json`, avec des mots de passe hachés.
+- Les comptes RH sont dans la collection `comptes`, avec des mots de passe hachés.
 - Le formulaire et la connexion limitent le nombre d'essais par adresse IP.
 - Les fichiers envoyés sont limités en type (PDF, images) et en taille, et renommés par l'application.
 
@@ -108,7 +109,7 @@ Les autres protections :
 
 ## 6. L'import des salariés déjà en poste
 
-Les salariés embauchés avant l'outil ont déjà un dossier sur le SharePoint du client. Deux écrans les font entrer dans l'application. Ils n'existent que si `instance.json` contient un bloc `sharepoint`.
+Les salariés embauchés avant l'outil ont déjà un dossier sur le SharePoint du client (le jeton de connexion est gardé dans la collection `etat`). Deux écrans les font entrer dans l'application. Ils n'existent que si `instance.json` contient un bloc `sharepoint`.
 
 ![Récupérer puis compléter les dossiers](pdf/img/diagram-import.svg)
 
@@ -124,21 +125,22 @@ Les salariés embauchés avant l'outil ont déjà un dossier sur le SharePoint d
 
 ## 7. Installer, lancer, tester
 
-![Une instance en production](pdf/img/diagram-deploiement.svg)
-
 ```bash
 pip install -r requirements.txt
-python installer.py "Basilic Café" /srv/basilic   # crée la configuration du client
-export CONFIG_DIR=/srv/basilic/config DONNEES=/srv/basilic/data
-python configurer.py      # dit ce qu'il manque dans la configuration
-python doctor.py          # vérifie les modèles de contrat
-PROXIES=1 python app.py   # lance le serveur derrière un reverse proxy
+export MONGO_URI="mongodb+srv://…" MONGO_DB=basilic   # la base neuve du client
+python installer.py "Basilic Café" /srv/basilic       # compte rh en base, config/ et fichier d'environnement
+python configurer.py --env /srv/basilic/.env            # dit ce qu'il manque dans la configuration
+python doctor.py --env /srv/basilic/.env                # vérifie les modèles de contrat
+PROXIES=1 python app.py --env /srv/basilic/.env         # lance le serveur derrière un reverse proxy
 ```
+
+![Une instance en production](pdf/img/diagram-deploiement.svg)
 
 - `DEBUG=1 python app.py` lance le serveur de développement.
 - `recap.py` envoie le mail hebdomadaire au cabinet. Il doit être planifié chaque semaine (cron ou tâche Windows), sinon le cabinet ne reçoit rien.
 - `PROXIES` indique combien de reverse proxies sont devant l'application, pour lire la vraie adresse IP des visiteurs.
-- Pour sauvegarder, il suffit de copier `config/` et `data/`. Pour mettre à jour, `git pull` puis redémarrer.
+- Le fichier d'environnement se passe à chaque commande avec `--env <dossier>/.env` (`python app.py --env /srv/basilic/.env`), sous Windows comme sur le VPS. C'est `config.py` qui le lit, avant tout le reste : une ligne `CLE=valeur` coupée au premier `=`, espaces et guillemets englobants retirés ; une ligne illisible arrête la commande. Une variable déjà posée dans l'environnement (par exemple par `EnvironmentFile=` de systemd) l'emporte sur le fichier. Sur le VPS, le fichier doit être lisible par le compte du service, en mode 600.
+- Pour sauvegarder, il faut la base (`mongodump`, ou la sauvegarde de l'hébergeur), `config/` et le fichier d'environnement. Les sauvegardes de la base gardent les données jusqu'à leur propre expiration, même après une purge. Pour mettre à jour, `git pull` puis redémarrer.
 
-**Tests.** Chaque fichier de `tests/` se lance seul (`python tests/test_parcours.py`). La suite est bonne quand tous terminent sans erreur. Si vous ajoutez un fichier `.py` à la racine, ajoutez-le aussi dans `tests/test_clients.py`.
+**Tests.** Ils tournent sur une base en mémoire (`mongomock`, `pip install -r requirements-dev.txt`). Chaque fichier de `tests/` se lance seul (`python tests/test_parcours.py`). La suite est bonne quand tous terminent sans erreur. Si vous ajoutez un fichier `.py` à la racine, ajoutez-le aussi dans `tests/test_clients.py`.
 

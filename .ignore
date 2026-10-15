@@ -1,0 +1,5 @@
+# les fiches graft sont ignorées par git mais doivent rester cherchables :
+# ripgrep lit .ignore avant .gitignore, ce qui les réadmet pour la recherche seule.
+!graft/
+graft/.cache/
+graft/.graph/
