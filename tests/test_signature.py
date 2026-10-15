@@ -69,6 +69,72 @@ assert signature.recuperer("req1") is None, "PDF rendu avant la fin de la procé
 _etat["done"] = True
 assert signature.recuperer("req1") == b"%PDF-1.4 signed"
 
+
+
+def base_coupee_apres_envoi():
+    """Yousign a créé et activé la procédure (le salarié a son mail), puis la
+    base tombe avant d'avoir noté la procédure au dossier. La RH doit lire
+    l'identifiant et la consigne de ne pas renvoyer, pas la page générale
+    « vérifiez le dossier avant de refaire » : le dossier n'en garde rien et
+    un second envoi doublerait la demande de signature."""
+    import io
+    from pymongo.errors import AutoReconnect
+    import store
+    from app import app
+    from _outils import compte
+    compte("rh", "fixture")
+    secure = app.config["SESSION_COOKIE_SECURE"]
+    app.config["SESSION_COOKIE_SECURE"] = False
+    activations = []
+
+    def yousign(methode, url, entetes, corps):
+        chemin = url.split("/v3")[1]
+        if chemin.endswith("/activate"):
+            activations.append(chemin)
+        return 201, json.dumps({"id": "proc-42"}).encode()
+    signature._TRANSPORT = yousign
+
+    pdf = lambda: (io.BytesIO(b"%PDF-1.4\n%%EOF"), "p.pdf")
+    c = app.test_client()
+    c.post("/login", data={"identifiant": "rh", "mot_de_passe": "fixture"})
+    r = c.post("/", content_type="multipart/form-data", data={
+        "etablissement": "ACME Restauration / Lille Grand Place",
+        "email_demandeur": "manager@example.com", "email": "cand@example.com",
+        "nom_naissance": "Martin", "nom_usage": "", "prenom": "Cam",
+        "date_naissance": "1991-07-02", "lieu_naissance": "Paris",
+        "nationalite": "Française", "num_secu": "1 91 07 75 116 001 42",
+        "adresse": "1 rue A, 75001 Paris", "poste": "Manager", "type_contrat": "CDI",
+        "date_debut": "2026-10-01", "temps_partiel": "Non", "heures_hebdo": "35",
+        "salaire": "2600", "identite": [pdf(), pdf()], "carte_vitale": pdf(), "rib": pdf()})
+    assert "Demande envoyée" in r.text, r.status_code
+    uid = max(i["id"] for i in store.tout())
+    c.post(f"/dossier/{uid}/valider")
+    c.post(f"/dossier/{uid}/dpae-faite", data={"accuse": pdf()},
+           content_type="multipart/form-data")
+    c.post(f"/dossier/{uid}/remettre")
+    assert store.signe_manquant(store.lire(uid)), store.etat(store.lire(uid))
+
+    vrai = store.noter
+
+    def noter_sans_base(uid_, **entree):
+        if entree.get("type") == "signature_envoyee":
+            raise AutoReconnect("base injoignable")
+        return vrai(uid_, **entree)
+    store.noter = noter_sans_base
+    try:
+        r = c.post(f"/dossier/{uid}/signature-envoyer")
+    finally:
+        store.noter = vrai
+        signature._TRANSPORT = faux_transport
+        app.config["SESSION_COOKIE_SECURE"] = secure
+    page = r.get_data(as_text=True)
+    assert activations, "contrôle : la procédure a bien été activée chez Yousign"
+    assert "proc-42" in page and "ne le renvoyez pas" in page, (r.status_code, page[:600])
+    assert "Base de données indisponible" not in page, "page générale au lieu du message"
+
+
+base_coupee_apres_envoi()
+
 # mode manuel -> refus net
 config.instance()["signature"] = {"mode": "manuel"}
 try:

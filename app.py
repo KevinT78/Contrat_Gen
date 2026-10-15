@@ -1582,7 +1582,20 @@ def signature_envoyer(uid):
     except (RuntimeError, KeyError, OSError) as e:
         flash(f"Envoi à la signature échoué : {e}", "erreur")
         return redirect(url_for("detail", uid=uid))
-    store.noter(uid, type="signature_envoyee", par=session["utilisateur"], procedure=pid)
+    try:
+        store.noter(uid, type="signature_envoyee", par=session["utilisateur"], procedure=pid)
+    except PyMongoError as e:
+        # Le salarie a deja recu sa demande : la page generale (« verifiez le
+        # dossier avant de refaire ») menerait a un second envoi, le dossier
+        # n'ayant rien garde. L'identifiant est le seul moyen de la retrouver.
+        app.logger.error("signature : procedure %s activee, non notee au dossier %s",
+                         pid, uid, exc_info=e)
+        return render_template(
+            "message.html", titre="Signature envoyée, non enregistrée",
+            texte=(f"Le contrat est parti à la signature (procédure {pid}), mais la "
+                   "base de données n'a pas pu l'enregistrer au dossier : ne le "
+                   "renvoyez pas, le salarié a déjà reçu sa demande. Notez cet "
+                   "identifiant et transmettez-le à l'administrateur.")), 503
     flash("Contrat envoyé à la signature.", "ok")
     return redirect(url_for("detail", uid=uid))
 
