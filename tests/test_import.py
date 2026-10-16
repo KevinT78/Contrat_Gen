@@ -500,7 +500,7 @@ import io  # noqa: E402
 import pikepdf  # noqa: E402
 from PIL import Image  # noqa: E402
 
-import compression  # noqa: E402
+import compresseur  # noqa: E402
 
 
 def photo(fmt, cote=2600):
@@ -510,28 +510,28 @@ def photo(fmt, cote=2600):
 
 
 png = photo("PNG")
-nom, jpg = compression.compresser("Vitale.PNG", png)
+nom, jpg = compresseur.compresser("Vitale.PNG", png)
 assert nom == "Vitale.jpg" and len(jpg) < len(png), (nom, len(jpg), len(png))
 assert Image.open(io.BytesIO(jpg)).size == (2000, 2000)
-nom, gris = compression.compresser("cni.jpeg", photo("JPEG"), "gris")
+nom, gris = compresseur.compresser("cni.jpeg", photo("JPEG"), "gris")
 assert nom == "cni.jpg" and Image.open(io.BytesIO(gris)).mode == "L"
 scan = photo("PDF")                                     # Pillow : une page, une image JPEG
-nom, leger = compression.compresser("titre.pdf", scan, "gris")
+nom, leger = compresseur.compresser("titre.pdf", scan, "gris")
 assert nom == "titre.pdf" and len(leger) < len(scan) / 2, (len(leger), len(scan))
 with pikepdf.open(io.BytesIO(leger)) as doc:
     xo, = doc.pages[0].get_images().values()
     assert len(doc.pages) == 1 and xo.Width == 1600 and xo.ColorSpace == "/DeviceGray"
 signe = scan.replace(b"%%EOF", b"/ByteRange [0 1 2 3] %%EOF")    # signature électronique
-assert signe != scan and compression.compresser("s.pdf", scan)[1] != scan, "cas signé non exercé"
+assert signe != scan and compresseur.compresser("s.pdf", scan)[1] != scan, "cas signé non exercé"
 for nom_, octets in [("signe.pdf", signe), ("abime.pdf", b"%PDF x"), ("abime.jpg", b"pas une image"),
                      ("contrat.docx", png), ("cni.pdf", png)]:
-    assert compression.compresser(nom_, octets) == (nom_, octets), nom_
+    assert compresseur.compresser(nom_, octets) == (nom_, octets), nom_
 texte = io.BytesIO()
 with pikepdf.new() as doc:
     doc.add_blank_page()
     doc.pages[0].Contents = doc.make_stream(b"BT /F1 12 Tf 72 720 Td (Contrat) Tj ET")
     doc.save(texte)
-with pikepdf.open(io.BytesIO(compression.compresser("c.pdf", texte.getvalue())[1])) as doc:
+with pikepdf.open(io.BytesIO(compresseur.compresser("c.pdf", texte.getvalue())[1])) as doc:
     assert doc.pages[0].Contents.read_bytes().endswith(b"(Contrat) Tj ET"), "texte d'un PDF modifié"
 
 # à l'import : tout passe par la compression, même au-delà de TAILLE_MAX

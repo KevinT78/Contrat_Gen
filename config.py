@@ -273,7 +273,7 @@ def conservation():
 def compression():
     """`compression` d'instance.json : "couleur" (défaut) ou "gris". Pièces
     déposées (formulaire, RH) et importées de SharePoint passent par
-    compression.py. Lecture GARDEE comme conservation()."""
+    compresseur.py. Lecture GARDEE comme conservation()."""
     try:
         c = instance().get("compression")
     except (OSError, ValueError, KeyError):

@@ -22,7 +22,7 @@ import time
 import unicodedata
 from urllib.parse import quote, urlparse
 
-import compression
+import compresseur
 import config
 import store
 
@@ -482,10 +482,10 @@ def _un_salarie(cle_etab, sp_etab, s, enfants, par, deja):
             for b, it in fichiers_a_prendre(enfants, s["id"]):
                 taille = it.get("size", 0)
                 if taille > TELECHARGE_MAX or (taille > TAILLE_MAX
-                                               and not compression.compressible(it["name"])):
+                                               and not compresseur.compressible(it["name"])):
                     gros.append(it)
                     continue
-                nom, octets = compression.compresser(it["name"], ouvrir(it), config.compression())
+                nom, octets = compresseur.compresser(it["name"], ouvrir(it), config.compression())
                 if len(octets) > TAILLE_MAX:
                     gros.append(it)
                     continue

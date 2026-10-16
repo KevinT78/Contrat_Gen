@@ -36,7 +36,7 @@ from pathlib import Path
 from pymongo import MongoClient, ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
-import compression
+import compresseur
 import config
 
 ETATS = ["Soumise", "Rejetee", "ATraiter", "ContratPret",
@@ -197,7 +197,7 @@ def _poser(item, bucket, role, fichier, extensions=EXTENSIONS, index=None):
     if len(octets) > TAILLE_MAX:
         raise ValueError(f"fichier trop lourd (max {TAILLE_MAX // 1024 // 1024} Mo)")
     # photo -> .jpg allégé, PDF scanné allégé ; l'extension peut donc changer
-    nom_compresse, octets = compression.compresser(f"x{ext}", octets, config.compression())
+    nom_compresse, octets = compresseur.compresser(f"x{ext}", octets, config.compression())
     ext = os.path.splitext(nom_compresse)[1]
     if item["zone"] == "soumissions":
         nom = SAIN.sub("-", role) + (f"_{index}" if index and index > 1 else "") + ext

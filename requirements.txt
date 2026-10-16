@@ -3,7 +3,7 @@ python-docx==1.2.0
 htmldocx==0.0.6      # rendu Word des templates de contrat ecrits en HTML
 num2words==0.5.14
 waitress==3.0.2        # serveur WSGI de production, mono-process par construction
-pikepdf==10.17.0       # compression.py : images des PDF scannés
-pillow==12.3.0         # compression.py : photos
-pillow-heif==1.8.1     # compression.py : photos d'iPhone (.heic)
+pikepdf==10.17.0       # compresseur.py : images des PDF scannés
+pillow==12.3.0         # compresseur.py : photos
+pillow-heif==1.8.1     # compresseur.py : photos d'iPhone (.heic)
 pymongo==4.18.3        # etat, journal et pieces des dossiers (MONGO_URI, MONGO_DB)

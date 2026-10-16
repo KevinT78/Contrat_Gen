@@ -33,7 +33,7 @@ RACINE = Path(__file__).resolve().parent.parent
 CODE = ["app.py", "config.py", "apparence.py", "contrat.py", "mails.py",
         "signature.py", "configurer.py", "store.py", "installer.py", "recap.py",
         "purger.py", "placeholders.py", "doctor.py", "demo.py", "demo_import.py", "sharepoint.py",
-        "excel.py", "compression.py"]
+        "excel.py", "compresseur.py"]
 
 MENTIONS = ["RaisonSociale", "FormeCapital", "RCS", "SiegeSocial", "ConventionCollective"]
 

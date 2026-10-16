@@ -512,7 +512,7 @@ compare-and-swap. Il reste que les plafonds de rate-limit (formulaire public,
 mono-process reste le lancement recommandé.
 
 **Compression des pièces.** Toute pièce stockée (formulaire, dépôt RH, import
-SharePoint) passe par `compression.py` : une photo devient un `.jpg` de 2000 px
+SharePoint) passe par `compresseur.py` : une photo devient un `.jpg` de 2000 px
 au plus, un PDF voit ses images recompressées (son texte n'est jamais touché).
 Clé optionnelle `"compression": "gris"` d'`instance.json` : niveaux de gris,
 1600 px, un peu plus léger ; absente = `"couleur"`. Fichier abîmé, format
