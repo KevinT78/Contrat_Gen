@@ -1,0 +1,24 @@
+# Rien de propre a un client ni de secret dans l'image : elle est publique.
+.git
+.github
+.claude
+.scratch
+venv
+.venv
+__pycache__
+*.pyc
+data
+data_demo
+config
+config_wingstop
+clients
+wingstop
+_wingstop_reel
+graft
+tests
+docs
+deploy
+*.bat
+*.md
+Dockerfile
+.dockerignore

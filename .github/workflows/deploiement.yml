@@ -1,0 +1,80 @@
+# Un push sur une branche de deploiement la met en ligne :
+#   master  -> production  https://wingstop-rh.wingstop-flavorcard.fr
+#   preprod -> preprod     https://preprod-rh.wingstop-flavorcard.fr
+# Tests -> image ghcr.io/kevint78/contrat_gen:<sha> -> deploiement sur le VPS
+# en SSH (deploy/deployer.sh, retour automatique a la version precedente si
+# le conteneur n'est pas sain).
+name: Déploiement
+
+on:
+  push:
+    branches: [master, preprod]
+
+permissions:
+  contents: read
+  packages: write
+
+# Jamais deux deploiements du meme environnement en meme temps.
+concurrency:
+  group: deploiement-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+      # requirements-sharepoint : comme l'image, et test_import verifie msal.
+      - run: pip install -r requirements.txt -r requirements-sharepoint.txt -r requirements-dev.txt
+      - name: Tests
+        run: |
+          for t in tests/test_*.py; do
+            echo "::group::$t"
+            python "$t"
+            echo "::endgroup::"
+          done
+
+  image:
+    needs: tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/kevint78/contrat_gen:${{ github.sha }}
+            ghcr.io/kevint78/contrat_gen:${{ github.ref_name }}
+
+  deploiement:
+    needs: image
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ github.ref_name == 'master' && 'production' || 'preprod' }}
+      url: ${{ github.ref_name == 'master' && 'https://wingstop-rh.wingstop-flavorcard.fr' || 'https://preprod-rh.wingstop-flavorcard.fr' }}
+    steps:
+      - name: Déployer sur le VPS
+        env:
+          CIBLE: ${{ github.ref_name == 'master' && 'prod' || 'preprod' }}
+          SHA: ${{ github.sha }}
+          VPS_HOTE: ${{ secrets.VPS_HOTE }}
+          VPS_SSH_CLE: ${{ secrets.VPS_SSH_CLE }}
+          VPS_HOTE_CONNU: ${{ secrets.VPS_HOTE_CONNU }}
+        run: |
+          if [ -z "$VPS_HOTE" ] || [ -z "$VPS_SSH_CLE" ] || [ -z "$VPS_HOTE_CONNU" ]; then
+            echo "::warning::Secrets VPS absents : image publiée, déploiement ignoré (voir deploy/README.md)."
+            exit 0
+          fi
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$VPS_SSH_CLE" > ~/.ssh/deploiement && chmod 600 ~/.ssh/deploiement
+          printf '%s\n' "$VPS_HOTE_CONNU" > ~/.ssh/known_hosts
+          ssh -i ~/.ssh/deploiement -o StrictHostKeyChecking=yes "deploiement@$VPS_HOTE" "$CIBLE $SHA"

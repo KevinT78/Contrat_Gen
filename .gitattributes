@@ -1,0 +1,5 @@
+# Scripts executes sur le VPS : fins de ligne Unix meme depuis un poste Windows
+# (core.autocrlf=true y mettrait des CRLF, que bash refuse).
+*.sh text eol=lf
+deploy/* text eol=lf
+Dockerfile text eol=lf
