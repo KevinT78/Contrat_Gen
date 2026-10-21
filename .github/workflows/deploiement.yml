@@ -1,21 +1,22 @@
-# Un tag vX.Y.Z pousse sur GitHub = une mise en production de Contrat_Gen.
-#   git tag v1.0.0 && git push origin v1.0.0
-# Tests -> image ghcr.io/kevint78/contrat_gen:<tag> -> deploiement sur le VPS
+# Un push sur une branche de deploiement la met en ligne :
+#   master  -> production  https://wingstop-rh.wingstop-flavorcard.fr
+#   preprod -> preprod     https://preprod-rh.wingstop-flavorcard.fr
+# Tests -> image ghcr.io/kevint78/contrat_gen:<sha> -> deploiement sur le VPS
 # en SSH (deploy/deployer.sh, retour automatique a la version precedente si
 # le conteneur n'est pas sain).
-name: Déploiement production
+name: Déploiement
 
 on:
   push:
-    tags: ["v*.*.*"]
+    branches: [master, preprod]
 
 permissions:
   contents: read
   packages: write
 
-# Jamais deux mises en production en meme temps.
+# Jamais deux deploiements du meme environnement en meme temps.
 concurrency:
-  group: production
+  group: deploiement-${{ github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -49,21 +50,30 @@ jobs:
         with:
           context: .
           push: true
-          tags: ghcr.io/kevint78/contrat_gen:${{ github.ref_name }}
+          tags: |
+            ghcr.io/kevint78/contrat_gen:${{ github.sha }}
+            ghcr.io/kevint78/contrat_gen:${{ github.ref_name }}
 
-  production:
+  deploiement:
     needs: image
     runs-on: ubuntu-latest
-    environment: production
+    environment:
+      name: ${{ github.ref_name == 'master' && 'production' || 'preprod' }}
+      url: ${{ github.ref_name == 'master' && 'https://wingstop-rh.wingstop-flavorcard.fr' || 'https://preprod-rh.wingstop-flavorcard.fr' }}
     steps:
       - name: Déployer sur le VPS
         env:
-          TAG: ${{ github.ref_name }}
+          CIBLE: ${{ github.ref_name == 'master' && 'prod' || 'preprod' }}
+          SHA: ${{ github.sha }}
           VPS_HOTE: ${{ secrets.VPS_HOTE }}
           VPS_SSH_CLE: ${{ secrets.VPS_SSH_CLE }}
           VPS_HOTE_CONNU: ${{ secrets.VPS_HOTE_CONNU }}
         run: |
+          if [ -z "$VPS_HOTE" ] || [ -z "$VPS_SSH_CLE" ] || [ -z "$VPS_HOTE_CONNU" ]; then
+            echo "::warning::Secrets VPS absents : image publiée, déploiement ignoré (voir deploy/README.md)."
+            exit 0
+          fi
           install -m 700 -d ~/.ssh
           printf '%s\n' "$VPS_SSH_CLE" > ~/.ssh/deploiement && chmod 600 ~/.ssh/deploiement
           printf '%s\n' "$VPS_HOTE_CONNU" > ~/.ssh/known_hosts
-          ssh -i ~/.ssh/deploiement -o StrictHostKeyChecking=yes "deploiement@$VPS_HOTE" "$TAG"
+          ssh -i ~/.ssh/deploiement -o StrictHostKeyChecking=yes "deploiement@$VPS_HOTE" "$CIBLE $SHA"

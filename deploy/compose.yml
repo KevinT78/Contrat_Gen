@@ -1,27 +1,29 @@
-# Contrat_Gen, instance « wingstop », en conteneur.
-# Sur le VPS : /opt/contratgen-docker/compose.yml, a cote d'un fichier .env
-# (IMAGE_TAG, CG_UID, CG_GID, PORT_HOTE) que deployer.sh met a jour.
-# Les secrets restent dans /etc/contratgen/wingstop.env (root, 600) : docker
-# compose les lit en root et les passe au conteneur, ils n'entrent ni dans
-# l'image ni dans git.
+# Contrat_Gen en conteneur, un projet compose par environnement :
+#   docker compose -p contratgen-prod    --env-file prod.env    up -d
+#   docker compose -p contratgen-preprod --env-file preprod.env up -d
+# Sur le VPS : /opt/contratgen-docker/{compose.yml,prod.env,preprod.env}.
+# prod.env / preprod.env ne portent aucun secret (version, port, chemins) :
+# deployer.sh y reecrit IMAGE_TAG. Les secrets restent dans ENV_FILE
+# (/etc/contratgen/*.env, root, 600) : docker compose les lit en root et les
+# passe au conteneur, ils n'entrent ni dans l'image ni dans git.
 services:
-  wingstop:
-    image: ghcr.io/kevint78/contrat_gen:${IMAGE_TAG:?IMAGE_TAG absent de .env}
-    container_name: contratgen-wingstop
+  app:
+    image: ghcr.io/kevint78/contrat_gen:${IMAGE_TAG:?IMAGE_TAG absent}
+    container_name: contratgen-${ENVIRONNEMENT:?}
     restart: unless-stopped
     # L'utilisateur contratgen de l'hote : il possede deja la config (mode 700).
     user: "${CG_UID:?}:${CG_GID:?}"
-    env_file: /etc/contratgen/wingstop.env
-    # Prime sur env_file : le fichier garde les valeurs du service systemd
-    # (PORT=5101, CONFIG_DIR=/srv/...) tant que l'ancien service existe.
+    env_file: ${ENV_FILE:?}
+    # Prime sur ENV_FILE, qui garde les valeurs du service systemd (PORT=5101,
+    # CONFIG_DIR=/srv/...) tant que l'ancien service existe.
     environment:
       HOST: 0.0.0.0
       PORT: "5000"
       CONFIG_DIR: /config
     volumes:
-      - /srv/contratgen/wingstop/config:/config:ro
+      - ${CONFIG_HOTE:?}:/config:ro
     ports:
-      - "127.0.0.1:${PORT_HOTE:-5102}:5000"
+      - "127.0.0.1:${PORT_HOTE:?}:5000"
     read_only: true
     tmpfs:
       - /tmp
