@@ -389,14 +389,7 @@ def regle_pour(champs):
     formes acceptees.
     """
     n = _normaliser
-    t = instance()["templates"]
-    if isinstance(t, dict):
-        # `null` en forme dict = exclusion volontaire, comme `modele: null` en
-        # forme liste : la cle EXISTE, son modele est None. A distinguer du
-        # poste absent de la table, qu'aucune regle ne vise.
-        poste = valeur(champs, "poste")
-        return {"modele": t[poste]} if poste in t else None
-    for regle in _regles_bien_formees():
+    for regle in regles():
         if all(n(champs.get(k, "")) == n(v)
                for k, v in regle.get("quand", {}).items()):
             return regle
@@ -569,16 +562,19 @@ def _templates_actifs():
     manquant doit bloquer le demarrage -- noms relatifs a config/contrats/.
     La fiche salarie est verifiee a part (_verifier_placeholders) : son
     modele generique ne vit pas forcement sous config/contrats/."""
-    t = instance()["templates"]
-    return {m for m in t.values() if m} if isinstance(t, dict) \
-        else {r["modele"] for r in _regles_bien_formees() if r.get("modele")}
+    return {r["modele"] for r in regles() if r.get("modele")}
 
 
-def _regles_bien_formees():
-    """Les regles `templates` (forme liste) lisibles sans planter. Les autres
-    sont refusees par _verifier_regles ; les verificateurs voisins les sautent
-    pour que le bilan affiche ce refus au lieu d'un AttributeError."""
+def regles():
+    """Les regles `templates`, toujours en liste : la forme dict {poste: fichier}
+    n'est qu'une ecriture abregee de [{"quand": {poste: ...}, "modele": ...}],
+    convertie ici pour que matching et verifications ne la connaissent pas.
+    Les regles mal formees sont sautees : _verifier_regles les refuse, et les
+    autres lecteurs (doctor tourne meme sur une config refusee) ne doivent pas
+    planter dessus."""
     t = instance()["templates"]
+    if isinstance(t, dict):
+        return [{"quand": {role("poste"): p}, "modele": m} for p, m in t.items()]
     return [r for r in t if isinstance(r, dict)
             and isinstance(r.get("quand", {}), dict)] if isinstance(t, list) else []
 
@@ -1076,19 +1072,17 @@ def _verifier_regles():
 def _verifier_postes():
     """Chaque poste du formulaire doit atteindre un modele."""
     manques = {}
-    t = instance()["templates"]
-    if isinstance(t, list):
-        t = _regles_bien_formees()
-        vises = set()
-        fourre_tout = any(not r.get("quand") for r in t)
-        for r in t:
-            vises |= {str(v) for v in r.get("quand", {}).values()}
-        for c in champs():
-            if c["id"] != role("poste"):
-                continue
-            for opt in c.get("options", []):
-                if not fourre_tout and opt not in vises:
-                    manques[f"poste « {opt} »"] = ["aucune règle de template ne le vise"]
+    t = regles()
+    vises = set()
+    fourre_tout = any(not r.get("quand") for r in t)
+    for r in t:
+        vises |= {_normaliser(v) for v in r.get("quand", {}).values()}
+    for c in champs():
+        if c["id"] != role("poste"):
+            continue
+        for opt in c.get("options", []):
+            if not fourre_tout and _normaliser(opt) not in vises:
+                manques[f"poste « {opt} »"] = ["aucune règle de template ne le vise"]
     return manques
 
 

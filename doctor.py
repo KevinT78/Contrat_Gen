@@ -51,15 +51,6 @@ def _id_etab():
     return config.role("etablissement")
 
 
-def _regles():
-    """Les règles `templates` sous forme de liste, la forme dict normalisée.
-    Les règles mal formées sont sautées : doctor tourne même sur une config
-    refusée au démarrage, et une règle « pas un objet » plantait axes()."""
-    t = config.instance()["templates"]
-    return ([{"quand": {config.role("poste"): p}, "modele": m} for p, m in t.items()]
-            if isinstance(t, dict) else config._regles_bien_formees())
-
-
 def axes():
     """Les champs qui peuvent changer le modèle choisi OU le salaire produit,
     donc les colonnes du tableau. Dérivés des règles du client (les clés de
@@ -71,7 +62,7 @@ def axes():
     le remettre en colonne écrasait la vraie clé par une valeur d'exemple, si
     bien qu'une règle visant un établissement ne matchait plus jamais."""
     exclus = {_id_etab()}
-    noms = [k for r in _regles() for k in r.get("quand", {}) if k not in exclus]
+    noms = [k for r in config.regles() for k in r.get("quand", {}) if k not in exclus]
 
     ids_champs = {c["id"] for c in config.champs()}
     supplement = []
@@ -100,7 +91,7 @@ def valeurs_axe(cid):
     inventé avant d'annoncer « tout est couvert ». L'union montre les deux
     trous : une option qu'aucune règle ne vise, une règle que le formulaire ne
     permet plus d'atteindre."""
-    citees = [str(r["quand"][cid]) for r in _regles() if cid in r.get("quand", {})]
+    citees = [str(r["quand"][cid]) for r in config.regles() if cid in r.get("quand", {})]
     vues = list(config.champ(cid).get("options") or []) + citees
     return list(dict.fromkeys(vues)) or [_exemple(cid)]
 

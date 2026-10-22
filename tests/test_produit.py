@@ -76,6 +76,16 @@ def ecrire(instance=None, contrat="Bonjour {{Nom}}, poste {{Poste}}.",
     store.db().comptes.delete_many({})
     for ident, doc in comptes.items():
         store.db().comptes.insert_one({"_id": ident, **doc})
+    if instance is None and formulaire:
+        # verifier() refuse un poste sans modele : la table par defaut suit les
+        # postes du formulaire fourni, pour que le test ne voie que ce qu'il vise.
+        # Les formulaires volontairement mal formes gardent la table par defaut.
+        roles = formulaire.get("roles", {})
+        poste = roles.get("poste", "poste") if isinstance(roles, dict) else "poste"
+        postes = [o for c in formulaire["champs"] if isinstance(c, dict)
+                  and c.get("id") == poste for o in c.get("options", [])]
+        if postes:
+            instance = {**INSTANCE, "templates": {p: "contrat.txt" for p in postes}}
     (CONF / "instance.json").write_text(
         json.dumps(instance or INSTANCE, ensure_ascii=False), encoding="utf-8")
     fg = CONF / "grille.json"
@@ -200,6 +210,25 @@ def test_exclusion_volontaire_en_forme_dict():
     assert config.regle_pour({"poste": "Stagiaire"}) is None
 
     assert "None" not in placeholders.fiche(), placeholders.fiche()
+
+
+def test_forme_dict_lue_comme_la_forme_liste():
+    """Le dict {poste: fichier} abrège la liste de règles. Il comparait le poste
+    au caractère près (« Equipier Polyvalent » importé de MS Forms : aucun
+    modèle) et laissait démarrer un poste sans modèle que la liste refusait."""
+    postes = {**FORMULAIRE["champs"][3], "options": ["Équipier polyvalent", "Manager"]}
+    formulaire = {**FORMULAIRE, "champs": FORMULAIRE["champs"][:3] + [postes]}
+    for templates in ({"Équipier polyvalent": "contrat.txt", "Manager": "contrat.txt"},
+                      [{"quand": {"poste": "Équipier polyvalent"}, "modele": "contrat.txt"},
+                       {"quand": {"poste": "Manager"}, "modele": "contrat.txt"}]):
+        ecrire(instance={**INSTANCE, "templates": templates}, formulaire=formulaire)
+        assert config.verifier() == {}, (templates, config.verifier())
+        assert config.modele_pour({"poste": "Equipier Polyvalent"}) == "contrat.txt", templates
+
+        sans_equipier = ({"Manager": "contrat.txt"} if isinstance(templates, dict)
+                         else templates[1:])
+        ecrire(instance={**INSTANCE, "templates": sans_equipier}, formulaire=formulaire)
+        assert "poste « Équipier polyvalent »" in config.verifier(), sans_equipier
 
 
 def test_modele_generique_de_fiche_absent_refuse_au_demarrage():
