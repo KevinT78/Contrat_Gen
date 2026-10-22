@@ -86,7 +86,7 @@ PIECES = [("identite", "recto.pdf", PETIT), ("identite", "verso.pdf", PETIT),
 
 
 def depot_public():
-    r = poster(app.test_client(), "/", SAISIE, PIECES[:3] + [("rib", "gros.pdf", GROS)])
+    r = poster(app.test_client(), "/demande", SAISIE, PIECES[:3] + [("rib", "gros.pdf", GROS)])
     assert r.status_code == 200 and r.get_json()["ok"] is True, r.data[:300]
     uid = max(i["id"] for i in store.tout())
     assert any(len(d["octets"]) > 500 * 1024 for d in store.db().fichiers.find({"uid": uid}))
@@ -144,7 +144,7 @@ def sous_waitress():
     try:
         aleatoire = PETIT + os.urandom(1200 * 1024)   # incompressible : le zip fait > 1 Mo
         data, ctype = corps(SAISIE, PIECES[:3] + [("rib", "gros.pdf", aleatoire)])
-        req = urllib.request.Request(base + "/", data=data, method="POST",
+        req = urllib.request.Request(base + "/demande", data=data, method="POST",
                                      headers={"Content-Type": ctype,
                                               "X-Requested-With": "contratgen-fetch"})
         assert b'"ok":true' in urllib.request.urlopen(req).read().replace(b" ", b"")

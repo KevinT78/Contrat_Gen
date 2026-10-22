@@ -731,7 +731,7 @@ def test_theme_atteint_la_page_et_les_fichiers_sont_servis():
 
     import app as application
     client = application.app.test_client()
-    page = client.get("/").get_data(as_text=True)
+    page = client.get("/demande").get_data(as_text=True)
 
     assert "--accent:#c8102e" in page, "la couleur du client n'atteint pas la page"
     assert page.index("--accent:#c8102e") > page.index("--accent:#1f4d3f"),         "la DA du client est peinte avant la palette d'origine : elle perd"
@@ -745,7 +745,7 @@ def test_theme_atteint_la_page_et_les_fichiers_sont_servis():
 
     (CONF / "theme.json").unlink()
     config._CACHE.clear()
-    assert "--accent:#c8102e" not in client.get("/").get_data(as_text=True),         "sans theme.json, la page porte encore la DA du test precedent"
+    assert "--accent:#c8102e" not in client.get("/demande").get_data(as_text=True),         "sans theme.json, la page porte encore la DA du test precedent"
 
 
 def test_signer_refuse_sans_cle():

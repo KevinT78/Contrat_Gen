@@ -55,7 +55,7 @@ python demo.py --vide
 ```
 
 - `--vide` : le suivi est **vide**, vous faites tout vous-même. Sans cette option, quatre dossiers d'exemple sont déjà là, chacun arrêté à une étape différente (pratique pour une présentation).
-- L'application répond sur **http://localhost:5000** ; connexion RH : `rh` / `demo-rh`.
+- L'application répond sur **http://localhost:5000**, qui ouvre la connexion RH : `rh` / `demo-rh`. Le formulaire manager est sur **http://localhost:5000/demande**.
 - Les données vont dans une base **en mémoire**, vide à chaque lancement : rien n'est écrit sur le disque. Les mails ne partent pas : le terminal affiche une ligne par mail (`[MAIL rejet] -> …`) et le message complet est gardé dans la base de démonstration.
 - Arrêt : `Ctrl+C` dans le terminal.
 
@@ -76,7 +76,7 @@ Parcours d'essai conseillé, environ 20 minutes :
 
 ### Accès
 
-L'adresse dépend de l'installation (en démonstration : `http://localhost:5000`). Aucun compte n'est nécessaire : le formulaire est public.
+L'adresse est celle de l'installation, suivie de `/demande` (en démonstration : `http://localhost:5000/demande`). Aucun compte n'est nécessaire : le formulaire est public.
 
 ### Remplir la fiche
 

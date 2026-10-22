@@ -97,7 +97,7 @@ def base_coupee_apres_envoi():
     pdf = lambda: (io.BytesIO(b"%PDF-1.4\n%%EOF"), "p.pdf")
     c = app.test_client()
     c.post("/login", data={"identifiant": "rh", "mot_de_passe": "fixture"})
-    r = c.post("/", content_type="multipart/form-data", data={
+    r = c.post("/demande", content_type="multipart/form-data", data={
         "etablissement": "ACME Restauration / Lille Grand Place",
         "email_demandeur": "manager@example.com", "email": "cand@example.com",
         "nom_naissance": "Martin", "nom_usage": "", "prenom": "Cam",

@@ -427,7 +427,12 @@ def _formulaire_ok(titre, texte):
     return render_template("message.html", titre=titre, texte=texte)
 
 
-@app.route("/", methods=["GET", "POST"])
+@app.get("/")
+def accueil():
+    return redirect(url_for("suivi" if "utilisateur" in session else "login"))
+
+
+@app.route("/demande", methods=["GET", "POST"])
 def formulaire():
     if request.method == "POST":
         if _pot_rempli() or not _soumission_autorisee(request.remote_addr):

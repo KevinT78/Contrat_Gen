@@ -98,7 +98,7 @@ def saisie(**over):
 
 
 def soumettre(c, s):
-    r = c.post("/", data={**s, "carte_vitale": piece(), "rib": piece(),
+    r = c.post("/demande", data={**s, "carte_vitale": piece(), "rib": piece(),
                           "cni": [piece(), piece()],  # recto + verso
                           "justif_domicile": piece()},
                content_type="multipart/form-data")
@@ -198,7 +198,7 @@ if __name__ == "__main__":
             amorcer()
     print(f"""
 Démo Contrat_Gen — {config.instance()['client']}
-  Formulaire (public) : http://localhost:{os.environ['PORT']}/
+  Formulaire (public) : http://localhost:{os.environ['PORT']}/demande
   Espace RH           : http://localhost:{os.environ['PORT']}/login   (rh / demo-rh)
   Mails « envoyés »   : collection mails de la base de démo (en-têtes dans ce terminal)
 {fiche}""", flush=True)

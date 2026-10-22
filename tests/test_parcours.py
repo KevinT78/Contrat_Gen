@@ -66,7 +66,7 @@ def lien_dans(mail, chemin):
 
 
 def soumettre(c, saisie):
-    r = c.post("/", data={**saisie, "identite": [piece(), piece()],
+    r = c.post("/demande", data={**saisie, "identite": [piece(), piece()],
                           "carte_vitale": piece(), "rib": piece()},
                content_type="multipart/form-data")
     assert r.status_code == 200 and "Demande envoyée" in r.text, r.status_code
@@ -80,7 +80,7 @@ def piece_refusee(_c):
     doit fuiter dans la session d'un appelant qui réutilise son client."""
     c = app.test_client()
     avant = (store.db().dossiers.count_documents({}), store.db().fichiers.count_documents({}))
-    r = c.post("/", data={**base_saisie("ACME Restauration / Lille Grand Place"),
+    r = c.post("/demande", data={**base_saisie("ACME Restauration / Lille Grand Place"),
                           "identite": piece(), "carte_vitale": piece(),
                           "rib": (BytesIO(b"PK"), "rib.docx")},
                content_type="multipart/form-data")
@@ -699,7 +699,7 @@ def cas_base_indisponible(c):
         import app as module
         module._POT_PAR_IP.clear()
         r = app.test_client().post(
-            "/", data={**base_saisie("ACME Restauration / Lille Grand Place"),
+            "/demande", data={**base_saisie("ACME Restauration / Lille Grand Place"),
                        "identite": [piece(), piece()], "carte_vitale": piece(), "rib": piece()},
             content_type="multipart/form-data",
             headers={"X-Requested-With": "contratgen-fetch"})

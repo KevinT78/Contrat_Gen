@@ -55,7 +55,7 @@ def ecran(c, url, attendu=200):
 
 
 def soumettre(c, etab=ETAB):
-    c.post("/", data={**saisie(etab), "identite": [piece(), piece()],
+    c.post("/demande", data={**saisie(etab), "identite": [piece(), piece()],
                       "carte_vitale": piece(), "rib": piece()},
            content_type="multipart/form-data")
     return max(i["id"] for i in store.tout())
@@ -78,7 +78,7 @@ def etapes(texte):
 
 def main():
     anonyme = app.test_client()
-    ecran(anonyme, "/")                         # formulaire candidat
+    ecran(anonyme, "/demande")                         # formulaire candidat
     ecran(anonyme, "/login")
     assert anonyme.get("/suivi").status_code == 302, "suivi ouvert sans session"
 

@@ -281,7 +281,7 @@ cabinet) sont bâtis sur `url` d'`instance.json`, jamais sur l'hôte de la requ�
 
 ### 1.7 Vérifier la mise en ligne
 
-- [ ] `https://demo.votre-domaine.fr/` affiche le formulaire (après le mot de passe Caddy).
+- [ ] `https://demo.votre-domaine.fr/demande` affiche le formulaire (après le mot de passe Caddy).
 - [ ] `/login` avec `rh` / `demo-rh` ouvre le suivi, et **la session tient** en changeant
       de page.
 - [ ] Le suivi montre les 4 dossiers : BENALI (à valider), SOARES (contrat à déposer),
@@ -719,7 +719,7 @@ le bouton « Renvoyer le lien de correction » n'apparaît qu'après un mail de 
 
 | Route | Accès | Durée |
 |---|---|---|
-| `/` | Formulaire public (écrit en base) | — |
+| `/demande` | Formulaire public (écrit en base) | — |
 | `/corriger/<jeton>` | Lien signé : corriger une demande rejetée | 30 j, inutilisable dès que la demande n'est plus à l'état « Rejetée » |
 | `/lot/<jeton>`, `/lot/<jeton>/zip`, `/lot/<jeton>/fichier/...` | **Accès complet aux pièces d'un dossier** (identité, RIB, contrat), IP journalisée | 30 j, révocable (« Renvoyer le lien », abandon, purge) |
 
@@ -734,7 +734,7 @@ derrière une authentification HTTP ou une liste d'IP :
 ```caddy
 embauche.acme.fr {
     encode gzip
-    @public path / /corriger/* /lot/*
+    @public path /demande /corriger/* /lot/*
     handle @public {
         reverse_proxy 127.0.0.1:5101
     }
@@ -748,7 +748,7 @@ embauche.acme.fr {
 }
 ```
 
-`/login`, `/suivi`, `/dossier/...` et `/purger` ont alors deux barrières, et une fuite du
+`/` (qui mène au login), `/login`, `/suivi`, `/dossier/...` et `/purger` ont alors deux barrières, et une fuite du
 mot de passe applicatif ne suffit plus.
 
 ### 3.3 Proxy et réseau
@@ -780,7 +780,7 @@ mot de passe applicatif ne suffit plus.
   - Caddy ne limite pas la taille par défaut.
   - **Avec nginx**, ajouter `client_max_body_size 40m;` et
     `proxy_set_header Host $host; proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for; proxy_set_header X-Forwarded-Proto $scheme;`.
-- **Surveillance** : il n'y a pas de route `/health`. `curl -fsS -o /dev/null https://embauche.acme.fr/`
+- **Surveillance** : il n'y a pas de route `/health`. `curl -fsS -o /dev/null https://embauche.acme.fr/demande`
   (réponse 200 attendue sur le formulaire) suffit pour une sonde externe.
 
 ### 3.4 Base de données

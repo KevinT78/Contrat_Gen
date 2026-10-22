@@ -60,7 +60,7 @@ def saisie(etab, poste):
 
 
 def couloir(c, etab, mode, poste, attendus):
-    r = c.post("/", data={**saisie(etab, poste),
+    r = c.post("/demande", data={**saisie(etab, poste),
                           **{p["id"]: [f() for _ in range(p.get("max_fichiers", 1))] for p in config.pieces()}},
                content_type="multipart/form-data")
     assert "Demande envoyée" in r.text, r.text[:300]
@@ -171,7 +171,7 @@ def refuser_et_corriger(c, etab, poste):
     motifs_ko), suit le lien de correction reçu par mail et constate que le
     dossier repart dans le parcours normal (retour à Soumise, cf. store.etat)."""
     kw = {"base_url": BASE_URL} if BASE_URL else {}
-    r = c.post("/", data={**saisie(etab, poste),
+    r = c.post("/demande", data={**saisie(etab, poste),
                           **{p["id"]: [f() for _ in range(p.get("max_fichiers", 1))] for p in config.pieces()}},
                content_type="multipart/form-data", **kw)
     assert "Demande envoyée" in r.text, r.text[:300]

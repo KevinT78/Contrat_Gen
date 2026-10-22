@@ -358,7 +358,7 @@ pour rejouer le mail hebdo, poser un `MONGO_URI` réel avant `demo.py`.
 Le déroulé ci-dessous vaut aussi pour la fixture `config/` (les tests y créent
 le compte `rh` / `fixture`).
 
-1. `http://localhost:5000` — le formulaire, **rendu depuis `config/formulaire.json`**.
+1. `http://localhost:5000/demande` — le formulaire, **rendu depuis `config/formulaire.json`**.
    Remplir, joindre 3 fichiers PDF/JPG.
 2. `http://localhost:5000/login` — `rh` / `fixture`. Le suivi liste soumissions
    et dossiers, triés par date de début, retards en rouge.
