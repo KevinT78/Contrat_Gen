@@ -8,7 +8,7 @@
   "champs": [
     {"id": "etablissement", "libelle": "Établissement", "type": "etablissement", "requis": true},
     {"id": "poste", "libelle": "Poste", "type": "choix", "requis": true,
-     "options": ["Equipier Polyvalent", "Manager"], "placeholder": "Poste"},
+     "options": ["Assistant Manager", "Equipier Polyvalent", "Manager"], "placeholder": "Poste"},
 
     {"id": "civilite", "libelle": "Civilité", "type": "choix", "requis": true,
      "options": ["Monsieur", "Madame"], "placeholder": "Civilite"},
