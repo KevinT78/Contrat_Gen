@@ -152,6 +152,19 @@ def test_formats_et_coherences():
         "clé NIR fausse": {"num_secu": "2 98 04 59 350 042 21"},
         "année NIR": {"num_secu": "2 97 04 59 350 042 51"},
         "mois NIR": {"num_secu": "2 98 05 59 350 042 18"},
+        "mois NIR 31-42 contraire": {"num_secu": "2 98 33 59 350 042 78"},
+        "mois NIR inexistant": {"num_secu": "2 98 15 59 350 042 81"},
+        "mois NIR 00": {"num_secu": "2 98 00 59 350 042 35"},
+        "mois NIR 25": {"num_secu": "2 98 25 59 350 042 47"},
+        "NIR provisoire 7": {"num_secu": "7 98 04 59 350 042 43"},
+        "NIR sexe 3": {"num_secu": "3 98 04 59 350 042 49"},
+        "NIR département 00": {"num_secu": "2 98 04 00 350 042 43"},
+        "NIR commune 000": {"num_secu": "2 98 04 59 000 042 26"},
+        "NIR rang 000": {"num_secu": "2 98 04 59 350 000 44"},
+        "NIR Corse 20 après 1976": {"num_secu": "2 98 04 20 350 042 85"},
+        "NIR Corse 2A avant 1976": {"num_secu": "2 70 04 2A 350 042 29",
+                                    "date_naissance": "1970-04-11"},
+        "NIR département 96 après 1968": {"num_secu": "2 98 04 96 350 042 70"},
         "mineur": {"date_naissance": "2015-04-11"},
         "naissance 2099": {"date_naissance": "2099-04-11"},
         "poste hors liste": {"poste": "Astronaute"},
@@ -168,15 +181,19 @@ def test_formats_et_coherences():
 
     for nom, over in {"NIR corse": {"num_secu": "2 98 04 2A 350 042 15",
                                     "salaire": "1 800,50"},
-                      "mois NIR inconnu": {"num_secu": "2 98 20 59 350 042 64"}}.items():
+                      "mois NIR inconnu": {"num_secu": "2 98 20 59 350 042 64"},
+                      "mois NIR 31-42 concordant": {"num_secu": "2 98 34 59 350 042 94"},
+                      "NIR Corse 20 avant 1976": {"num_secu": "2 70 04 20 350 042 02",
+                                                  "date_naissance": "1970-04-11"}}.items():
         r = poster(**over)
         assert r.status_code == 200, (nom, r.get_json())
-    assert compte_soumissions() == avant + 2
+    assert compte_soumissions() == avant + 4
 
     tel = {"type": "tel"}
-    for v in ("06 12 34 56 78", "+33 6 12 34 56 78", "06.12.34.56.78"):
+    for v in ("06 12 34 56 78", "+33 6 12 34 56 78", "06.12.34.56.78",
+              "+33 (0)6 12 34 56 78", "+212 6 12 34 56 78", "0033 6 12 34 56 78"):
         assert serveur._format_invalide(tel, v) is None, v
-    for v in ("0611", "00 12 34 56 78", "abc"):
+    for v in ("0611", "+12", "abc", "06 12 34 56 78 poste 12"):
         assert serveur._format_invalide(tel, v), v
 
 

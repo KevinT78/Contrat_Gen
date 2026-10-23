@@ -266,16 +266,31 @@ def _nir_invalide(nir, ne):
     """Message d'erreur si le NIR est faux ou contredit la naissance `ne` (date
     ou None), sinon None. Separateurs ignores ; Corse : 2A -> 19, 2B -> 18."""
     n = re.sub(r"[\s.-]", "", nir).upper()
-    if not re.fullmatch(r"[1-478]\d{4}(?:\d{2}|2A|2B)\d{8}", n):
+    if re.fullmatch(r"[78]\d{14}", n):
+        return ("numéro provisoire (7 ou 8 en tête), indiquez le numéro définitif "
+                "ou le numéro d'attente (NIA) notifié par la Sécurité sociale.")
+    if (not re.fullmatch(r"[12]\d{4}(?:\d{2}|2A|2B)\d{8}", n)
+            or n[5:7] == "00" or n[7:10] == "000" or n[10:13] == "000"):
         return "format attendu : 15 chiffres (1 98 04 59 350 042 02)."
     corps = int(n[:13].replace("2A", "19").replace("2B", "18"))
     if 97 - corps % 97 != int(n[13:]):
         return "la clé de contrôle ne correspond pas."
+    # Mois du NIR (nomenclature INSEE) : 01-12 ; 31-42 = janvier-decembre quand
+    # l'etat civil etait incomplet ; 20, 30 et 50-99 = mois inconnu ; le reste
+    # n'existe pas (norme DSN : la declaration de l'employeur refuserait 00, 21-29).
+    mois = int(n[3:5])
+    if mois == 0 or 13 <= mois <= 19 or 21 <= mois <= 29 or 43 <= mois <= 49:
+        return "le mois de naissance du numéro n'existe pas."
+    connu = mois if 1 <= mois <= 12 else mois - 30 if 31 <= mois <= 42 else None
     if ne:
         if int(n[1:3]) != ne.year % 100:
             return "l'année ne correspond pas à la date de naissance."
-        # 20-42 et 50-99 : codes legitimes de mois inconnu
-        if 1 <= int(n[3:5]) <= 12 and int(n[3:5]) != ne.month:
+        dep = n[5:7]
+        # CCH-11 de la DSN : la Corse a change de code en 1976, le 96 n'existe plus depuis 1968
+        if ((dep in ("2A", "2B") and ne.year < 1976) or (dep == "20" and ne.year >= 1976)
+                or (dep == "96" and ne.year >= 1968)):
+            return "le département ne correspond pas à l'année de naissance."
+        if connu and connu != ne.month:
             return "le mois ne correspond pas à la date de naissance."
     return None
 
@@ -287,9 +302,10 @@ def _format_invalide(c, v):
         return f"trop long ({limite} caractères maximum)."
     if t == "email" and not _email_plausible(v):
         return "adresse email invalide."
-    if t == "tel" and not re.fullmatch(r"(?:0|\+33)[1-9]\d{8}",
-                                       re.sub(r"[\s.-]", "", v)):
-        return "numéro de téléphone invalide (ex. 06 12 34 56 78)."
+    if t == "tel" and not re.fullmatch(
+            r"0[1-9]\d{8}|(?:\+|00)[1-9]\d{7,13}",
+            re.sub(r"[\s./-]", "", v.replace("(0)", "")), re.A):
+        return "numéro de téléphone invalide (ex. 06 12 34 56 78 ou +212 6 12 34 56 78)."
     if t in ("nombre", "montant") and not (
             re.fullmatch(r"[\d\s.,]+", v, re.A) and not re.search(r",.*\.", v)
             and contrat._nombre(v) > 0):
