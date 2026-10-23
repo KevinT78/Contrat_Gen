@@ -38,7 +38,7 @@ BASE = {"etablissement": "ACME Restauration / Lille Grand Place",
         "email_demandeur": "manager@example.com", "nom_naissance": "Martin",
         "nom_usage": "", "prenom": "Camille", "date_naissance": "1998-04-11",
         "lieu_naissance": "Lille", "nationalite": "Française",
-        "num_secu": "2 98 04 59 350 042 21", "adresse": "14 rue Nationale",
+        "num_secu": "2 98 04 59 350 042 02", "adresse": "14 rue Nationale",
         "poste": "Manager", "type_contrat": "CDI", "date_debut": "2026-10-01",
         "temps_partiel": "Non", "heures_hebdo": "35", "salaire": "2450"}
 
@@ -138,6 +138,48 @@ def test_piece_lourde_jamais_sur_disque():
     assert temp() == avant, set(temp()) ^ set(avant)
 
 
+def test_formats_et_coherences():
+    import app as serveur
+    c = app.test_client()
+    avant = compte_soumissions()
+
+    def poster(**over):
+        serveur._POT_PAR_IP.clear()
+        return c.post("/demande", data={**BASE, **over, **pieces()}, **FETCH)
+
+    refus = {
+        "email faux": {"email_demandeur": "pas-un-email"},
+        "clé NIR fausse": {"num_secu": "2 98 04 59 350 042 21"},
+        "année NIR": {"num_secu": "2 97 04 59 350 042 51"},
+        "mois NIR": {"num_secu": "2 98 05 59 350 042 18"},
+        "mineur": {"date_naissance": "2015-04-11"},
+        "naissance 2099": {"date_naissance": "2099-04-11"},
+        "poste hors liste": {"poste": "Astronaute"},
+        "salaire non numérique": {"salaire": "deux mille"},
+    }
+    for nom, over in refus.items():
+        r = poster(**over)
+        assert r.status_code == 422 and r.get_json()["ok"] is False, (nom, r.status_code)
+        if nom == "mineur":
+            assert any("16 ans" in e for e in r.get_json()["erreurs"])
+        if nom == "naissance 2099":
+            assert any("futur" in e for e in r.get_json()["erreurs"])
+    assert compte_soumissions() == avant, "un refus a écrit en base"
+
+    for nom, over in {"NIR corse": {"num_secu": "2 98 04 2A 350 042 15",
+                                    "salaire": "1 800,50"},
+                      "mois NIR inconnu": {"num_secu": "2 98 20 59 350 042 64"}}.items():
+        r = poster(**over)
+        assert r.status_code == 200, (nom, r.get_json())
+    assert compte_soumissions() == avant + 2
+
+    tel = {"type": "tel"}
+    for v in ("06 12 34 56 78", "+33 6 12 34 56 78", "06.12.34.56.78"):
+        assert serveur._format_invalide(tel, v) is None, v
+    for v in ("0611", "00 12 34 56 78", "abc"):
+        assert serveur._format_invalide(tel, v), v
+
+
 def test_racine_mene_au_login():
     c = app.test_client()
     assert c.get("/").headers["Location"].endswith("/login"), "« / » doit mener au login"
@@ -150,5 +192,6 @@ cas("POST fetch en erreur -> 422 {ok:false}, aucune soumission écrite", test_fe
 cas("POST fetch valide -> {ok:true}, soumission + 2 faces de CNI", test_fetch_valide_cree_la_soumission)
 cas("pièce de 1 Mo : aucun fichier temporaire, %TEMP% inchangé", test_piece_lourde_jamais_sur_disque)
 cas("date saisie jj/mm/aaaa -> stockée AAAA-MM-JJ ; 31/02 refusé", test_date_saisie_en_jj_mm_aaaa)
+cas("formats (email, NIR, âge, nombre, liste) : refus 422 sans écriture ; NIR corse et mois inconnu acceptés", test_formats_et_coherences)
 cas("« / » -> login, ou suivi si connecté", test_racine_mene_au_login)
 print("\nFormulaire fetch OK — erreur sans écriture, envoi valide, CNI en deux fichiers, dates jj/mm/aaaa, « / » vers le login.")

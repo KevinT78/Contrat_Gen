@@ -85,7 +85,7 @@ def saisie(**over):
         "civilite": "Madame", "nom_prenom": "BENALI Sarah", "date_naissance": "2001-02-11",
         "telephone": "0612345678", "email": "sarah.benali@example.com",
         "adresse": "4 rue Gallieni, 92100 Villeneuve",
-        "num_secu": "2 01 02 92 012 345 67",
+        "num_secu": "2 01 02 92 012 345 89",
         "date_embauche": "2026-10-12", "type_contrat": "CDI", "date_debut": "2026-10-12",
         "heure_demarrage": "10h00", "nationalite": "Français", "nationalite_etrangere": "",
         "type_autorisation": "", "date_fin_validite": "",
@@ -113,6 +113,7 @@ def amorcer():
     # 1. remis au comptable : équipier partiel étranger, tout le parcours
     uid = soumettre(c, saisie(
         civilite="Monsieur", nom_prenom="DUPONT Jean", date_naissance="1999-07-23",
+        num_secu="1 99 07 99 384 012 18",
         email="jean.dupont@example.com", etablissement=GENERE[1 % len(GENERE)],
         date_embauche="2026-09-28", date_debut="2026-09-28",
         temps_partiel="OUI", temps_travail="24H",
@@ -131,6 +132,7 @@ def amorcer():
     # 2. contrat prêt : manager, DPAE à faire, contrat signé pas encore reçu
     uid = soumettre(c, saisie(
         poste="Manager", nom_prenom="NKEMBA Awa", date_naissance="1996-03-07",
+        num_secu="2 96 03 75 112 034 10",
         email="awa.nkemba@example.com", etablissement=GENERE[2 % len(GENERE)],
         date_embauche="2026-10-01", date_debut="2026-10-01", heure_demarrage="9h30"))
     c.post(f"/dossier/{uid}/valider")
@@ -146,6 +148,7 @@ def amorcer():
     #    jouer en live : l'écran propose « Déposer le contrat », pas « Générer ».
     uid = soumettre(c, saisie(
         civilite="Monsieur", nom_prenom="SOARES Rui", date_naissance="1998-05-14",
+        num_secu="1 98 05 99 139 027 95",
         email="rui.soares@example.com", etablissement=DEPOSE,
         date_embauche="2026-10-19", date_debut="2026-10-19"))
     c.post(f"/dossier/{uid}/valider")
@@ -171,7 +174,7 @@ Fiche candidat (parcours « contrat généré ») :
   Naissance ............ 11/02/2001
   Téléphone / Email .... 0612345678 / sarah.benali@example.com
   Adresse ............. 4 rue Gallieni, 92100 Villeneuve
-  N° sécu ............ 2 01 02 92 012 345 67
+  N° sécu ............ 2 01 02 92 012 345 89
   Embauche / Début ... 12/10/2026 / 12/10/2026     Heure démarrage ... 10h00
   Type contrat ....... CDI    Nationalité ... Français
   Temps partiel ...... NON    Temps travail . 35H     Dispos ... laisser vide

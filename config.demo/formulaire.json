@@ -16,7 +16,7 @@
      "placeholder": "NomPrenom"},
     {"id": "date_naissance", "libelle": "Date de naissance", "type": "date", "requis": true,
      "placeholder": "DateNaissance"},
-    {"id": "telephone", "libelle": "Téléphone", "type": "texte", "requis": true,
+    {"id": "telephone", "libelle": "Téléphone", "type": "tel", "requis": true,
      "placeholder": "Telephone"},
     {"id": "email", "libelle": "Email", "type": "email", "requis": true,
      "placeholder": "Email"},

@@ -256,6 +256,47 @@ def _date_iso(saisie):
     return None
 
 
+def _jour(v):
+    """La `date` d'un champ saisi (jj/mm/aaaa ou aaaa-mm-jj), ou None."""
+    iso = _date_iso(v or "")
+    return date.fromisoformat(iso) if iso else None
+
+
+def _nir_invalide(nir, ne):
+    """Message d'erreur si le NIR est faux ou contredit la naissance `ne` (date
+    ou None), sinon None. Separateurs ignores ; Corse : 2A -> 19, 2B -> 18."""
+    n = re.sub(r"[\s.-]", "", nir).upper()
+    if not re.fullmatch(r"[1-478]\d{4}(?:\d{2}|2A|2B)\d{8}", n):
+        return "format attendu : 15 chiffres (1 98 04 59 350 042 02)."
+    corps = int(n[:13].replace("2A", "19").replace("2B", "18"))
+    if 97 - corps % 97 != int(n[13:]):
+        return "la clé de contrôle ne correspond pas."
+    if ne:
+        if int(n[1:3]) != ne.year % 100:
+            return "l'année ne correspond pas à la date de naissance."
+        # 20-42 et 50-99 : codes legitimes de mois inconnu
+        if 1 <= int(n[3:5]) <= 12 and int(n[3:5]) != ne.month:
+            return "le mois ne correspond pas à la date de naissance."
+    return None
+
+
+def _format_invalide(c, v):
+    """Message d'erreur si `v` (non vide) ne colle pas au type du champ `c`."""
+    t = c["type"]
+    if t == "email" and not _email_plausible(v):
+        return "adresse email invalide."
+    if t == "tel" and not re.fullmatch(r"(?:0|\+33)[1-9]\d{8}",
+                                       re.sub(r"[\s.-]", "", v)):
+        return "numéro de téléphone invalide (ex. 06 12 34 56 78)."
+    if t in ("nombre", "montant") and not (
+            re.fullmatch(r"[\d\s.,]+", v) and contrat._nombre(v) > 0):
+        return "nombre positif attendu (ex. 1 800,50)."
+    if t == "choix" and c.get("options") and v not in (
+            *c["options"], c.get("valeur_sinon")):
+        return "valeur hors de la liste."
+    return None
+
+
 @app.context_processor
 def _aides():
     return {"nom_de": _nom,
@@ -403,6 +444,23 @@ def _saisie(item=None):
         if v and c["type"] == "etablissement":
             if v not in dict(config.etablissements()):
                 erreurs.append("Établissement inconnu.")
+        if v and not (c.get("requis_si") and not exige):
+            if msg := _format_invalide(c, v):
+                erreurs.append(f"« {c['libelle']} » : {msg}")
+    ne = _jour(champs.get(config.role("date_naissance")))
+    debut = _jour(champs.get(config.role("date_debut")))
+    def lib(role):
+        return config.champ(config.role(role))["libelle"]
+    if ne:
+        ref = debut or date.today()
+        if ne > date.today():
+            erreurs.append(f"« {lib('date_naissance')} » : date dans le futur.")
+        elif (ref.year - ne.year, ref.month, ref.day) < (16, ne.month, ne.day):
+            erreurs.append(f"« {lib('date_naissance')} » : 16 ans minimum "
+                           "à la date de début.")
+    if nir := champs.get(config.role("num_secu")):
+        if msg := _nir_invalide(nir, ne):
+            erreurs.append(f"« {lib('num_secu')} » : {msg}")
     return champs, erreurs
 
 

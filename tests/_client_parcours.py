@@ -56,6 +56,9 @@ def saisie(etab, poste):
     # masquerait « Nkemba » ci-dessus. Vide comme la majorite des salaries
     # (aide du champ : « si different »).
     vals[config.role("nom_usage")] = ""
+    # doctor met une naissance « aujourd'hui » : refusée (16 ans minimum).
+    vals[config.role("date_naissance")] = "1998-04-11"
+    vals[config.role("num_secu")] = "2 98 04 59 350 042 02"
     return vals
 
 

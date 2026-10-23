@@ -37,7 +37,7 @@ from _outils import corps_texte, mails  # noqa: E402
 
 PDF = (b"%PDF-1.4\n1 0 obj<</Type/Catalog>>endobj\n%%EOF", "p.pdf")
 NOM, PRENOM = "Delacroix-Nkemba", "Eugénie"
-NIR = "2 91 07 75 116 001 42"
+NIR = "2 91 07 75 116 001 38"
 ADRESSE = "88 rue des Amandiers, 75020 Paris"
 PII = [NOM, NOM.upper(), PRENOM, NIR, ADRESSE, "116 001"]
 
@@ -136,7 +136,7 @@ def main():
     remis = parcours_jusqua_remis(c)
     # Dossiers témoins : données PROPRES (aucune aiguille de PII), pour que la
     # recherche « le NIR n'apparaît nulle part » ne bute pas sur un non-purgé.
-    temoin = {"num_secu": "1 80 01 99 999 999 88", "adresse": "1 rue Neutre, 00000 Nulle"}
+    temoin = {"num_secu": "1 91 07 99 999 999 82", "adresse": "1 rue Neutre, 00000 Nulle"}
     # une soumission jamais validée, pour la durée « candidature »
     soumise = soumettre(c, {**saisie(poste="Assistant manager"), **temoin,
                             "nom_naissance": "Temoin", "prenom": "Sam"})
