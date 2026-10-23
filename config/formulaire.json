@@ -35,7 +35,7 @@
     {"id": "temps_partiel", "libelle": "Temps partiel", "type": "choix", "requis": true,
      "options": ["Non", "Oui"], "defaut": "Non"},
     {"id": "heures_hebdo", "libelle": "Heures par semaine", "type": "nombre", "requis": true,
-     "defaut": "35", "requis_si": ["temps_partiel", "Oui"], "placeholder": "HeuresHebdo"},
+     "defaut": "35", "max": 48, "requis_si": ["temps_partiel", "Oui"], "placeholder": "HeuresHebdo"},
     {"id": "salaire", "libelle": "Salaire mensuel brut (€)", "type": "montant", "requis": true,
      "placeholder": "SalaireChiffres"},
 

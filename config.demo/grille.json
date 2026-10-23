@@ -1,7 +1,7 @@
 {
   "_note": [
     "Grille de rémunération brute mensuelle pour la démo.",
-    "Manager : forfait mensuel direct.",
+    "Manager et Assistant Manager : forfait mensuel direct.",
     "Equipier : barème par durée hebdomadaire du contrat (champ « temps_travail »),",
     "« chiffres » figé ici et servi tel quel au contrat -- les lettres sont",
     "dérivées de ce montant par le moteur, pas saisies à part.",
@@ -11,6 +11,7 @@
   "champ_heures": "temps_travail",
   "postes": [
     { "poste": "Manager", "mensuel": 2500 },
+    { "poste": "Assistant Manager", "mensuel": 2000 },
     {
       "poste": "Equipier",
       "horaire": 12.31,

@@ -256,6 +256,137 @@ def _date_iso(saisie):
     return None
 
 
+def _jour(v):
+    """La `date` d'un champ saisi (jj/mm/aaaa ou aaaa-mm-jj), ou None."""
+    iso = _date_iso(v or "")
+    return date.fromisoformat(iso) if iso else None
+
+
+def _nir_invalide(nir, ne):
+    """Message d'erreur si le NIR est faux ou contredit la naissance `ne` (date
+    ou None), sinon None. Separateurs ignores ; Corse : 2A -> 19, 2B -> 18."""
+    n = re.sub(r"[\s.-]", "", nir).upper()
+    if re.fullmatch(r"[78]\d{14}", n):
+        return ("numéro provisoire (7 ou 8 en tête), indiquez le numéro définitif "
+                "ou le numéro d'attente (NIA) notifié par la Sécurité sociale.")
+    if (not re.fullmatch(r"[12]\d{4}(?:\d{2}|2A|2B)\d{8}", n)
+            or n[5:7] == "00" or n[7:10] == "000" or n[10:13] == "000"):
+        return "format attendu : 15 chiffres (1 98 04 59 350 042 02)."
+    corps = int(n[:13].replace("2A", "19").replace("2B", "18"))
+    if 97 - corps % 97 != int(n[13:]):
+        return "la clé de contrôle ne correspond pas."
+    # Mois du NIR (nomenclature INSEE) : 01-12 ; 31-42 = janvier-decembre quand
+    # l'etat civil etait incomplet ; 20, 30 et 50-99 = mois inconnu ; le reste
+    # n'existe pas (norme DSN : la declaration de l'employeur refuserait 00, 21-29).
+    mois = int(n[3:5])
+    if mois == 0 or 13 <= mois <= 19 or 21 <= mois <= 29 or 43 <= mois <= 49:
+        return "le mois de naissance du numéro n'existe pas."
+    connu = mois if 1 <= mois <= 12 else mois - 30 if 31 <= mois <= 42 else None
+    if ne:
+        if int(n[1:3]) != ne.year % 100:
+            return "l'année ne correspond pas à la date de naissance."
+        dep = n[5:7]
+        # CCH-11 de la DSN : la Corse a change de code en 1976, le 96 n'existe plus depuis 1968
+        if ((dep in ("2A", "2B") and ne.year < 1976) or (dep == "20" and ne.year >= 1976)
+                or (dep == "96" and ne.year >= 1968)):
+            return "le département ne correspond pas à l'année de naissance."
+        if connu and connu != ne.month:
+            return "le mois ne correspond pas à la date de naissance."
+    return None
+
+
+def _format_invalide(c, v):
+    """Message d'erreur si `v` (non vide) ne colle pas au type du champ `c`."""
+    t = c["type"]
+    if len(v) > (limite := _LONGUEUR_MAX.get(t, _LONGUEUR_DEFAUT)):
+        return f"trop long ({limite} caractères maximum)."
+    if t == "email" and not _email_plausible(v):
+        return "adresse email invalide."
+    if t == "tel" and not re.fullmatch(
+            r"0[1-9]\d{8}|(?:\+|00)[1-9]\d{7,13}",
+            re.sub(r"[\s./-]", "", v.replace("(0)", "")), re.A):
+        return "numéro de téléphone invalide (ex. 06 12 34 56 78 ou +212 6 12 34 56 78)."
+    if t in ("nombre", "montant") and not (
+            re.fullmatch(r"[\d\s.,]+", v, re.A) and not re.search(r",.*\.", v)
+            and contrat._nombre(v) > 0):
+        return "nombre positif attendu (ex. 1 800,50)."
+    if t in ("nombre", "montant") and c.get("max") and contrat._nombre(v) > c["max"]:
+        return f"valeur maximale : {c['max']}."
+    if t == "heure" and not _HEURE.fullmatch(v):
+        return "heure attendue (ex. 9h30 ou 09:30)."
+    if t == "choix" and c.get("options") and v not in (
+            *c["options"], c.get("valeur_sinon")):
+        return "valeur hors de la liste."
+    return None
+
+
+_LONGUEUR_MAX = {"texte_long": 2000}
+_LONGUEUR_DEFAUT = 300
+_HEURE = re.compile(r"(?:[01]?\d|2[0-3])(?:\s*h\s*(?:[0-5]\d)?|:[0-5]\d)", re.I | re.A)
+_SIGNATURES = {".pdf": b"%PDF", ".jpg": b"\xff\xd8\xff", ".jpeg": b"\xff\xd8\xff",
+               ".png": b"\x89PNG"}
+
+
+def _contenu_invalide(f, ext):
+    """Message d'erreur si la piece est vide ou si ses premiers octets ne sont
+    pas ceux de son extension (un .docx renomme en .pdf)."""
+    tete = f.stream.read(1024)
+    f.stream.seek(0)
+    if not tete:
+        return "fichier vide."
+    # un PDF peut etre precede de quelques octets : la signature est cherchee
+    # dans le premier Ko, comme le font les lecteurs
+    signature = _SIGNATURES.get(ext)
+    ok = signature in tete if ext == ".pdf" else tete.startswith(signature or b"")
+    return None if ok else f"le contenu n'est pas un fichier {ext[1:].upper()}."
+
+
+def _coherences(champs, masques):
+    """Erreurs qui croisent plusieurs champs. `masques` : ids des champs
+    cachés à l'écran (requis_si non rempli), dont une saisie résiduelle est
+    ignorée. Chaque contrôle ne joue que si les champs concernés existent."""
+    def jour(role):
+        cid = config.role(role)
+        return None if cid in masques else _jour(champs.get(cid))
+
+    def lib(role):
+        return config.champ(config.role(role))["libelle"]
+
+    erreurs = []
+    aujourdhui = date.today()
+    ne, debut = jour("date_naissance"), jour("date_debut")
+    if ne:
+        if ne > aujourdhui:
+            erreurs.append(f"« {lib('date_naissance')} » : date dans le futur.")
+        elif ((debut or aujourdhui).year - ne.year, (debut or aujourdhui).month,
+              (debut or aujourdhui).day) < (16, ne.month, ne.day):
+            erreurs.append(f"« {lib('date_naissance')} » : 16 ans minimum "
+                           "à la date de début.")
+    if nir := champs.get(config.role("num_secu")):
+        if msg := _nir_invalide(nir, ne):
+            erreurs.append(f"« {lib('num_secu')} » : {msg}")
+    if debut and debut > aujourdhui + timedelta(days=366):
+        erreurs.append(f"« {lib('date_debut')} » : à plus d'un an, vérifiez l'année.")
+    if (embauche := jour("date_embauche")) and debut and embauche > debut:
+        erreurs.append(f"« {lib('date_embauche')} » : postérieure à la date de début.")
+    if (fin := jour("date_fin_validite")) and fin < (debut or aujourdhui):
+        erreurs.append(f"« {lib('date_fin_validite')} » : le titre expire avant la "
+                       "date de début (en renouvellement : date de fin du récépissé).")
+    for cid in {config.role(r) for r in ("nom", "nom_naissance", "nom_usage", "prenom")}:
+        if any(ch.isdigit() for ch in champs.get(cid, "")):
+            erreurs.append(f"« {config.champ(cid)['libelle']} » : pas de chiffre.")
+    groupes = defaultdict(list)
+    for c in config.champs():
+        if c.get("visible_si"):
+            groupes[tuple(c["visible_si"])].append(c)
+    for (autre, attendu), cs in groupes.items():
+        if (len(cs) > 1 and (request.form.get(autre) or "").strip() == attendu
+                and not any(champs.get(c["id"]) for c in cs)):
+            erreurs.append("Renseignez au moins un de ces champs : "
+                           + ", ".join(f"« {c['libelle']} »" for c in cs) + ".")
+    return erreurs
+
+
 @app.context_processor
 def _aides():
     return {"nom_de": _nom,
@@ -347,7 +478,7 @@ def _saisie(item=None):
     `item` = la soumission en cours de correction : une piece deja deposee
     n'est pas redemandee, seule celle qu'on remplace est relue.
     """
-    champs, erreurs = {}, []
+    champs, erreurs, masques = {}, [], set()
     deja = set() if item is None else (
         {c["role"] for c in config.pieces()}
         - {m["champ"]["role"] for m in store.manquantes(item)})
@@ -372,6 +503,8 @@ def _saisie(item=None):
                 if ext not in store.EXTENSIONS:
                     erreurs.append(f"« {c['libelle']} » : format {ext or 'sans extension'} "
                                    "refusé — " + ", ".join(sorted(store.EXTENSIONS)) + ".")
+                elif msg := _contenu_invalide(f, ext):
+                    erreurs.append(f"« {c['libelle']} » ({f.filename}) : {msg}")
             continue
         v = (request.form.get(c["id"]) or "").strip()
         cond = c.get("visible_si") or (c.get("requis_si")
@@ -403,6 +536,11 @@ def _saisie(item=None):
         if v and c["type"] == "etablissement":
             if v not in dict(config.etablissements()):
                 erreurs.append("Établissement inconnu.")
+        if c.get("requis_si") and not exige:
+            masques.add(c["id"])
+        elif v and (msg := _format_invalide(c, v)):
+            erreurs.append(f"« {c['libelle']} » : {msg}")
+    erreurs += _coherences(champs, masques)
     return champs, erreurs
 
 

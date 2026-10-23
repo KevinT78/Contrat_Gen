@@ -483,7 +483,9 @@ def champs():
 ROLES = {"etablissement": "etablissement", "poste": "poste",
          "nom": "nom_naissance", "prenom": "prenom", "nom_usage": "nom_usage",
          "nom_naissance": "nom_naissance", "email": "email_demandeur",
-         "date_debut": "date_debut"}
+         "date_debut": "date_debut",
+         "num_secu": "num_secu", "date_naissance": "date_naissance",
+         "date_embauche": "date_embauche", "date_fin_validite": "date_fin_validite"}
 
 # Sans eux le parcours ne peut pas tourner : l'etablissement route les mentions
 # et le comptable, le poste route le modele et la grille, le nom et l'email

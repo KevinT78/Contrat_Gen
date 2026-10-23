@@ -8,7 +8,7 @@
   "champs": [
     {"id": "etablissement", "libelle": "Établissement", "type": "etablissement", "requis": true},
     {"id": "poste", "libelle": "Poste", "type": "choix", "requis": true,
-     "options": ["Equipier Polyvalent", "Manager"], "placeholder": "Poste"},
+     "options": ["Assistant Manager", "Equipier Polyvalent", "Manager"], "placeholder": "Poste"},
 
     {"id": "civilite", "libelle": "Civilité", "type": "choix", "requis": true,
      "options": ["Monsieur", "Madame"], "placeholder": "Civilite"},
@@ -16,7 +16,7 @@
      "placeholder": "NomPrenom"},
     {"id": "date_naissance", "libelle": "Date de naissance", "type": "date", "requis": true,
      "placeholder": "DateNaissance"},
-    {"id": "telephone", "libelle": "Téléphone", "type": "texte", "requis": true,
+    {"id": "telephone", "libelle": "Téléphone", "type": "tel", "requis": true,
      "placeholder": "Telephone"},
     {"id": "email", "libelle": "Email", "type": "email", "requis": true,
      "placeholder": "Email"},
@@ -40,7 +40,7 @@
 
     {"id": "date_debut", "libelle": "Date de début de contrat", "type": "date", "requis": true,
      "aide": "prévoir 48 h ouvrées pour les salariés étrangers", "placeholder": "DateDebut"},
-    {"id": "heure_demarrage", "libelle": "Heure de démarrage", "type": "texte", "requis": true,
+    {"id": "heure_demarrage", "libelle": "Heure de démarrage", "type": "heure", "requis": true,
      "placeholder": "HeureDemarrage"},
 
     {"id": "temps_partiel", "libelle": "Embauche d'un temps partiel", "type": "choix", "requis": true,

@@ -45,7 +45,7 @@ def base_saisie(etab, poste="Manager"):
         "email_demandeur": "manager@example.com",
         "nom_naissance": "Martin", "nom_usage": "", "prenom": "Camille",
         "date_naissance": "1998-04-11", "lieu_naissance": "Lille",
-        "nationalite": "Française", "num_secu": "2 98 04 59 350 042 21",
+        "nationalite": "Française", "num_secu": "2 98 04 59 350 042 02",
         "adresse": "14 rue Nationale, 59000 Lille",
         "poste": poste, "type_contrat": "CDI", "date_debut": "2026-10-01",
         "temps_partiel": "Non", "heures_hebdo": "35", "salaire": "2450",
@@ -568,7 +568,7 @@ def fiche_generique_sans_cle(c):
         assert "{{" not in texte, "fiche générique trouée"
         # NumeroSecu / Adresse : synonymes de NumSS / Domicile dans le modele
         for attendu in ("Camille MARTIN", "Paris Opéra", "884 512 336 00019",
-                        "2 98 04 59 350 042 21", "14 rue Nationale"):
+                        "2 98 04 59 350 042 02", "14 rue Nationale"):
             assert attendu in texte, f"« {attendu} » absent de la fiche générique"
         # sections sans aucune donnee dans cette config : retirees, titre compris
         for absent in ("Titre de séjour", "Disponibilités", "Heure de démarrage"):

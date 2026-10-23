@@ -28,6 +28,7 @@
   "templates": [
     {"quand": {"poste": "Equipier Polyvalent", "temps_partiel": "OUI"}, "modele": "Equipier_Partiel.html"},
     {"quand": {"poste": "Equipier Polyvalent"}, "modele": "Equipier.html"},
+    {"quand": {"poste": "Assistant Manager"}, "modele": "Assistant_Manager.html"},
     {"quand": {"poste": "Manager"}, "modele": "Manager.html"}
   ],
 
