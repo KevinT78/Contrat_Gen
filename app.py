@@ -283,18 +283,92 @@ def _nir_invalide(nir, ne):
 def _format_invalide(c, v):
     """Message d'erreur si `v` (non vide) ne colle pas au type du champ `c`."""
     t = c["type"]
+    if len(v) > (limite := _LONGUEUR_MAX.get(t, _LONGUEUR_DEFAUT)):
+        return f"trop long ({limite} caractères maximum)."
     if t == "email" and not _email_plausible(v):
         return "adresse email invalide."
     if t == "tel" and not re.fullmatch(r"(?:0|\+33)[1-9]\d{8}",
                                        re.sub(r"[\s.-]", "", v)):
         return "numéro de téléphone invalide (ex. 06 12 34 56 78)."
     if t in ("nombre", "montant") and not (
-            re.fullmatch(r"[\d\s.,]+", v) and contrat._nombre(v) > 0):
+            re.fullmatch(r"[\d\s.,]+", v, re.A) and not re.search(r",.*\.", v)
+            and contrat._nombre(v) > 0):
         return "nombre positif attendu (ex. 1 800,50)."
+    if t in ("nombre", "montant") and c.get("max") and contrat._nombre(v) > c["max"]:
+        return f"valeur maximale : {c['max']}."
+    if t == "heure" and not _HEURE.fullmatch(v):
+        return "heure attendue (ex. 9h30 ou 09:30)."
     if t == "choix" and c.get("options") and v not in (
             *c["options"], c.get("valeur_sinon")):
         return "valeur hors de la liste."
     return None
+
+
+_LONGUEUR_MAX = {"texte_long": 2000}
+_LONGUEUR_DEFAUT = 300
+_HEURE = re.compile(r"(?:[01]?\d|2[0-3])(?:\s*h\s*(?:[0-5]\d)?|:[0-5]\d)", re.I | re.A)
+_SIGNATURES = {".pdf": b"%PDF", ".jpg": b"\xff\xd8\xff", ".jpeg": b"\xff\xd8\xff",
+               ".png": b"\x89PNG"}
+
+
+def _contenu_invalide(f, ext):
+    """Message d'erreur si la piece est vide ou si ses premiers octets ne sont
+    pas ceux de son extension (un .docx renomme en .pdf)."""
+    tete = f.stream.read(1024)
+    f.stream.seek(0)
+    if not tete:
+        return "fichier vide."
+    # un PDF peut etre precede de quelques octets : la signature est cherchee
+    # dans le premier Ko, comme le font les lecteurs
+    signature = _SIGNATURES.get(ext)
+    ok = signature in tete if ext == ".pdf" else tete.startswith(signature or b"")
+    return None if ok else f"le contenu n'est pas un fichier {ext[1:].upper()}."
+
+
+def _coherences(champs, masques):
+    """Erreurs qui croisent plusieurs champs. `masques` : ids des champs
+    cachés à l'écran (requis_si non rempli), dont une saisie résiduelle est
+    ignorée. Chaque contrôle ne joue que si les champs concernés existent."""
+    def jour(role):
+        cid = config.role(role)
+        return None if cid in masques else _jour(champs.get(cid))
+
+    def lib(role):
+        return config.champ(config.role(role))["libelle"]
+
+    erreurs = []
+    aujourdhui = date.today()
+    ne, debut = jour("date_naissance"), jour("date_debut")
+    if ne:
+        if ne > aujourdhui:
+            erreurs.append(f"« {lib('date_naissance')} » : date dans le futur.")
+        elif ((debut or aujourdhui).year - ne.year, (debut or aujourdhui).month,
+              (debut or aujourdhui).day) < (16, ne.month, ne.day):
+            erreurs.append(f"« {lib('date_naissance')} » : 16 ans minimum "
+                           "à la date de début.")
+    if nir := champs.get(config.role("num_secu")):
+        if msg := _nir_invalide(nir, ne):
+            erreurs.append(f"« {lib('num_secu')} » : {msg}")
+    if debut and debut > aujourdhui + timedelta(days=366):
+        erreurs.append(f"« {lib('date_debut')} » : à plus d'un an, vérifiez l'année.")
+    if (embauche := jour("date_embauche")) and debut and embauche > debut:
+        erreurs.append(f"« {lib('date_embauche')} » : postérieure à la date de début.")
+    if (fin := jour("date_fin_validite")) and fin < (debut or aujourdhui):
+        erreurs.append(f"« {lib('date_fin_validite')} » : le titre expire avant la "
+                       "date de début (en renouvellement : date de fin du récépissé).")
+    for cid in {config.role(r) for r in ("nom", "nom_naissance", "nom_usage", "prenom")}:
+        if any(ch.isdigit() for ch in champs.get(cid, "")):
+            erreurs.append(f"« {config.champ(cid)['libelle']} » : pas de chiffre.")
+    groupes = defaultdict(list)
+    for c in config.champs():
+        if c.get("visible_si"):
+            groupes[tuple(c["visible_si"])].append(c)
+    for (autre, attendu), cs in groupes.items():
+        if (len(cs) > 1 and (request.form.get(autre) or "").strip() == attendu
+                and not any(champs.get(c["id"]) for c in cs)):
+            erreurs.append("Renseignez au moins un de ces champs : "
+                           + ", ".join(f"« {c['libelle']} »" for c in cs) + ".")
+    return erreurs
 
 
 @app.context_processor
@@ -388,7 +462,7 @@ def _saisie(item=None):
     `item` = la soumission en cours de correction : une piece deja deposee
     n'est pas redemandee, seule celle qu'on remplace est relue.
     """
-    champs, erreurs = {}, []
+    champs, erreurs, masques = {}, [], set()
     deja = set() if item is None else (
         {c["role"] for c in config.pieces()}
         - {m["champ"]["role"] for m in store.manquantes(item)})
@@ -413,6 +487,8 @@ def _saisie(item=None):
                 if ext not in store.EXTENSIONS:
                     erreurs.append(f"« {c['libelle']} » : format {ext or 'sans extension'} "
                                    "refusé — " + ", ".join(sorted(store.EXTENSIONS)) + ".")
+                elif msg := _contenu_invalide(f, ext):
+                    erreurs.append(f"« {c['libelle']} » ({f.filename}) : {msg}")
             continue
         v = (request.form.get(c["id"]) or "").strip()
         cond = c.get("visible_si") or (c.get("requis_si")
@@ -444,23 +520,11 @@ def _saisie(item=None):
         if v and c["type"] == "etablissement":
             if v not in dict(config.etablissements()):
                 erreurs.append("Établissement inconnu.")
-        if v and not (c.get("requis_si") and not exige):
-            if msg := _format_invalide(c, v):
-                erreurs.append(f"« {c['libelle']} » : {msg}")
-    ne = _jour(champs.get(config.role("date_naissance")))
-    debut = _jour(champs.get(config.role("date_debut")))
-    def lib(role):
-        return config.champ(config.role(role))["libelle"]
-    if ne:
-        ref = debut or date.today()
-        if ne > date.today():
-            erreurs.append(f"« {lib('date_naissance')} » : date dans le futur.")
-        elif (ref.year - ne.year, ref.month, ref.day) < (16, ne.month, ne.day):
-            erreurs.append(f"« {lib('date_naissance')} » : 16 ans minimum "
-                           "à la date de début.")
-    if nir := champs.get(config.role("num_secu")):
-        if msg := _nir_invalide(nir, ne):
-            erreurs.append(f"« {lib('num_secu')} » : {msg}")
+        if c.get("requis_si") and not exige:
+            masques.add(c["id"])
+        elif v and (msg := _format_invalide(c, v)):
+            erreurs.append(f"« {c['libelle']} » : {msg}")
+    erreurs += _coherences(champs, masques)
     return champs, erreurs
 
 

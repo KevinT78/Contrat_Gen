@@ -180,6 +180,66 @@ def test_formats_et_coherences():
         assert serveur._format_invalide(tel, v), v
 
 
+def test_dates_pieces_et_plafonds():
+    import app as serveur
+
+    def poster(fichiers=None, **over):
+        serveur._POT_PAR_IP.clear()
+        return c.post("/demande", data={**BASE, **over, **(fichiers or pieces())}, **FETCH)
+
+    c = app.test_client()
+    avant = compte_soumissions()
+    vide = {**pieces(), "rib": (io.BytesIO(b""), "rib.pdf")}
+    faux_pdf = {**pieces(), "rib": (io.BytesIO(b"PKdocx"), "rib.pdf")}
+    refus = {
+        "début à plus d'un an": ({"date_debut": "2099-01-01"}, None),
+        "heures hebdo au-dessus du plafond": (
+            {"temps_partiel": "Oui", "heures_hebdo": "60"}, None),
+        "nom avec chiffre": ({"nom_naissance": "Martin2"}, None),
+        "champ trop long": ({"adresse": "x" * 3000}, None),
+        "pièce vide": ({}, vide),
+        "docx renommé en pdf": ({}, faux_pdf),
+    }
+    for nom, (over, fichiers) in refus.items():
+        r = poster(fichiers=fichiers, **over)
+        assert r.status_code == 422, (nom, r.status_code)
+    assert compte_soumissions() == avant, "un refus a écrit en base"
+
+    haut = serveur._format_invalide
+    assert haut({"type": "heure"}, "9h30") is None and haut({"type": "heure"}, "09:30") is None
+    assert haut({"type": "heure"}, "10h") is None
+    assert haut({"type": "heure"}, "demain") and haut({"type": "heure"}, "25h00")
+    assert haut({"type": "heure"}, "9:") and haut({"type": "heure"}, "9h5")
+    nombre = {"type": "nombre"}
+    for v in ("1 800,50", "1.800,50", "0.01"):
+        assert haut(nombre, v) is None, v
+    for v in ("1,800.50", "٣", "1,2,3", "0", "1e5"):
+        assert haut(nombre, v), v
+
+    pas_masque = set()
+    base = {"date_debut": "2026-10-01", "date_embauche": "2026-10-05"}
+    assert any("postérieure" in e for e in serveur._coherences(base, pas_masque))
+    assert not serveur._coherences({**base, "date_embauche": "2026-10-01"}, pas_masque)
+    titre = {"date_debut": "2026-10-01", "date_fin_validite": "2020-01-01"}
+    assert any("titre" in e for e in serveur._coherences(titre, pas_masque))
+    assert not serveur._coherences(titre, {"date_fin_validite"}), "champ masqué contrôlé"
+
+    jours = [{"id": j, "libelle": j.title(), "visible_si": ["temps_partiel", "OUI"]}
+             for j in ("lundi", "mardi")]
+    jours.append({"id": "scan", "libelle": "Scan", "type": "piece_jointe",
+                  "visible_si": ["temps_partiel", "OUI"]})
+    vrai_champs = config.champs
+    config.champs = lambda: jours
+    try:
+        with app.test_request_context(method="POST", data={"temps_partiel": "OUI"}):
+            assert serveur._coherences({"lundi": "", "mardi": ""}, set())
+            assert not serveur._coherences({"lundi": "9h-17h", "mardi": ""}, set())
+        with app.test_request_context(method="POST", data={"temps_partiel": "NON"}):
+            assert not serveur._coherences({"lundi": "", "mardi": ""}, set())
+    finally:
+        config.champs = vrai_champs
+
+
 def test_racine_mene_au_login():
     c = app.test_client()
     assert c.get("/").headers["Location"].endswith("/login"), "« / » doit mener au login"
@@ -193,5 +253,6 @@ cas("POST fetch valide -> {ok:true}, soumission + 2 faces de CNI", test_fetch_va
 cas("pièce de 1 Mo : aucun fichier temporaire, %TEMP% inchangé", test_piece_lourde_jamais_sur_disque)
 cas("date saisie jj/mm/aaaa -> stockée AAAA-MM-JJ ; 31/02 refusé", test_date_saisie_en_jj_mm_aaaa)
 cas("formats (email, NIR, âge, nombre, liste) : refus 422 sans écriture ; NIR corse et mois inconnu acceptés", test_formats_et_coherences)
+cas("dates, titre, heure, noms, longueurs, plafond, jours, pièces vides ou falsifiées refusés", test_dates_pieces_et_plafonds)
 cas("« / » -> login, ou suivi si connecté", test_racine_mene_au_login)
 print("\nFormulaire fetch OK — erreur sans écriture, envoi valide, CNI en deux fichiers, dates jj/mm/aaaa, « / » vers le login.")
